@@ -289,8 +289,6 @@ pub struct Artifact {
     pub size: u64,
     #[prost(string, tag="6")]
     pub sha256: ::prost::alloc::string::String,
-    #[prost(string, tag="7")]
-    pub content_url: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetArtifactStorageInfoRequest {
@@ -325,6 +323,8 @@ pub struct BeginArtifactUploadRequest {
 pub struct BeginArtifactUploadResponse {
     #[prost(string, tag="1")]
     pub upload_id: ::prost::alloc::string::String,
+    /// S3 presigned PUT target only. Empty when direct_upload=false; send
+    /// content through UploadArtifactContent instead.
     #[prost(string, tag="2")]
     pub upload_url: ::prost::alloc::string::String,
     #[prost(map="string, string", tag="3")]
@@ -379,6 +379,8 @@ pub struct GetArtifactDownloadRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetArtifactDownloadResponse {
+    /// S3 presigned GET target only. Backends without direct downloads refuse
+    /// this RPC with FAILED_PRECONDITION; use GetArtifactContent instead.
     #[prost(string, tag="1")]
     pub url: ::prost::alloc::string::String,
     #[prost(map="string, string", tag="2")]

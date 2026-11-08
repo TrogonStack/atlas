@@ -9,7 +9,8 @@ message Artifact {
   string media_type = 4;
   uint64 size = 5;
   string sha256 = 6;
-  string content_url = 7;
+  reserved 7;
+  reserved "content_url";
 }
 
 message GetArtifactStorageInfoRequest {}
@@ -30,6 +31,8 @@ message BeginArtifactUploadRequest {
 }
 message BeginArtifactUploadResponse {
   string upload_id = 1;
+  // S3 presigned PUT target only. Empty when direct_upload=false; send
+  // content through UploadArtifactContent instead.
   string upload_url = 2;
   map<string, string> headers = 3;
   int64 expires_unix_seconds = 4;
@@ -64,6 +67,8 @@ message GetArtifactDownloadRequest {
   string artifact_id = 2;
 }
 message GetArtifactDownloadResponse {
+  // S3 presigned GET target only. Backends without direct downloads refuse
+  // this RPC with FAILED_PRECONDITION; use GetArtifactContent instead.
   string url = 1;
   map<string, string> headers = 2;
   int64 expires_unix_seconds = 3;

@@ -3338,7 +3338,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Discover the server-configured artifact backend, enabled state, upload limits and direct-upload support. Backend credentials remain in the deployment.",
+        description = "Discover the server-configured artifact backend, enabled state, upload limits and direct S3 upload support. Artifact metadata, grants and completion use gRPC; NATS bytes use UploadArtifactContent and GetArtifactContent gRPC. Backend credentials remain in the deployment.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3361,7 +3361,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Request an artifact upload with request_json containing namespace, filename, mediaType, size in bytes, and sha256 as 64 lowercase hexadecimal digits. The response contains uploadId, uploadUrl, headers, expiresUnixSeconds and directUpload. Before expiry, use a file-capable HTTP tool to PUT the raw file bytes to uploadUrl with the exact returned headers. When directUpload is true, upload directly to the S3 presigned URL without Atlas bearer or AWS credentials. When false, the Atlas upload endpoint requires the caller's current Atlas bearer authorization. After a successful PUT, call complete_artifact_upload with namespace and uploadId. Remote MCP cannot read caller-local file paths. If file transfer or the needed Atlas authorization is unavailable to your HTTP tool, use the Atlas CLI artifacts upload command where the file is accessible. Keep the upload URL transient; it is not the completed artifact's content URL.",
+        description = "Request an artifact upload over gRPC with request_json containing namespace, filename, mediaType, size in bytes, and sha256 as 64 lowercase hexadecimal digits. The response identifies uploadId and expiresUnixSeconds. Only when directUpload is true, use a file-capable HTTP tool to PUT the raw bytes to the direct S3 presigned uploadUrl with the exact returned headers and no Atlas bearer or AWS credentials. When directUpload is false or omitted, no HTTP upload URL is provided: send the bytes through authenticated UploadArtifactContent gRPC using an SDK, or run the Atlas CLI artifacts upload command where the file is accessible. After either transfer succeeds, call complete_artifact_upload with namespace and uploadId. Remote MCP cannot read caller-local file paths. Keep S3 upload URLs transient; persist the completed artifact reference.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -3384,7 +3384,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "After the upload HTTP PUT succeeds, supply request_json containing namespace and the uploadId returned by begin_artifact_upload. Verify and publish the uploaded bytes, returning an artifact with its durable artifactId and contentUrl. Incomplete or mismatched uploads are refused; an upload URL alone is not evidence of completion. Repeating accepted completion returns the same artifact.",
+        description = "After UploadArtifactContent gRPC or direct S3 presigned PUT succeeds, supply request_json containing namespace and the uploadId returned by begin_artifact_upload. Verify and publish the uploaded bytes over gRPC, returning artifact metadata with its durable artifactId and digest. Incomplete or mismatched uploads are refused; an upload grant alone is not evidence of completion. Repeating accepted completion returns the same artifact.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -3407,7 +3407,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Inspect an accepted artifact and its digest, namespace, size, media type and stable display URL. Missing or hidden artifacts are unavailable.",
+        description = "Inspect accepted artifact metadata over gRPC: artifactId, digest, namespace, filename, size and media type. No Atlas HTTP content URL is returned. Use GetArtifactContent gRPC through an SDK or the Atlas CLI artifacts download command to recover bytes. Missing or hidden artifacts are unavailable.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3429,7 +3429,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Obtain an authorized download instruction for an accepted artifact. A presigned URL is temporary access, not durable model identity; retain the artifact reference instead.",
+        description = "Request a direct S3 presigned download URL over gRPC for an accepted artifact. NATS storage refuses this operation with FailedPrecondition: recover NATS bytes using authenticated GetArtifactContent gRPC through an SDK or the Atlas CLI artifacts download command. No Atlas HTTP fallback is provided. A presigned S3 URL is temporary access, not durable model identity; retain the artifact reference instead.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

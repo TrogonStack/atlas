@@ -122,7 +122,7 @@ backend, through the server's existing NATS connection.
 | `artifacts.backend.spec.forcePathStyle` | `kind: s3` | Path-style requests; defaults to `false`. |
 | `artifacts.backend.spec.allowHttp` | `kind: s3` | HTTP for isolated development; defaults to `false`. |
 | `artifacts.catalog.natsKvBucket` | `kind: nats` or `kind: s3` | NATS KV bucket for metadata and upload sessions; defaults to `atlas_artifact_catalog`. |
-| `artifacts.publicUrl`, `maxBytes`, `uploadTtlSecs` | Either enabled backend | Public Atlas origin, file-size limit and upload lifetime. |
+| `artifacts.maxBytes`, `artifacts.uploadTtlSecs` | Either enabled backend | File-size limit and upload lifetime. |
 
 For NATS Object Store, select `kind: nats` and supply its object bucket:
 
@@ -136,7 +136,6 @@ artifacts:
       bucket: atlas_artifacts
   catalog:
     natsKvBucket: atlas_artifact_catalog
-  publicUrl: https://atlas.example.com
   maxBytes: 16777216
   uploadTtlSecs: 900
 ```
@@ -161,7 +160,6 @@ artifacts:
       region: us-east-1
   catalog:
     natsKvBucket: atlas_artifact_catalog
-  publicUrl: https://atlas.example.com
   maxBytes: 16777216
   uploadTtlSecs: 900
 extraEnv:
@@ -196,8 +194,8 @@ and sibling `s3` forms, as well as the old `backend.value` wrapper, are
 rejected. Select `backend.kind` and put the selected provider's fields in
 `backend.spec`. Use `catalog.natsKvBucket` for shared metadata.
 
-An enabled backend requires `publicUrl`, file limits must be within 1 byte
-through 32 MiB, and upload lifetimes must be within 1 through 3,600 seconds.
+File limits must be within 1 byte through 32 MiB, and upload lifetimes must
+be within 1 through 3,600 seconds.
 The chart also requires
 `config.maxMessageBytes >= artifacts.maxBytes + 65536`; the default 4 MiB
 transport limit must be increased when enabling the default 16 MiB artifact
@@ -209,10 +207,13 @@ The chart maps `backend.kind` to `TROGON_ATLAS_ARTIFACT_BACKEND`.
 selected provider's variables are emitted. `catalog.natsKvBucket` maps to
 `TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET` with either enabled backend.
 
-Route the artifact HTTP paths through the same gateway as the server and
-set `publicUrl` to its externally reachable origin. Stable content URLs
-check Atlas authorization; signed S3 URLs remain capabilities until their
-expiry. See [Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
+Atlas artifact control and byte-retrieval operations use gRPC. NATS uploads
+and downloads also use gRPC, so an enabled backend needs no public URL or
+additional Atlas HTTP routes. The obsolete `artifacts.publicUrl` setting is
+rejected by the schema. S3 grant creation is an RPC; only direct transfer
+of the bytes uses presigned HTTP PUT or GET requests. Signed S3 URLs remain
+capabilities until their expiry. See
+[Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
 for CLI/MCP usage and retention requirements.
 
 ## Port

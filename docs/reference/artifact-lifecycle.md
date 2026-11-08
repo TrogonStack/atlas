@@ -12,16 +12,17 @@ persisted under a separate immutable key, read back and published as `Ready`
 in the artifact catalog. Confirmation does not mean attachment to an Event
 Model. A retry after successful confirmation returns the accepted artifact.
 
-Artifact retention is independent of upload-session expiry. A confirmed file
-can be reused by documents, exact connection occurrences, branches and later
-edits. Failure to attach it immediately must not turn a successful upload
-into an expired file.
+Artifact retention is independent of upload-session expiry. A confirmed
+file can be retained by its namespace and artifact ID for later association
+with documents, exact connection occurrences, branches and later edits. Typed
+model attachments are not implemented yet. Failure to attach a file
+immediately must not turn a successful upload into an expired file.
 
 | Condition | Cleanup policy |
 | --- | --- |
 | Upload never confirmed | Expire the session, fence completion and reclaim its temporary bytes and unaccepted promotion attempts. |
 | Upload confirmed | Preserve the selected final object; reclaim temporary copies and failed promotion attempts. |
-| Confirmed file has no known attachment | Retain by default. Missing URL matches do not prove that a file is unused. |
+| Confirmed file has no known attachment | Retain by default. No recorded attachment does not prove that a file is unused. |
 | Model or branch removed | Do not cascade-delete files. Other branches, documents or retained history can still need them. |
 | Last reference removed under a future retention policy | Start a recovery window only after authoritative reference accounting proves eligibility. |
 
@@ -175,15 +176,17 @@ Never enable bucket-wide expiry to solve temporary garbage.
 ## Retention after model removal
 
 Future automatic final-object collection requires typed artifact references
-and durable reference accounting. Existing `Document.link` URLs do not
-provide a complete inventory. Until migration and reconciliation establish
-coverage, confirmed artifacts remain retained.
+and durable reference accounting. The artifact service currently has no
+typed model attachment inventory. Free-form notes or external links do not
+provide complete reference accounting. Until a typed contract and
+reconciliation establish coverage, confirmed artifacts remain retained.
 
 Reference identity must include the artifact namespace and immutable ID,
 and the referring entity incarnation, pinned version, branch or retained
-snapshot. A Document remains a reference even if one of its subjects no
-longer resolves. Exact connection selectors identify what it documents;
-they do not make its attachment exclusive to that connection.
+snapshot. Under that future contract, a Document attachment remains a
+reference even if one of its subjects no longer resolves. Exact connection
+selectors identify what it documents; they do not make its attachment
+exclusive to that connection.
 
 Use the complete authoritative reference traversal, never a capped impact
 report or search result. Track references from all retained branches and

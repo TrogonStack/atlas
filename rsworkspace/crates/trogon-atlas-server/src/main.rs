@@ -1137,16 +1137,6 @@ async fn run(
         );
         *routes.axum_router_mut() = timed_out;
     }
-    if args.artifacts.artifact_backend
-        != trogon_atlas_server::artifacts::config::ArtifactBackend::Disabled
-    {
-        let artifacts = trogon_atlas_server::artifacts::http::router(
-            data_plane.clone(),
-            usize::try_from(args.artifacts.artifact_max_bytes)
-                .context("artifact byte limit exceeds platform capacity")?,
-        );
-        *routes.axum_router_mut() = routes.axum_router_mut().clone().merge(artifacts);
-    }
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,

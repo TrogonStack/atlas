@@ -74,7 +74,6 @@ impl Fixture {
         let artifacts = ArtifactService::new(
             Arc::new(blobs),
             catalog,
-            endpoint.clone(),
             8 * 1024 * 1024,
             Duration::from_secs(300),
         )
@@ -258,6 +257,7 @@ async fn cli_uploads_discovers_and_downloads_verified_nats_artifacts() {
     assert_eq!(artifact["sha256"], sha256_hex(&content));
     assert_eq!(artifact["size"], content.len().to_string());
     assert!(artifact.get("uploadUrl").is_none());
+    assert!(artifact.get("contentUrl").is_none());
     let id = artifact["artifactId"].as_str().unwrap();
     let metadata = cli_result(
         &fixture
@@ -350,6 +350,10 @@ async fn mcp_coordinates_verified_uploads_and_enforces_reader_visibility() {
     assert!(upload
         .get("directUpload")
         .is_none_or(|value| value == false));
+    assert!(upload.get("uploadUrl").is_none_or(|value| value == ""));
+    assert!(upload
+        .get("headers")
+        .is_none_or(|value| value.as_object().is_some_and(serde_json::Map::is_empty)));
     let id = upload["uploadId"].as_str().unwrap();
     let pending = refused(
         &reader,
@@ -378,6 +382,7 @@ async fn mcp_coordinates_verified_uploads_and_enforces_reader_visibility() {
         .await,
     );
     assert_eq!(completed["artifact"]["sha256"], sha256_hex(content));
+    assert!(completed["artifact"].get("contentUrl").is_none());
     let artifact = tool_result(
         &tool(
             &reader,
@@ -389,17 +394,33 @@ async fn mcp_coordinates_verified_uploads_and_enforces_reader_visibility() {
         .await,
     );
     assert_eq!(artifact, completed);
-    let download = tool_result(
-        &tool(
+    let mut reader_client = connect(&fixture.endpoint, Some(READER), 30).await.unwrap();
+    let download = reader_client
+        .get_artifact_download(pb::GetArtifactDownloadRequest {
+            namespace: fixture.namespace.clone(),
+            artifact_id: id.to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(download.code(), tonic::Code::FailedPrecondition);
+    assert!(download.message().contains("GetArtifactContent"));
+    assert!(
+        refused(
             &reader,
             "get_artifact_download",
-            json!({
-                "namespace": fixture.namespace, "artifactId": id,
-            }),
+            json!({"namespace": fixture.namespace, "artifactId": id}),
         )
-        .await,
+        .await
     );
-    assert!(download["url"].as_str().unwrap().ends_with("/content"));
+    let recovered = reader_client
+        .get_artifact_content(pb::GetArtifactContentRequest {
+            namespace: fixture.namespace.clone(),
+            artifact_id: id.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(recovered.content, content);
     let hidden_result = refused(
         &hidden,
         "get_artifact",

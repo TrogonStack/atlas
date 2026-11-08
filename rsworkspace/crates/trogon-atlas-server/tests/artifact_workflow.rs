@@ -11,12 +11,12 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{
     artifacts::{storage::NatsBlobStorage, ArtifactService},
     auth::{BearerAuth, TokenRegistry},
-    mcp::data_plane,
+    mcp::{data_plane, DataPlane},
     metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
-async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, axum::Router) {
+async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, DataPlane) {
     let nats = trogon_atlas_testsupport::shared().await;
     let js = async_nats::jetstream::new(async_nats::connect(&nats.url).await.unwrap());
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
@@ -43,7 +43,6 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, axum::Router
         ArtifactService::new(
             Arc::new(blobs),
             catalog,
-            endpoint.clone(),
             1024 * 1024,
             Duration::from_secs(60),
         )
@@ -77,9 +76,7 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, axum::Router
     );
     let mut routes = tonic::service::Routes::builder();
     routes.add_service(data.clone());
-    let mut routes = routes.routes();
-    let http = trogon_atlas_server::artifacts::http::router(data, 1024 * 1024);
-    *routes.axum_router_mut() = routes.axum_router_mut().clone().merge(http.clone());
+    let routes = routes.routes();
     let task = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .accept_http1(true)
@@ -88,7 +85,7 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, axum::Router
             .await
             .unwrap();
     });
-    (endpoint, namespace, task, http)
+    (endpoint, namespace, task, data)
 }
 
 async fn client(endpoint: &str, token: &str) -> trogon_atlas_client::client::Client {
@@ -108,38 +105,116 @@ fn begin(namespace: &str, content: &[u8]) -> pb::BeginArtifactUploadRequest {
 }
 
 #[tokio::test]
-async fn unauthorized_http_uploads_are_rejected_without_reading_the_body() {
+async fn nats_begin_uses_grpc_without_http_upload_target() {
+    let (endpoint, namespace, task, _) = fixture().await;
+    let mut writer = client(&endpoint, "artifact-writer-fixture").await;
+    let upload = writer
+        .begin_artifact_upload(begin(&namespace, b"grpc upload"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!upload.direct_upload);
+    assert!(
+        upload.upload_url.is_empty(),
+        "NATS uploads must use UploadArtifactContent RPC without an HTTP upload URL"
+    );
+    assert!(upload.headers.is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn nats_download_requires_get_artifact_content_rpc() {
+    let (endpoint, namespace, task, _) = fixture().await;
+    let mut writer = client(&endpoint, "artifact-writer-fixture").await;
+    let content = b"grpc download".to_vec();
+    let upload = writer
+        .begin_artifact_upload(begin(&namespace, &content))
+        .await
+        .unwrap()
+        .into_inner();
+    writer
+        .upload_artifact_content(pb::UploadArtifactContentRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id.clone(),
+            content: content.clone(),
+        })
+        .await
+        .unwrap();
+    let artifact = writer
+        .complete_artifact_upload(pb::CompleteArtifactUploadRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .artifact
+        .unwrap();
+    let result = writer
+        .get_artifact_download(pb::GetArtifactDownloadRequest {
+            namespace: namespace.clone(),
+            artifact_id: artifact.artifact_id.clone(),
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "NATS downloads must not advertise an HTTP artifact URL"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("GetArtifactContent"));
+    assert_eq!(
+        writer
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace,
+                artifact_id: artifact.artifact_id,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .content,
+        content
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn unauthorized_rpc_uploads_are_rejected_without_reading_the_body() {
     use tower::ServiceExt;
-    let (_, namespace, task, router) = fixture().await;
+    let (_, _, task, data_plane) = fixture().await;
     for (token, expected) in [
-        (None, 401),
-        (Some("invalid-fixture-token"), 401),
-        (Some("artifact-reader-fixture"), 403),
+        (None, tonic::Code::Unauthenticated),
+        (Some("invalid-fixture-token"), tonic::Code::Unauthenticated),
+        (
+            Some("artifact-reader-fixture"),
+            tonic::Code::PermissionDenied,
+        ),
     ] {
         let body = axum::body::Body::from_stream(futures::stream::pending::<
             Result<Bytes, std::io::Error>,
         >());
-        let mut request = axum::http::Request::put(format!(
-            "/api/artifact-uploads/{namespace}/{}",
-            uuid::Uuid::now_v7()
-        ));
+        let mut request = axum::http::Request::post(
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UploadArtifactContent",
+        )
+        .header("content-type", "application/grpc");
         if let Some(token) = token {
             request = request.header("authorization", format!("Bearer {token}"));
         }
         let response = tokio::time::timeout(
             Duration::from_secs(2),
-            router.clone().oneshot(request.body(body).unwrap()),
+            data_plane.clone().oneshot(request.body(body).unwrap()),
         )
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(response.status().as_u16(), expected);
+        let status = tonic::Status::from_header_map(response.headers()).unwrap();
+        assert_eq!(status.code(), expected);
     }
     task.abort();
 }
 
 #[tokio::test]
-async fn authenticated_http_upload_finalize_and_download_preserve_exact_bytes_and_namespace() {
+async fn authenticated_rpc_upload_finalize_and_content_preserve_exact_bytes_and_namespace() {
     let (endpoint, namespace, task, _) = fixture().await;
     let mut writer = client(&endpoint, "artifact-writer-fixture").await;
     let mut reader = client(&endpoint, "artifact-reader-fixture").await;
@@ -170,36 +245,25 @@ async fn authenticated_http_upload_finalize_and_download_preserve_exact_bytes_an
             .code(),
         tonic::Code::NotFound
     );
-    let http = reqwest::Client::new();
-    assert_eq!(
-        http.put(&upload.upload_url)
-            .body(content.clone())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        401
+    assert!(
+        upload.upload_url.is_empty(),
+        "NATS RPC uploads must not advertise an HTTP target"
     );
+    assert!(upload.headers.is_empty());
+    let transfer = pb::UploadArtifactContentRequest {
+        namespace: namespace.clone(),
+        upload_id: upload.upload_id.clone(),
+        content: content.clone(),
+    };
     assert_eq!(
-        http.put(&upload.upload_url)
-            .bearer_auth("artifact-reader-fixture")
-            .body(content.clone())
-            .send()
+        reader
+            .upload_artifact_content(transfer.clone())
             .await
-            .unwrap()
-            .status(),
-        403
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
     );
-    assert_eq!(
-        http.put(&upload.upload_url)
-            .bearer_auth("artifact-writer-fixture")
-            .body(content.clone())
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        204
-    );
+    writer.upload_artifact_content(transfer).await.unwrap();
     let request = pb::CompleteArtifactUploadRequest {
         namespace: namespace.clone(),
         upload_id: upload.upload_id.clone(),
@@ -232,48 +296,42 @@ async fn authenticated_http_upload_finalize_and_download_preserve_exact_bytes_an
             .code(),
         tonic::Code::NotFound
     );
+    let get_content = pb::GetArtifactContentRequest {
+        namespace: namespace.clone(),
+        artifact_id: artifact.artifact_id.clone(),
+    };
     assert_eq!(
-        http.get(&artifact.content_url)
-            .send()
+        hidden
+            .get_artifact_content(get_content.clone())
             .await
-            .unwrap()
-            .status(),
-        401
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
     );
-    assert_eq!(
-        http.get(&artifact.content_url)
-            .bearer_auth("artifact-hidden-fixture")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        404
-    );
-    let response = http
-        .get(&artifact.content_url)
-        .bearer_auth("artifact-reader-fixture")
-        .send()
+    let response = reader
+        .get_artifact_content(get_content)
         .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.headers()["content-type"], "image/png");
-    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
-    assert_eq!(response.bytes().await.unwrap(), content);
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.artifact.unwrap(), artifact);
+    assert_eq!(response.content, content);
     assert_eq!(
-        http.put(&upload.upload_url)
-            .bearer_auth("artifact-writer-fixture")
-            .body(vec![1u8; content.len()])
-            .send()
+        writer
+            .upload_artifact_content(pb::UploadArtifactContentRequest {
+                namespace,
+                upload_id: upload.upload_id,
+                content: vec![1u8; content.len()],
+            })
             .await
-            .unwrap()
-            .status(),
-        409
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
     );
     task.abort();
 }
 
 #[tokio::test]
-async fn digest_mismatch_and_oversized_http_body_never_publish_an_artifact() {
+async fn digest_mismatch_and_oversized_rpc_content_never_publish_an_artifact() {
     let (endpoint, namespace, task, _) = fixture().await;
     let mut writer = client(&endpoint, "artifact-writer-fixture").await;
     let upload = writer
@@ -281,27 +339,20 @@ async fn digest_mismatch_and_oversized_http_body_never_publish_an_artifact() {
         .await
         .unwrap()
         .into_inner();
-    let http = reqwest::Client::new();
-    assert_eq!(
-        http.put(&upload.upload_url)
-            .bearer_auth("artifact-writer-fixture")
-            .body("modified")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        400
-    );
-    assert_eq!(
-        http.put(&upload.upload_url)
-            .bearer_auth("artifact-writer-fixture")
-            .body(vec![0u8; 1024 * 1024 + 1])
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        413
-    );
+    for content in [b"modified".to_vec(), vec![0u8; 1024 * 1024 + 1]] {
+        assert_eq!(
+            writer
+                .upload_artifact_content(pb::UploadArtifactContentRequest {
+                    namespace: namespace.clone(),
+                    upload_id: upload.upload_id.clone(),
+                    content,
+                })
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
     assert_eq!(
         writer
             .complete_artifact_upload(pb::CompleteArtifactUploadRequest {
@@ -356,7 +407,6 @@ async fn upload_record_survives_service_restart_and_final_content_ignores_stagin
         ArtifactService::new(
             blobs.clone(),
             catalog.clone(),
-            "http://localhost:50069".into(),
             1024,
             Duration::from_secs(60),
         )

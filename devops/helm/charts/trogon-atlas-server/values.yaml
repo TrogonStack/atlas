@@ -107,7 +107,6 @@ artifacts:
     spec: {}
   catalog:
     natsKvBucket: atlas_artifact_catalog
-  publicUrl: ""
   maxBytes: 16777216
   uploadTtlSecs: 900
 

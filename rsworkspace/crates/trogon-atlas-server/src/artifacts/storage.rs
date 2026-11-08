@@ -884,7 +884,6 @@ mod tests {
         let service = crate::artifacts::ArtifactService::new(
             storage.clone(),
             catalog,
-            "http://127.0.0.1:50069".into(),
             1024,
             Duration::from_secs(60),
         )

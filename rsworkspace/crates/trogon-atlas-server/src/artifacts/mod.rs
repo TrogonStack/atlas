@@ -1,5 +1,4 @@
 pub mod config;
-pub mod http;
 pub mod storage;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -43,7 +42,6 @@ enum Phase {
 pub struct ArtifactService {
     blobs: Arc<dyn BlobStorage>,
     catalog: Store,
-    public_url: String,
     max_bytes: u64,
     upload_ttl: Duration,
 }
@@ -52,16 +50,13 @@ impl ArtifactService {
     pub fn new(
         blobs: Arc<dyn BlobStorage>,
         catalog: Store,
-        mut public_url: String,
         max_bytes: u64,
         upload_ttl: Duration,
     ) -> Result<Self, Status> {
-        validate_configuration(&public_url, max_bytes, upload_ttl)?;
-        public_url.truncate(public_url.trim_end_matches('/').len());
+        validate_configuration(max_bytes, upload_ttl)?;
         Ok(Self {
             blobs,
             catalog,
-            public_url,
             max_bytes,
             upload_ttl,
         })
@@ -116,18 +111,9 @@ impl ArtifactService {
             )
             .await?;
         let direct_upload = signed.is_some();
-        let (upload_url, headers) = signed.map_or_else(
-            || {
-                (
-                    format!(
-                        "{}/api/artifact-uploads/{}/{id}",
-                        self.public_url, request.namespace
-                    ),
-                    HashMap::new(),
-                )
-            },
-            |signed| (signed.url, signed.headers),
-        );
+        let (upload_url, headers) = signed
+            .map(|signed| (signed.url, signed.headers))
+            .unwrap_or_default();
         let expires =
             Utc::now().timestamp() + i64::try_from(self.upload_ttl.as_secs()).unwrap_or(3600);
         let upload = Upload {
@@ -230,7 +216,7 @@ impl ArtifactService {
         let (mut upload, revision) = self.load(namespace, id).await?;
         Self::require_session(&upload, principal)?;
         if upload.phase == Phase::Ready {
-            return Ok(self.artifact(&upload));
+            return Ok(Self::artifact(&upload));
         }
         if !matches!(upload.phase, Phase::Pending | Phase::Uploaded) {
             return Err(Status::failed_precondition(
@@ -267,10 +253,10 @@ impl ArtifactService {
         if !self.info().direct_upload {
             let _ = self.blobs.delete(&upload.staging_key).await;
         }
-        Ok(self.artifact(&upload))
+        Ok(Self::artifact(&upload))
     }
 
-    fn artifact(&self, upload: &Upload) -> pb::Artifact {
+    fn artifact(upload: &Upload) -> pb::Artifact {
         pb::Artifact {
             namespace: upload.namespace.clone(),
             artifact_id: upload.id.clone(),
@@ -278,10 +264,6 @@ impl ArtifactService {
             media_type: upload.media_type.clone(),
             size: upload.size,
             sha256: upload.sha256.clone(),
-            content_url: format!(
-                "{}/api/artifacts/{}/{}/content",
-                self.public_url, upload.namespace, upload.id
-            ),
         }
     }
 
@@ -294,7 +276,7 @@ impl ArtifactService {
     }
 
     pub async fn get(&self, namespace: &str, id: &str) -> Result<pb::Artifact, Status> {
-        Ok(self.artifact(&self.ready(namespace, id).await?))
+        Ok(Self::artifact(&self.ready(namespace, id).await?))
     }
 
     pub async fn content(
@@ -313,7 +295,7 @@ impl ArtifactService {
         let content = self.blobs.get(key, byte_limit).await?;
         verify(&upload, &content, MAX_ARTIFACT_BYTES)?;
         Ok(pb::GetArtifactContentResponse {
-            artifact: Some(self.artifact(&upload)),
+            artifact: Some(Self::artifact(&upload)),
             content: content.to_vec(),
         })
     }
@@ -331,17 +313,18 @@ impl ArtifactService {
         let signed = self
             .blobs
             .presign_get(key, self.upload_ttl, &upload.media_type)
-            .await?;
-        let expires = if signed.is_some() {
-            Utc::now().timestamp()
-                + i64::try_from(self.upload_ttl.as_secs()).map_err(|_| {
-                    Status::failed_precondition("artifact expiry exceeds platform capacity")
-                })?
-        } else {
-            0
-        };
+            .await?
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    "this backend does not issue presigned downloads; use GetArtifactContent RPC",
+                )
+            })?;
+        let expires = Utc::now().timestamp()
+            + i64::try_from(self.upload_ttl.as_secs()).map_err(|_| {
+                Status::failed_precondition("artifact expiry exceeds platform capacity")
+            })?;
         Ok(pb::GetArtifactDownloadResponse {
-            url: signed.unwrap_or_else(|| self.artifact(&upload).content_url),
+            url: signed,
             headers: HashMap::new(),
             expires_unix_seconds: expires,
         })
@@ -354,20 +337,8 @@ pub fn validate_namespace(namespace: &str) -> Result<(), Status> {
         .map_err(|_| Status::invalid_argument("invalid namespace ID"))
 }
 
-pub(super) fn validate_configuration(
-    public_url: &str,
-    max_bytes: u64,
-    upload_ttl: Duration,
-) -> Result<(), Status> {
-    let url = reqwest::Url::parse(public_url)
-        .map_err(|_| Status::invalid_argument("invalid artifact public URL"))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || max_bytes == 0
+pub(super) fn validate_configuration(max_bytes: u64, upload_ttl: Duration) -> Result<(), Status> {
+    if max_bytes == 0
         || max_bytes > MAX_ARTIFACT_BYTES
         || upload_ttl.is_zero()
         || upload_ttl > Duration::from_secs(3600)

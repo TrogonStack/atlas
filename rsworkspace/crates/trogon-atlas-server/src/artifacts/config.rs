@@ -25,8 +25,6 @@ pub struct ArtifactConfig {
         default_value = "disabled"
     )]
     pub artifact_backend: ArtifactBackend,
-    #[arg(long, env = "TROGON_ATLAS_ARTIFACT_PUBLIC_URL", hide_env_values = true)]
-    pub artifact_public_url: Option<String>,
     #[arg(
         long,
         env = "TROGON_ATLAS_ARTIFACT_NATS_BUCKET",
@@ -90,12 +88,7 @@ impl ArtifactConfig {
         {
             bail!("artifact max bytes must be 1..=32 MiB and fit max-message-bytes with 64 KiB overhead");
         }
-        let public_url = self
-            .artifact_public_url
-            .clone()
-            .context("artifact-public-url is required when artifacts are enabled")?;
         super::validate_configuration(
-            &public_url,
             self.artifact_max_bytes,
             Duration::from_secs(self.artifact_upload_ttl_secs),
         )?;
@@ -176,7 +169,6 @@ impl ArtifactConfig {
         Ok(Some(Arc::new(ArtifactService::new(
             blobs,
             catalog,
-            public_url,
             self.artifact_max_bytes,
             Duration::from_secs(self.artifact_upload_ttl_secs),
         )?)))
@@ -207,8 +199,6 @@ mod tests {
             "atlas",
             "--artifact-backend",
             "nats",
-            "--artifact-public-url",
-            "http://localhost:50069",
             "--artifact-max-bytes",
             "1024",
             "--artifact-catalog-bucket",
@@ -260,14 +250,5 @@ mod tests {
                 .to_string()
                 .contains("invalid artifact service configuration"));
         }
-        let mut config = configuration();
-        config.artifact_public_url = Some("https://user:password@example.invalid".into());
-        assert!(config
-            .open("nats://127.0.0.1:1", 2 * 1024 * 1024)
-            .await
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("invalid artifact service configuration"));
     }
 }

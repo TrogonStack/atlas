@@ -62,7 +62,6 @@ class ArtifactValuesTest(unittest.TestCase):
         return {
             "backend": {"kind": kind, "spec": spec},
             "catalog": {"natsKvBucket": "fixture_artifact_catalog"},
-            "publicUrl": "https://atlas.example.com",
             "maxBytes": 1048576,
             "uploadTtlSecs": 300,
         }
@@ -83,7 +82,6 @@ class ArtifactValuesTest(unittest.TestCase):
             ),
             {
                 "BACKEND": "nats",
-                "PUBLIC_URL": "https://atlas.example.com",
                 "NATS_BUCKET": "fixture_artifact_bytes",
                 "CATALOG_BUCKET": "fixture_artifact_catalog",
                 "MAX_BYTES": "1048576",
@@ -107,7 +105,6 @@ class ArtifactValuesTest(unittest.TestCase):
             ),
             {
                 "BACKEND": "s3",
-                "PUBLIC_URL": "https://atlas.example.com",
                 "CATALOG_BUCKET": "fixture_artifact_catalog",
                 "MAX_BYTES": "1048576",
                 "UPLOAD_TTL_SECS": "300",
@@ -127,6 +124,27 @@ class ArtifactValuesTest(unittest.TestCase):
         self.assertEqual(env["CATALOG_BUCKET"], "fixture_artifact_catalog")
         self.assertNotIn("S3_ENDPOINT", env)
         self.assertNotIn("NATS_BUCKET", env)
+
+    def test_public_url_configuration_is_rejected_for_every_backend(self):
+        for kind, spec in [
+            ("disabled", {}),
+            ("nats", {"bucket": "fixture"}),
+            ("s3", {"bucket": "fixture"}),
+        ]:
+            for public_url in ["", "https://atlas.example.com", 42, None]:
+                artifacts = self.enabled(kind, spec)
+                artifacts["publicUrl"] = public_url
+                with self.subTest(kind=kind, public_url=public_url):
+                    self.assert_invalid(artifacts)
+
+    def test_no_backend_emits_a_public_url(self):
+        for artifacts in [
+            {},
+            self.enabled("nats", {"bucket": "fixture"}),
+            self.enabled("s3", {"bucket": "fixture"}),
+        ]:
+            with self.subTest(artifacts=artifacts):
+                self.assertNotIn("PUBLIC_URL", self.environment(artifacts))
 
     def test_transfer_limits_remain_decimal_in_rendered_environment(self):
         env = self.environment(self.enabled("nats", {"bucket": "fixture"}), prefix="")
@@ -196,6 +214,17 @@ class ArtifactValuesTest(unittest.TestCase):
             artifacts["catalog"] = catalog
             with self.subTest(catalog=catalog):
                 self.assert_invalid(artifacts)
+
+    def test_shared_limits_remain_bounded_integers(self):
+        for field, invalid_values in [
+            ("maxBytes", [0, 33554433, 1.5, True, "1048576"]),
+            ("uploadTtlSecs", [0, 3601, 2.5, False, "300"]),
+        ]:
+            for value in invalid_values:
+                artifacts = self.enabled("nats", {"bucket": "fixture"})
+                artifacts[field] = value
+                with self.subTest(field=field, value=value):
+                    self.assert_invalid(artifacts)
 
 
 if __name__ == "__main__":

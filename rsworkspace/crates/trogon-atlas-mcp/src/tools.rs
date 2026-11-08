@@ -1334,7 +1334,7 @@ pub struct CatalogQueryParams {
 #[serde(deny_unknown_fields)]
 pub struct ArtifactRequestParams {
     #[schemars(
-        description = "Exact artifact RPC request in proto3 JSON. begin_artifact_upload requires namespace, filename, mediaType, size in bytes and sha256. complete_artifact_upload requires namespace and uploadId. get_artifact and get_artifact_download require namespace and artifactId. get_artifact_storage_info accepts an empty object. Transfer binary content separately by HTTP PUT using the begin response; remote MCP cannot read caller-local file paths."
+        description = "Exact artifact gRPC request in proto3 JSON. begin_artifact_upload requires namespace, filename, mediaType, size in bytes and sha256. complete_artifact_upload requires namespace and uploadId. get_artifact and get_artifact_download require namespace and artifactId. get_artifact_storage_info accepts an empty object. Only directUpload=true allows HTTP PUT to a direct S3 presigned URL. When false or omitted, use UploadArtifactContent gRPC through an SDK or the CLI; no Atlas HTTP transfer endpoint exists. Remote MCP cannot read caller-local file paths."
     )]
     pub request_json: JsonPayload,
 }

@@ -22,7 +22,6 @@ const SECRET_ENV: &[&str] = &[
     "TROGON_ATLAS_LLM_BASE_URL",
     "TROGON_ATLAS_JEV_BASE_URL",
     "TROGON_ATLAS_SPICEDB_ENDPOINT",
-    "TROGON_ATLAS_ARTIFACT_PUBLIC_URL",
     "TROGON_ATLAS_ARTIFACT_S3_ENDPOINT",
 ];
 
@@ -63,4 +62,11 @@ fn long_help_hides_secret_env_values() {
 #[test]
 fn short_help_hides_secret_env_values() {
     assert_hidden(&["-h"]);
+}
+
+#[test]
+fn help_does_not_advertise_artifact_http_configuration() {
+    let text = help(&["--help"]);
+    assert!(!text.contains("--artifact-public-url"));
+    assert!(!text.contains("TROGON_ATLAS_ARTIFACT_PUBLIC_URL"));
 }

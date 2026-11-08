@@ -8,7 +8,6 @@
       "required": [
         "backend",
         "catalog",
-        "publicUrl",
         "maxBytes",
         "uploadTtlSecs"
       ],
@@ -128,10 +127,6 @@
             }
           }
         },
-        "publicUrl": {
-          "type": "string",
-          "description": "Externally reachable Atlas origin serving artifact HTTP routes."
-        },
         "maxBytes": {
           "type": "integer",
           "minimum": 1,
@@ -142,32 +137,7 @@
           "minimum": 1,
           "maximum": 3600
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "backend": {
-                "properties": {
-                  "kind": {
-                    "enum": [
-                      "nats",
-                      "s3"
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "publicUrl": {
-                "minLength": 1
-              }
-            }
-          }
-        }
-      ]
+      }
     }
   }
 }

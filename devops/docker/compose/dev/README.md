@@ -144,7 +144,6 @@ services:
   trogon-atlas-server:
     environment:
       TROGON_ATLAS_ARTIFACT_BACKEND: nats
-      TROGON_ATLAS_ARTIFACT_PUBLIC_URL: http://127.0.0.1:50069
       TROGON_ATLAS_ARTIFACT_NATS_BUCKET: atlas_artifacts
       TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET: atlas_artifact_catalog
       TROGON_ATLAS_MAX_MESSAGE_BYTES: "37748736"
@@ -152,13 +151,16 @@ services:
 
 Start Compose with the base file and this override, then run
 `trogon-atlas artifacts info` against its exposed endpoint. The NATS Object
-Store and catalog use the existing persistent NATS volume.
+Store and catalog use the existing persistent NATS volume. Artifact metadata,
+upload completion and NATS byte transfer all use the existing gRPC endpoint;
+there are no additional Atlas artifact HTTP routes to expose.
 
 For S3, set `TROGON_ATLAS_ARTIFACT_BACKEND=s3`, configure the server's bucket
 and region, and inject provider credentials from the deployment's secret
 manager. S3-compatible endpoints must be reachable from the server container
 and upload clients. An internal Compose hostname alone will not work in
-presigned URLs used by a host-side CLI.
+presigned URLs used by a host-side CLI. Grant creation remains an RPC; only
+direct S3 byte PUT/GET requests use those URLs.
 
 See [Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
 for server settings, direct S3 uploads, CLI/MCP operations, and retention.

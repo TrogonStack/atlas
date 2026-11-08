@@ -9,9 +9,6 @@
 {{- fail "artifacts.backend.kind must be disabled, nats or s3" }}
 {{- end }}
 {{- if ne $artifactBackend.kind "disabled" }}
-{{- if not $server.artifacts.publicUrl }}
-{{- fail "artifacts.publicUrl is required when artifact storage is enabled" }}
-{{- end }}
 {{- if or (lt (int64 $server.artifacts.maxBytes) 1) (gt (int64 $server.artifacts.maxBytes) 33554432) }}
 {{- fail "artifacts.maxBytes must be between 1 and 33554432" }}
 {{- end }}
@@ -89,8 +86,6 @@ spec:
             - name: TROGON_ATLAS_ARTIFACT_BACKEND
               value: {{ $artifactBackend.kind | quote }}
             {{- if ne $artifactBackend.kind "disabled" }}
-            - name: TROGON_ATLAS_ARTIFACT_PUBLIC_URL
-              value: {{ $server.artifacts.publicUrl | quote }}
             - name: TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET
               value: {{ $server.artifacts.catalog.natsKvBucket | quote }}
             - name: TROGON_ATLAS_ARTIFACT_MAX_BYTES
