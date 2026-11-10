@@ -1,5 +1,5 @@
 import type { Ref } from 'react';
-import { Camera, ChevronLeft, History, Workflow } from 'lucide-react';
+import { Camera, ChevronLeft, History } from 'lucide-react';
 import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
@@ -75,10 +75,7 @@ export function TopBar({
             Overview
           </a>
         ) : null}
-        <Workflow className="h-5 w-5 shrink-0 text-primary" />
-        <h1 className="sr-only text-sm font-semibold tracking-tight lg:not-sr-only lg:whitespace-nowrap">
-          Event Model Studio
-        </h1>
+        <h1 className="sr-only text-sm font-semibold tracking-tight lg:not-sr-only lg:whitespace-nowrap">Atlas</h1>
         {scopedTitle ? (
           <>
             <span className="hidden text-muted-foreground lg:inline">/</span>
