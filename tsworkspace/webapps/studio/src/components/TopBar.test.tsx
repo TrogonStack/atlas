@@ -72,9 +72,10 @@ describe('TopBar', () => {
     expect(screen.queryByRole('link', { name: /namespaces/i })).toBeNull();
   });
 
-  it('displays the schema version badge when info includes schemaVersion', () => {
-    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} info={{ schemaVersion: 'v2' }} />);
-    expect(screen.getByText('v2')).toBeDefined();
+  it('keeps schema version metadata out of the model header', () => {
+    const schemaVersion = 'trogonatlas.eventmodel.v1alpha1';
+    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} info={{ schemaVersion }} />);
+    expect(screen.queryByText(schemaVersion)).toBeNull();
   });
 
   it('displays the error message when error is provided', () => {

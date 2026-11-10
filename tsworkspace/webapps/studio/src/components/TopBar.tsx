@@ -4,7 +4,6 @@ import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
 import { TopBarMenu } from '@/components/TopBarMenu';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
 import type { StudioFeatureFlag, StudioFeatureFlags } from '@/lib/feature-flags';
@@ -85,11 +84,6 @@ export function TopBar({
             <span className="hidden text-muted-foreground lg:inline">/</span>
             <span className="min-w-0 truncate text-sm font-medium">{scopedTitle}</span>
           </>
-        ) : null}
-        {info?.schemaVersion ? (
-          <Badge variant="outline" className="shrink-0">
-            {info.schemaVersion}
-          </Badge>
         ) : null}
       </div>
       {/* min-w-0, not shrink-0: a long branch name must ellipsize here rather than push the title out of the bar. */}
