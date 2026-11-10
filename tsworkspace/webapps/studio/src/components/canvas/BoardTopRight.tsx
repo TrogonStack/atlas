@@ -39,7 +39,7 @@ export function BoardTopRightHost({
         <div
           ref={setHost}
           data-testid="board-top-right"
-          className="pointer-events-auto flex min-w-0 flex-1 flex-wrap items-start justify-end gap-2"
+          className="pointer-events-none flex min-w-0 flex-auto flex-wrap items-start justify-end gap-2 [&>*]:pointer-events-auto [&>*]:max-w-full [&>*]:overflow-x-auto"
         >
           {/* Portaled controls append after this node, so the summary is ordered back to the corner. */}
           <div className="order-last">{corner}</div>
