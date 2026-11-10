@@ -13,14 +13,14 @@ describe('TopBar', () => {
     expect(screen.getByRole('banner')).toBeDefined();
   });
 
-  it('shows "live" indicator when connected', () => {
+  it('shows "Connected" indicator when connected', () => {
     render(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} />);
-    expect(screen.getAllByText('live').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
   });
 
-  it('shows "offline" indicator when disconnected', () => {
+  it('shows "Disconnected" indicator when disconnected', () => {
     render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} />);
-    expect(screen.getAllByText('offline').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Disconnected').length).toBeGreaterThan(0);
   });
 
   it('keeps Refresh behind the actions menu and calls onRefresh from there', async () => {

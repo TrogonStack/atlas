@@ -497,13 +497,13 @@ describe('ModelShell', () => {
       return { close: vi.fn() };
     });
     render(<ModelShell />);
-    await waitFor(() => expect(screen.getByText('connecting', { exact: true })).toBeDefined());
+    await waitFor(() => expect(screen.getByText('Connecting', { exact: true })).toBeDefined());
     act(() => onState?.('offline', 'Permission denied for the live update subscription.'));
     const status = screen.getByRole('status', { name: 'Live updates' });
-    expect(status.textContent).toContain('offline');
+    expect(status.textContent).toContain('Disconnected');
     expect(status.getAttribute('title')).toContain('Permission denied for the live update subscription.');
     act(() => onState?.('live'));
-    expect(status.textContent).toContain('live');
+    expect(status.textContent).toContain('Connected');
     expect(status.getAttribute('title')).not.toContain('Permission denied');
   });
 

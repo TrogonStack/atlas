@@ -1,5 +1,5 @@
 import type { Ref } from 'react';
-import { Camera, ChevronLeft, History } from 'lucide-react';
+import { Camera, ChevronLeft, History, Network } from 'lucide-react';
 import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
@@ -110,18 +110,18 @@ export function TopBar({
               }
               className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
             >
-              <span
+              <Network
                 aria-hidden="true"
                 className={cn(
-                  'h-2 w-2 rounded-full',
+                  'h-3.5 w-3.5',
                   realtime.state === 'live'
-                    ? 'bg-emerald-500'
+                    ? 'text-emerald-500'
                     : realtime.state === 'connecting'
-                      ? 'bg-amber-400'
-                      : 'bg-red-500',
+                      ? 'text-amber-400'
+                      : 'text-red-500',
                 )}
               />
-              {realtime.state}
+              {{ live: 'Connected', connecting: 'Connecting', offline: 'Disconnected' }[realtime.state]}
               {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
             </output>
             {historyButton}
