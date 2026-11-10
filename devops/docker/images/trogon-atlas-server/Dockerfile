@@ -3,7 +3,7 @@
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
 FROM --platform=$BUILDPLATFORM bufbuild/buf:1.75.0@sha256:adf82c7170be6629ec81dc907921ac1699407cd11c4f7fd7521b13c74152f849 AS buf
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
 COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
 ARG TARGETARCH
 ARG BUILDARCH
