@@ -30,6 +30,7 @@ import { ValidationInspector } from '@/components/ValidationInspector';
 import { ValidationSummary } from '@/components/ValidationSummary';
 import { api, type BranchDiffEntry, type ServerInfo } from '@/lib/api';
 import { branchStatusLookup, useBranchParam } from '@/lib/branch';
+import { useStudioFeatureFlags } from '@/lib/feature-flags';
 import { EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import type { BoardEdgeData } from '@/lib/layout';
 import { buildModel, entityKey, hasStreamEvents, type Model } from '@/lib/model';
@@ -128,6 +129,7 @@ export function ModelShell({
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
+  const [featureFlags, setFeatureFlag] = useStudioFeatureFlags();
   const scoped = Boolean(modelProp);
   const [branch, setBranch] = useBranchParam();
   const [missingBranch, setMissingBranch] = useState<string>();
@@ -554,8 +556,8 @@ export function ModelShell({
     if (v === 'domain')
       return model.entities.some((e) => e.kind === 'domain' || e.kind === 'subdomain' || e.kind === 'boundedContext');
     // A saved board is one inlined runtime file without three.js, so it has no 3D views.
-    if (v === 'lanes') return !snapshot && model.slices.length > 0;
-    if (v === 'towers') return !snapshot && hasStreamEvents(model);
+    if (v === 'lanes') return featureFlags.laneMesh && !snapshot && model.slices.length > 0;
+    if (v === 'towers') return featureFlags.streamTowers && !snapshot && hasStreamEvents(model);
     return true;
   });
   // Deep links to a hidden view (?view=ui on a UI-less EM) render the
@@ -598,6 +600,8 @@ export function ModelShell({
         backHref={backHref}
         snapshot={snapshot}
         onExportHtml={onExportHtml}
+        featureFlags={featureFlags}
+        onFeatureFlagChange={setFeatureFlag}
         branch={branch}
         onSelectBranch={(next) => {
           setMissingBranch(undefined);

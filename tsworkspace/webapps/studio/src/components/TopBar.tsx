@@ -7,6 +7,7 @@ import { TopBarMenu } from '@/components/TopBarMenu';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
+import type { StudioFeatureFlag, StudioFeatureFlags } from '@/lib/feature-flags';
 import type { RealtimeStatus } from '@/lib/realtime';
 import type { SnapshotStamp } from '@/lib/snapshot';
 import { cn } from '@/lib/utils';
@@ -20,6 +21,8 @@ export function TopBar({
   backHref,
   snapshot,
   onExportHtml,
+  featureFlags,
+  onFeatureFlagChange,
   branch,
   onSelectBranch,
   onOpenBranchReview,
@@ -40,6 +43,8 @@ export function TopBar({
   snapshot?: SnapshotStamp;
   /** Saves the board as one HTML file. Omit to hide the button. */
   onExportHtml?: () => Promise<void>;
+  featureFlags?: StudioFeatureFlags;
+  onFeatureFlagChange?: (feature: StudioFeatureFlag, enabled: boolean) => void;
   /** Active branch, if any (Phase 3: Studio). Omit to hide the branch UI entirely. */
   branch?: string;
   onSelectBranch?: (name: string | undefined) => void;
@@ -132,7 +137,12 @@ export function TopBar({
             {onSelectBranch ? (
               <BranchBar branch={branch} onSelectBranch={onSelectBranch} onOpenReview={onOpenBranchReview} />
             ) : null}
-            <TopBarMenu onRefresh={onRefresh} onExportHtml={onExportHtml} />
+            <TopBarMenu
+              onRefresh={onRefresh}
+              onExportHtml={onExportHtml}
+              featureFlags={featureFlags}
+              onFeatureFlagChange={onFeatureFlagChange}
+            />
           </>
         )}
       </div>
