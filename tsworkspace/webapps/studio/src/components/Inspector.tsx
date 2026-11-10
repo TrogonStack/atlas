@@ -1,7 +1,7 @@
 import { DecisionDocumentInspector } from '@/components/DecisionDocumentInspector';
 import { DesignGraphInspector } from '@/components/DesignGraphInspector';
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataProductInspector } from '@/components/DataProductInspector';
 import { UiHostingDetails } from '@/components/UiHostingDetails';
 import { ChannelStorageDetails } from '@/components/ChannelStorageDetails';
@@ -525,6 +525,14 @@ export function Inspector({
     (requestedTab === 'scenarios' && sliceScenarios.length === 0) || (requestedTab === 'validation' && !showValidation)
       ? 'details'
       : requestedTab;
+  const previousActiveTab = useRef<InspectorTab>('details');
+  useEffect(() => {
+    if (activeTab !== requestedTab && previousActiveTab.current === requestedTab) {
+      setUncontrolledTab(activeTab);
+      onTabChange?.(activeTab);
+    }
+    previousActiveTab.current = activeTab;
+  }, [activeTab, requestedTab, onTabChange]);
   const memberships = useMemo(
     () =>
       model.slices.filter((s) => {

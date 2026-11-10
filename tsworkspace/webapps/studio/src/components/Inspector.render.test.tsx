@@ -5,6 +5,7 @@
 // realistic wire fixtures built through buildModel, following the fixture
 // idiom in src/lib/model.test.ts (commandSliceFixture-style wire arrays).
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { type ComponentProps, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/CopyContextButton', () => ({
@@ -18,7 +19,7 @@ vi.mock('@/lib/useEntityHomes', () => ({
 import * as api from '@/lib/api';
 import { buildIssueIndex } from '@/lib/issues';
 import { buildModel, type Entity } from '@/lib/model';
-import { Inspector } from './Inspector';
+import { Inspector, type InspectorTab } from './Inspector';
 
 const mkId = (ns: string, slug: string) => ({ namespace: ns, slug, version: '1' });
 
@@ -27,7 +28,7 @@ function mustFind(e: Entity | undefined): Entity {
   return e;
 }
 
-function commandSliceFixture(): api.WireEntityEnvelope[] {
+function commandSliceFixture(withScenarios = true): api.WireEntityEnvelope[] {
   const ns = 'orders';
   return [
     { ui: { id: mkId(ns, 'cart'), title: 'Cart' } },
@@ -41,15 +42,17 @@ function commandSliceFixture(): api.WireEntityEnvelope[] {
         ui: { ui: { id: mkId(ns, 'cart') } },
         command: { command: { id: mkId(ns, 'place') } },
         emittedEvents: [{ event: { id: mkId(ns, 'placed') } }, { event: { id: mkId(ns, 'rejected') } }],
-        scenarios: [
-          {
-            id: 'happy-path',
-            title: 'Order placed successfully',
-            given: [{ event: { id: mkId(ns, 'rejected') }, payload: { reason: 'retry' } }],
-            when: { command: { id: mkId(ns, 'place') }, payload: { total: 42 } },
-            emit: { events: [{ event: { id: mkId(ns, 'placed') }, payload: { orderId: 'o-1' } }] },
-          },
-        ],
+        scenarios: withScenarios
+          ? [
+              {
+                id: 'happy-path',
+                title: 'Order placed successfully',
+                given: [{ event: { id: mkId(ns, 'rejected') }, payload: { reason: 'retry' } }],
+                when: { command: { id: mkId(ns, 'place') }, payload: { total: 42 } },
+                emit: { events: [{ event: { id: mkId(ns, 'placed') }, payload: { orderId: 'o-1' } }] },
+              },
+            ]
+          : [],
       },
     },
   ] as never;
@@ -57,6 +60,20 @@ function commandSliceFixture(): api.WireEntityEnvelope[] {
 
 function baseModel() {
   return buildModel(commandSliceFixture());
+}
+
+function ManagedInspector({
+  mode,
+  ...props
+}: Omit<ComponentProps<typeof Inspector>, 'tab' | 'onTabChange'> & { mode: 'controlled' | 'uncontrolled' }) {
+  const [tab, setTab] = useState<InspectorTab>('details');
+  return (
+    <Inspector
+      {...props}
+      tab={mode === 'controlled' ? tab : undefined}
+      onTabChange={mode === 'controlled' ? setTab : undefined}
+    />
+  );
 }
 
 describe('Inspector', () => {
@@ -195,6 +212,28 @@ describe('Inspector', () => {
     expect(screen.getByText('Given')).toBeDefined();
     expect(screen.getByText('nothing')).toBeDefined();
   });
+
+  it.each(['controlled', 'uncontrolled'] as const)(
+    'keeps Details selected when scenarios disappear and return in %s usage',
+    (mode) => {
+      const model = baseModel();
+      const emptyModel = buildModel(commandSliceFixture(false));
+      const props = { mode, model, entity: mustFind(model.slices[0]?.entity), onClose: vi.fn(), onSelect: vi.fn() };
+      const { rerender } = render(<ManagedInspector {...props} />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
+      expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} model={emptyModel} entity={mustFind(emptyModel.slices[0]?.entity)} />);
+      expect(screen.queryByRole('tab', { name: /Scenarios/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} />);
+      expect(screen.queryByRole('tab', { name: 'Details', selected: true })).not.toBeNull();
+      expect(screen.queryByText('Order placed successfully')).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
+      expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
+    },
+  );
 
   it('omits the Given section for a read model slice, whose inputs are the When', () => {
     const ns = 'orders';
@@ -590,6 +629,28 @@ describe('Inspector: validation findings', () => {
       expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
       expect(screen.getByText('Everything waiting for someone to look at it.')).toBeDefined();
       expect(screen.queryByText('RM_EVENT_NOT_PROJECTED')).toBeNull();
+    },
+  );
+
+  it.each(['controlled', 'uncontrolled'] as const)(
+    'keeps Details selected when validation findings disappear and return in %s usage',
+    (mode) => {
+      const model = rmModel();
+      const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+      const props = { mode, model, entity: rm, onClose: vi.fn(), onSelect: vi.fn() };
+      const { rerender } = render(<ManagedInspector {...props} issues={buildIssueIndex([finding])} />);
+      fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+      expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} issues={buildIssueIndex([])} />);
+      expect(screen.queryByRole('tab', { name: /Validation/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} issues={buildIssueIndex([finding])} />);
+      expect(screen.queryByRole('tab', { name: 'Details', selected: true })).not.toBeNull();
+      expect(screen.queryByText('RM_EVENT_NOT_PROJECTED')).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+      expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
     },
   );
 
