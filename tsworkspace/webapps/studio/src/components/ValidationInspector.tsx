@@ -38,7 +38,7 @@ export function ValidationInspector({
     <aside
       id={id}
       aria-label="Validation findings"
-      className="flex h-full min-h-0 w-80 max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card"
+      className="flex h-full min-h-0 w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card"
     >
       <div className="flex items-start justify-between gap-2 border-b border-border p-4">
         <div className="flex flex-col gap-1">

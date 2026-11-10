@@ -57,6 +57,7 @@ export function TopBar({
   /** Receives the history button so closing the drawer can return focus to it. */
   historyTriggerRef?: Ref<HTMLButtonElement>;
 }) {
+  const connectionLabel = { live: 'Connected', connecting: 'Connecting', offline: 'Disconnected' }[realtime.state];
   const historyButton = onOpenHistory ? (
     <Button ref={historyTriggerRef} variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
       <History />
@@ -101,12 +102,13 @@ export function TopBar({
             <output
               aria-label="Live updates"
               title={
-                realtime.detail ??
-                {
-                  live: 'Live updates connected',
-                  connecting: 'Connecting to live updates',
-                  offline: 'Live updates disconnected. Use Refresh to get the latest model.',
-                }[realtime.state]
+                realtime.detail
+                  ? `${connectionLabel}: ${realtime.detail}`
+                  : {
+                      live: 'Connected to live model updates.',
+                      connecting: 'Connecting to live model updates.',
+                      offline: 'Disconnected from live model updates. Use Refresh to get the latest model.',
+                    }[realtime.state]
               }
               className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
             >
@@ -121,8 +123,10 @@ export function TopBar({
                       : 'text-red-500',
                 )}
               />
-              {{ live: 'Connected', connecting: 'Connecting', offline: 'Disconnected' }[realtime.state]}
-              {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
+              <span className="sr-only">
+                {connectionLabel}
+                {realtime.detail ? `: ${realtime.detail}` : null}
+              </span>
             </output>
             {historyButton}
             {onSelectBranch ? (
