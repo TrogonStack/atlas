@@ -84,6 +84,32 @@ test('validation details stay reachable with an inspector on a narrow screen', a
   await expect(panel).not.toBeVisible();
 });
 
+test('the canvas toolbar leaves the validation drawer header unobstructed on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 844 });
+  await page.goto(modelPath);
+  await page.getByRole('button', { name: 'Validation findings', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Validation findings', exact: true });
+  const heading = panel.getByRole('heading', { name: 'Validation findings', exact: true });
+  const lastView = page.getByRole('tablist', { name: 'Model view' }).getByRole('tab').last();
+  for (const width of [480, 640]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(heading).toBeVisible();
+    await expect
+      .poll(() =>
+        heading.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+          return hit === element || element.contains(hit);
+        }),
+      )
+      .toBe(true);
+    await lastView.click();
+    await expect(lastView).toHaveAttribute('aria-selected', 'true');
+  }
+  await panel.getByRole('button', { name: 'Close validation findings' }).click();
+  await expect(panel).not.toBeVisible();
+});
+
 test('finding jumps reduce excessive zoom and recenter again after panning away', async ({ page }) => {
   await page.addInitScript((path) => {
     sessionStorage.setItem(`trogon-atlas-studio:viewport:${path}:board`, JSON.stringify({ x: 30, y: 40, zoom: 1.8 }));

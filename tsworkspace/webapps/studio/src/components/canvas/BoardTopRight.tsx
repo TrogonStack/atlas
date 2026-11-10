@@ -32,14 +32,14 @@ export function BoardTopRightHost({
       {/* The row itself lets pointer events through, so the canvas stays draggable between the two ends. */}
       <div
         data-testid="board-toolbar"
-        className="pointer-events-none absolute inset-x-2 top-2 z-10 flex items-start justify-between gap-2"
+        className="pointer-events-none absolute inset-x-2 top-2 z-10 flex flex-wrap items-start justify-between gap-2"
       >
-        <div className="pointer-events-auto shrink-0">{switcher}</div>
+        <div className="pointer-events-auto max-w-full shrink-0 overflow-x-auto">{switcher}</div>
         {/* Wraps under itself, right-aligned, once the controls outgrow the space left by the switcher. */}
         <div
           ref={setHost}
           data-testid="board-top-right"
-          className="pointer-events-auto flex min-w-0 flex-wrap items-start justify-end gap-2"
+          className="pointer-events-auto flex min-w-0 flex-1 flex-wrap items-start justify-end gap-2"
         >
           {/* Portaled controls append after this node, so the summary is ordered back to the corner. */}
           <div className="order-last">{corner}</div>
