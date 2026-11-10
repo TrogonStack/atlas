@@ -1,9 +1,12 @@
 import { useSyncExternalStore } from 'react';
+import { z } from 'zod';
 
-export interface StudioFeatureFlags {
-  readonly laneMesh: boolean;
-  readonly streamTowers: boolean;
-}
+const studioFeatureFlagsSchema = z.object({
+  laneMesh: z.boolean().catch(false),
+  streamTowers: z.boolean().catch(false),
+});
+
+export type StudioFeatureFlags = Readonly<z.infer<typeof studioFeatureFlagsSchema>>;
 
 export type StudioFeatureFlag = keyof StudioFeatureFlags;
 
@@ -17,9 +20,7 @@ let pendingChanges: Partial<StudioFeatureFlags> = {};
 function parseFlags(value: string | null): StudioFeatureFlags {
   try {
     const stored: unknown = JSON.parse(value ?? 'null');
-    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return DEFAULT_FLAGS;
-    const flags = stored as Record<string, unknown>;
-    return { laneMesh: flags.laneMesh === true, streamTowers: flags.streamTowers === true };
+    return studioFeatureFlagsSchema.parse(stored);
   } catch {
     return DEFAULT_FLAGS;
   }

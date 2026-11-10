@@ -42,10 +42,14 @@ describe('Studio feature flags', () => {
     },
   );
 
-  it('accepts only explicitly enabled known flags', () => {
-    window.localStorage.setItem(STORAGE_KEY, '{"laneMesh":true,"unknown":true}');
+  it.each([
+    ['{"laneMesh":true,"unknown":true}', { laneMesh: true, streamTowers: false }],
+    ['{"laneMesh":true,"streamTowers":"true"}', { laneMesh: true, streamTowers: false }],
+    ['{"laneMesh":1,"streamTowers":true}', { laneMesh: false, streamTowers: true }],
+  ] as const)('accepts only explicitly enabled known flags from %s', (stored, expected) => {
+    window.localStorage.setItem(STORAGE_KEY, stored);
     const { result } = renderHook(useStudioFeatureFlags);
-    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(result.current[0]).toEqual(expected);
   });
 
   it('keeps separate consumers synchronized and merges changes from a stale consumer', () => {
