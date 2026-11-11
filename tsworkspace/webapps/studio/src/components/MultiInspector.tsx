@@ -38,7 +38,7 @@ export function MultiInspector({
       ].join('\n\n---\n\n'),
     ].join('\n');
   return (
-    <aside className="flex h-full w-80 flex-col border-l border-border bg-card">
+    <aside className="flex h-full w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card">
       <div className="flex items-start gap-2 p-4">
         <div>
           <Badge variant="secondary">{total} selected</Badge>

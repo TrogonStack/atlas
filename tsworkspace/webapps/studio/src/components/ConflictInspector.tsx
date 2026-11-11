@@ -83,7 +83,7 @@ export function ConflictInspector({
   const selectedStatus = selected ? branchEntryStatus(selected.status) : undefined;
 
   return (
-    <aside className="flex h-full w-[28rem] flex-col border-l border-border bg-card">
+    <aside className="flex h-full w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card">
       <div className="flex items-start gap-2 p-4">
         <div>
           <div className="flex items-center gap-2">

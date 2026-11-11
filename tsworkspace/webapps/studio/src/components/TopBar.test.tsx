@@ -13,14 +13,14 @@ describe('TopBar', () => {
     expect(screen.getByRole('banner')).toBeDefined();
   });
 
-  it('shows "live" indicator when connected', () => {
+  it('shows "Connected" indicator when connected', () => {
     render(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} />);
-    expect(screen.getAllByText('live').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Connected').length).toBeGreaterThan(0);
   });
 
-  it('shows "offline" indicator when disconnected', () => {
+  it('shows "Disconnected" indicator when disconnected', () => {
     render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} />);
-    expect(screen.getAllByText('offline').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Disconnected').length).toBeGreaterThan(0);
   });
 
   it('keeps Refresh behind the actions menu and calls onRefresh from there', async () => {
@@ -72,9 +72,10 @@ describe('TopBar', () => {
     expect(screen.queryByRole('link', { name: /namespaces/i })).toBeNull();
   });
 
-  it('displays the schema version badge when info includes schemaVersion', () => {
-    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} info={{ schemaVersion: 'v2' }} />);
-    expect(screen.getByText('v2')).toBeDefined();
+  it('keeps schema version metadata out of the model header', () => {
+    const schemaVersion = 'trogonatlas.eventmodel.v1alpha1';
+    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} info={{ schemaVersion }} />);
+    expect(screen.queryByText(schemaVersion)).toBeNull();
   });
 
   it('displays the error message when error is provided', () => {

@@ -1,9 +1,7 @@
-import { SourceIntegrationReview } from '@/components/SourceIntegrationReview';
 import { DecisionDocumentInspector } from '@/components/DecisionDocumentInspector';
 import { DesignGraphInspector } from '@/components/DesignGraphInspector';
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataProductInspector } from '@/components/DataProductInspector';
 import { UiHostingDetails } from '@/components/UiHostingDetails';
 import { ChannelStorageDetails } from '@/components/ChannelStorageDetails';
@@ -479,7 +477,7 @@ const VALIDATION_TAB_PILL_STYLE: Record<Severity, string> = {
   info: 'bg-sky-100 text-sky-800',
 };
 
-export type InspectorTab = 'details' | 'validation' | 'history';
+export type InspectorTab = 'details' | 'scenarios' | 'validation' | 'history';
 
 export function Inspector({
   model,
@@ -511,8 +509,9 @@ export function Inspector({
 }) {
   const style = kindStyle(entity.kind);
   const ownIssues = useMemo(() => issues.for(entity), [issues, entity]);
+  const showValidation = ownIssues.length > 0 || Boolean(issues.error);
   const [uncontrolledTab, setUncontrolledTab] = useState<InspectorTab>('details');
-  const activeTab = tab ?? uncontrolledTab;
+  const requestedTab = tab ?? uncontrolledTab;
   // Base-ui's Tabs.Root always gets a concrete value: toggling it between
   // controlled and uncontrolled based on whether `tab` is passed would change
   // how base-ui resolves the initially active tab.
@@ -522,6 +521,18 @@ export function Inspector({
   };
   const ownSlice = useMemo(() => model.slices.find((s) => s.entity.key === entity.key), [model, entity]);
   const sliceScenarios = ownSlice?.scenarios ?? [];
+  const activeTab =
+    (requestedTab === 'scenarios' && sliceScenarios.length === 0) || (requestedTab === 'validation' && !showValidation)
+      ? 'details'
+      : requestedTab;
+  const previousActiveTab = useRef<InspectorTab>('details');
+  useEffect(() => {
+    if (activeTab !== requestedTab && previousActiveTab.current === requestedTab) {
+      setUncontrolledTab(activeTab);
+      onTabChange?.(activeTab);
+    }
+    previousActiveTab.current = activeTab;
+  }, [activeTab, requestedTab, onTabChange]);
   const memberships = useMemo(
     () =>
       model.slices.filter((s) => {
@@ -552,7 +563,7 @@ export function Inspector({
   );
 
   return (
-    <aside className="flex h-full w-80 flex-col border-l border-border bg-card">
+    <aside className="flex h-full w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card">
       <div className="flex items-start gap-2 p-4">
         <div>
           <div className="flex items-center gap-2">
@@ -601,31 +612,40 @@ export function Inspector({
         onValueChange={(value) => handleTabChange(value as InspectorTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList variant="underline" className="px-4">
+        <TabsList variant="underline" className="overflow-x-auto px-4">
           <TabsTab value="details">Details</TabsTab>
-          <TabsTab value="validation">
-            Validation
-            {/* "validation did not run" (error) and "validation found nothing" (no
+          {sliceScenarios.length > 0 ? <TabsTab value="scenarios">Scenarios ({sliceScenarios.length})</TabsTab> : null}
+          {showValidation ? (
+            <TabsTab value="validation">
+              Validation
+              {/* "validation did not run" (error) and "validation found nothing" (no
                 issues) are different states; the tab marker must not look the same
                 for both. */}
-            {issues.error ? (
-              // SVG has no `title` attribute of its own (unlike HTML elements); the
-              // wrapping span carries it so the native tooltip still shows on hover.
-              <span title="Validation unavailable">
-                <TriangleAlert aria-label="unavailable" className="h-3 w-3 text-amber-700" />
-              </span>
-            ) : ownIssues.length > 0 ? (
-              <span
-                className={`rounded-full px-1.5 text-[10px] font-semibold ${VALIDATION_TAB_PILL_STYLE[ownIssues[0].severity]}`}
-              >
-                {ownIssues.length}
-              </span>
-            ) : null}
-          </TabsTab>
+              {issues.error ? (
+                // SVG has no `title` attribute of its own (unlike HTML elements); the
+                // wrapping span carries it so the native tooltip still shows on hover.
+                <span title="Validation unavailable">
+                  <TriangleAlert aria-label="unavailable" className="h-3 w-3 text-amber-700" />
+                </span>
+              ) : ownIssues.length > 0 ? (
+                <span
+                  className={`rounded-full px-1.5 text-[10px] font-semibold ${VALIDATION_TAB_PILL_STYLE[ownIssues[0].severity]}`}
+                >
+                  {ownIssues.length}
+                </span>
+              ) : null}
+            </TabsTab>
+          ) : null}
           {/* A saved snapshot has no server to read history from. */}
           {activeSnapshot() ? null : <TabsTab value="history">History</TabsTab>}
         </TabsList>
         <TabsPanel value="details" className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
+          {entity.doc ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Doc</h3>
+              <p className="leading-relaxed text-foreground/90">{entity.doc}</p>
+            </section>
+          ) : null}
           {neighborsBackward.length > 0 || neighborsForward.length > 0 ? (
             <section>
               <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
@@ -635,12 +655,6 @@ export function Inspector({
                 <NeighborList title="Backward" arrow="back" items={neighborsBackward} onSelect={onSelect} />
                 <NeighborList title="Forward" arrow="fwd" items={neighborsForward} onSelect={onSelect} />
               </div>
-            </section>
-          ) : null}
-          {entity.doc ? (
-            <section>
-              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Doc</h3>
-              <p className="leading-relaxed text-foreground/90">{entity.doc}</p>
             </section>
           ) : null}
           {entity.role ? (
@@ -667,10 +681,10 @@ export function Inspector({
               </p>
             </section>
           ) : null}
-          <ResponsibilityInspector entity={entity} asOf={asOf} />
-          <DecisionDocumentInspector entity={entity} asOf={asOf} />
+          {entity.kind === 'decision' || entity.kind === 'document' ? (
+            <DecisionDocumentInspector entity={entity} asOf={asOf} />
+          ) : null}
           <DesignGraphInspector entity={entity} asOf={asOf} />
-          <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
           <SchemaBusinessDetails entity={entity} model={model} />
@@ -1216,18 +1230,6 @@ export function Inspector({
               </div>
             </section>
           ) : null}
-          {sliceScenarios.length > 0 ? (
-            <section>
-              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-                Scenarios ({sliceScenarios.length})
-              </h3>
-              <div className="space-y-1.5">
-                {sliceScenarios.map((s, i) => (
-                  <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
-                ))}
-              </div>
-            </section>
-          ) : null}
           {entity.fields.length > 0 ? (
             <section>
               <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
@@ -1281,9 +1283,16 @@ export function Inspector({
             </section>
           ) : null}
         </TabsPanel>
-        <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
-          <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />
+        <TabsPanel value="scenarios" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-4 text-sm">
+          {sliceScenarios.map((s, i) => (
+            <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
+          ))}
         </TabsPanel>
+        {showValidation ? (
+          <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
+            <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />
+          </TabsPanel>
+        ) : null}
         <TabsPanel value="history" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
           <EntityHistory key={entity.key} entity={entity} />
         </TabsPanel>

@@ -5,6 +5,7 @@
 // realistic wire fixtures built through buildModel, following the fixture
 // idiom in src/lib/model.test.ts (commandSliceFixture-style wire arrays).
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { type ComponentProps, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/CopyContextButton', () => ({
@@ -15,10 +16,10 @@ vi.mock('@/lib/useEntityHomes', () => ({
   useEntityHomes: () => ({ homes: new Map(), error: undefined, retry: vi.fn() }),
 }));
 
-import type { WireEntityEnvelope } from '@/lib/api';
+import * as api from '@/lib/api';
 import { buildIssueIndex } from '@/lib/issues';
 import { buildModel, type Entity } from '@/lib/model';
-import { Inspector } from './Inspector';
+import { Inspector, type InspectorTab } from './Inspector';
 
 const mkId = (ns: string, slug: string) => ({ namespace: ns, slug, version: '1' });
 
@@ -27,7 +28,7 @@ function mustFind(e: Entity | undefined): Entity {
   return e;
 }
 
-function commandSliceFixture(): WireEntityEnvelope[] {
+function commandSliceFixture(withScenarios = true): api.WireEntityEnvelope[] {
   const ns = 'orders';
   return [
     { ui: { id: mkId(ns, 'cart'), title: 'Cart' } },
@@ -41,15 +42,17 @@ function commandSliceFixture(): WireEntityEnvelope[] {
         ui: { ui: { id: mkId(ns, 'cart') } },
         command: { command: { id: mkId(ns, 'place') } },
         emittedEvents: [{ event: { id: mkId(ns, 'placed') } }, { event: { id: mkId(ns, 'rejected') } }],
-        scenarios: [
-          {
-            id: 'happy-path',
-            title: 'Order placed successfully',
-            given: [{ id: mkId(ns, 'cart'), data: { items: 2 } }],
-            when: [{ id: mkId(ns, 'place'), data: { total: 42 } }],
-            thenEmits: [{ id: mkId(ns, 'placed'), data: { orderId: 'o-1' } }],
-          },
-        ],
+        scenarios: withScenarios
+          ? [
+              {
+                id: 'happy-path',
+                title: 'Order placed successfully',
+                given: [{ event: { id: mkId(ns, 'rejected') }, payload: { reason: 'retry' } }],
+                when: { command: { id: mkId(ns, 'place') }, payload: { total: 42 } },
+                emit: { events: [{ event: { id: mkId(ns, 'placed') }, payload: { orderId: 'o-1' } }] },
+              },
+            ]
+          : [],
       },
     },
   ] as never;
@@ -57,6 +60,20 @@ function commandSliceFixture(): WireEntityEnvelope[] {
 
 function baseModel() {
   return buildModel(commandSliceFixture());
+}
+
+function ManagedInspector({
+  mode,
+  ...props
+}: Omit<ComponentProps<typeof Inspector>, 'tab' | 'onTabChange'> & { mode: 'controlled' | 'uncontrolled' }) {
+  const [tab, setTab] = useState<InspectorTab>('details');
+  return (
+    <Inspector
+      {...props}
+      tab={mode === 'controlled' ? tab : undefined}
+      onTabChange={mode === 'controlled' ? setTab : undefined}
+    />
+  );
 }
 
 describe('Inspector', () => {
@@ -72,6 +89,35 @@ describe('Inspector', () => {
     expect(screen.getByText('Order placed')).toBeDefined();
     expect(screen.getByText('orders/placed')).toBeDefined();
   });
+
+  it.each([undefined, '11111111-1111-4111-8111-111111111111'] as const)(
+    'keeps responsibility controls and lookups out of entity Details at %s',
+    (asOf) => {
+      const queries = [
+        vi.spyOn(api, 'listSubjectAssignments'),
+        vi.spyOn(api, 'listAssigneeResponsibilities'),
+        vi.spyOn(api, 'listTeamMembers'),
+        vi.spyOn(api, 'listPersonTeams'),
+        vi.spyOn(api, 'getTeamContacts'),
+      ];
+      const model = buildModel([
+        {
+          team: {
+            id: mkId('catalog', 'team'),
+            title: 'Catalog team',
+            contacts: [{ email: { value: 'team@example.test' } }],
+          },
+        },
+      ] as never);
+      const team = mustFind(model.entities[0]);
+      render(<Inspector entity={team} model={model} asOf={asOf} onClose={vi.fn()} onSelect={vi.fn()} />);
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+      expect(screen.queryByRole('heading', { name: 'Responsibilities' })).toBeNull();
+      expect(screen.queryByLabelText('Assignment role')).toBeNull();
+      expect(screen.queryByText(/Historical responsibility lookups are unavailable/)).toBeNull();
+      for (const query of queries) expect(query).not.toHaveBeenCalled();
+    },
+  );
 
   it('renders descriptive storage resource details without an execution timeline', () => {
     const model = buildModel([
@@ -95,11 +141,15 @@ describe('Inspector', () => {
     expect(screen.queryByText('Timeline')).toBeNull();
   });
 
-  it('renders the doc section when doc is present', () => {
+  it('renders the doc section first when doc is present', () => {
     const model = baseModel();
     const event = mustFind(model.entities.find((e) => e.id.slug === 'placed'));
     render(<Inspector model={model} entity={event} onClose={vi.fn()} onSelect={vi.fn()} />);
     expect(screen.getByText('The order was placed.')).toBeDefined();
+    const details = screen.getByRole('tabpanel', { name: 'Details' });
+    const headings = within(details).getAllByRole('heading');
+    expect(headings[0]?.textContent).toBe('Doc');
+    expect(headings[1]?.textContent).toBe('Timeline');
   });
 
   it('renders the timeline with forward and backward neighbors', () => {
@@ -118,12 +168,35 @@ describe('Inspector', () => {
     expect(screen.getByText('uid-123')).toBeDefined();
   });
 
-  it('renders the scenarios section for a slice-scoped entity', () => {
+  it('shows slice scenarios in the second tab after Details', () => {
+    const decisions = vi.spyOn(api, 'listSubjectDecisions');
+    const documents = vi.spyOn(api, 'listSubjectDocuments');
+    const sourceReview = vi.spyOn(api, 'inspectSource');
     const model = baseModel();
     const slice = mustFind(model.slices[0]?.entity);
-    render(<Inspector model={model} entity={slice} onClose={vi.fn()} onSelect={vi.fn()} />);
-    expect(screen.getByText('Scenarios (1)')).toBeDefined();
+    const { rerender } = render(<Inspector model={model} entity={slice} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Details', 'Scenarios (1)', 'History']);
+    expect(screen.getByRole('tab', { name: 'Details' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('heading', { name: 'Decision and Document inspection' })).toBeNull();
+    expect(screen.queryByLabelText('Exact catalog subject')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Source integration review' })).toBeNull();
+    expect(screen.queryByLabelText('Review records')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Inspect backend records' })).toBeNull();
+    expect(decisions).not.toHaveBeenCalled();
+    expect(documents).not.toHaveBeenCalled();
+    expect(sourceReview).not.toHaveBeenCalled();
+    expect(screen.queryByText('Order placed successfully')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
     expect(screen.getByText('Order placed successfully')).toBeDefined();
+
+    const event = mustFind(model.entities.find((entity) => entity.id.slug === 'placed'));
+    rerender(<Inspector model={model} entity={event} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.queryByRole('tab', { name: /Scenarios/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Details' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByText('Order placed successfully')).toBeNull();
+    expect(decisions).not.toHaveBeenCalled();
+    expect(documents).not.toHaveBeenCalled();
+    expect(sourceReview).not.toHaveBeenCalled();
   });
 
   it('shows "given nothing" when a command-slice scenario declares no preconditions', () => {
@@ -135,9 +208,32 @@ describe('Inspector', () => {
     const model = buildModel(wire);
     const entity = mustFind(model.slices[0]?.entity);
     render(<Inspector model={model} entity={entity} onClose={vi.fn()} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
     expect(screen.getByText('Given')).toBeDefined();
     expect(screen.getByText('nothing')).toBeDefined();
   });
+
+  it.each(['controlled', 'uncontrolled'] as const)(
+    'keeps Details selected when scenarios disappear and return in %s usage',
+    (mode) => {
+      const model = baseModel();
+      const emptyModel = buildModel(commandSliceFixture(false));
+      const props = { mode, model, entity: mustFind(model.slices[0]?.entity), onClose: vi.fn(), onSelect: vi.fn() };
+      const { rerender } = render(<ManagedInspector {...props} />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
+      expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} model={emptyModel} entity={mustFind(emptyModel.slices[0]?.entity)} />);
+      expect(screen.queryByRole('tab', { name: /Scenarios/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} />);
+      expect(screen.queryByRole('tab', { name: 'Details', selected: true })).not.toBeNull();
+      expect(screen.queryByText('Order placed successfully')).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
+      expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
+    },
+  );
 
   it('omits the Given section for a read model slice, whose inputs are the When', () => {
     const ns = 'orders';
@@ -150,13 +246,23 @@ describe('Inspector', () => {
           title: 'feed projects',
           readModel: { readModel: { id: mkId(ns, 'orders-feed') } },
           sourceEvents: [{ event: { id: mkId(ns, 'placed') } }],
-          scenarios: [{ id: 'projects', title: 'Feed projects', when: [{ id: mkId(ns, 'placed') }] }],
+          scenarios: [
+            {
+              id: 'projects',
+              title: 'Feed projects',
+              when: [{ event: { id: mkId(ns, 'placed') } }],
+              // oxlint-disable-next-line unicorn/no-thenable -- ReadModelScenario names its protobuf outcome "then".
+              then: { readModel: { id: mkId(ns, 'orders-feed') } },
+            },
+          ],
         },
       },
     ] as never);
     const entity = mustFind(model.slices[0]?.entity);
     render(<Inspector model={model} entity={entity} onClose={vi.fn()} onSelect={vi.fn()} />);
-    expect(screen.getByText('Scenarios (1)')).toBeDefined();
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
+    expect(screen.getByText('Feed projects')).toBeDefined();
+    expect(screen.getByText('When')).toBeDefined();
     expect(screen.queryByText('Given')).toBeNull();
   });
 
@@ -495,14 +601,58 @@ describe('Inspector: validation findings', () => {
     expect(screen.getByText(/no in-model read-model slice projects it/)).toBeDefined();
   });
 
-  it('shows the empty-state message when the entity has no findings', () => {
-    const model = rmModel();
-    const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
-    render(<Inspector model={model} entity={rm} issues={buildIssueIndex([])} onClose={vi.fn()} onSelect={vi.fn()} />);
-    // No pill/icon: the Validation tab's accessible name stays plain "Validation".
-    fireEvent.click(screen.getByRole('tab', { name: 'Validation' }));
-    expect(screen.getByText('No validation findings for this entity.')).toBeDefined();
-  });
+  it.each(['controlled', 'uncontrolled'] as const)(
+    'hides empty validation and returns to Details in %s usage',
+    (mode) => {
+      const model = rmModel();
+      const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+      const props = {
+        model,
+        entity: rm,
+        tab: mode === 'controlled' ? ('validation' as const) : undefined,
+        onClose: vi.fn(),
+        onSelect: vi.fn(),
+      };
+      const { rerender } = render(<Inspector {...props} issues={buildIssueIndex([])} />);
+      expect(screen.queryByRole('tab', { name: /Validation/ })).toBeNull();
+      expect(screen.queryByRole('tabpanel', { name: /Validation/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+
+      rerender(<Inspector {...props} issues={buildIssueIndex([finding])} />);
+      if (mode === 'uncontrolled') fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+      expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
+      expect(screen.getByText('RM_EVENT_NOT_PROJECTED')).toBeDefined();
+
+      rerender(<Inspector {...props} issues={buildIssueIndex([])} />);
+      expect(screen.queryByRole('tab', { name: /Validation/ })).toBeNull();
+      expect(screen.queryByRole('tabpanel', { name: /Validation/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+      expect(screen.getByText('Everything waiting for someone to look at it.')).toBeDefined();
+      expect(screen.queryByText('RM_EVENT_NOT_PROJECTED')).toBeNull();
+    },
+  );
+
+  it.each(['controlled', 'uncontrolled'] as const)(
+    'keeps Details selected when validation findings disappear and return in %s usage',
+    (mode) => {
+      const model = rmModel();
+      const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+      const props = { mode, model, entity: rm, onClose: vi.fn(), onSelect: vi.fn() };
+      const { rerender } = render(<ManagedInspector {...props} issues={buildIssueIndex([finding])} />);
+      fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+      expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} issues={buildIssueIndex([])} />);
+      expect(screen.queryByRole('tab', { name: /Validation/ })).toBeNull();
+      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+
+      rerender(<ManagedInspector {...props} issues={buildIssueIndex([finding])} />);
+      expect(screen.queryByRole('tab', { name: 'Details', selected: true })).not.toBeNull();
+      expect(screen.queryByText('RM_EVENT_NOT_PROJECTED')).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+      expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
+    },
+  );
 
   it('marks the Validation tab and panel when validation did not run, instead of rendering the clean-model silence', () => {
     const model = rmModel();
