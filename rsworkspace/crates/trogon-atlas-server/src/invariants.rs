@@ -386,10 +386,17 @@ pub(crate) fn merge_hygiene(
         return (issues, false);
     }
     let baseline = validation::validate_store_hygiene(pre);
-    let mut budget = LineageBudget::new(baseline.iter().filter(|i| i.severity == error));
+    // Every stored version of an entity reports the same finding, so a set,
+    // not a count, keeps a successor version of a broken entity from looking
+    // like a second error.
+    let known: HashSet<Lineage> = baseline
+        .iter()
+        .filter(|i| i.severity == error)
+        .map(Lineage::of)
+        .collect();
     let mut new_error = false;
     for issue in issues.iter_mut().filter(|i| i.severity == error) {
-        if budget.take(issue) {
+        if known.contains(&Lineage::of(issue)) {
             issue.severity = pb::validation_issue::Severity::Info as i32;
             issue
                 .message

@@ -2035,6 +2035,51 @@ async fn merge_branch_refuses_new_errors_when_old_errors_exist() {
     }
 }
 
+/// A branch that only writes the next version of an entity whose error
+/// predates the merge adds no new error, even though both versions stay
+/// stored.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_ignores_a_successor_version_of_a_preexisting_error() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    c.create_branch(pb::CreateBranchRequest {
+        name: "legacy-touch".into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    let mut successor = dangling_term("acme-legacy", "old-ghost");
+    if let Some(pb::entity::Kind::Term(t)) = successor.kind.as_mut() {
+        t.id = Some(id("acme-legacy", "old-ghost", 2));
+        t.supersedes = Some(id("acme-legacy", "old-ghost", 1));
+    }
+    c.put_entity(with_branch(put_req(successor, true), "legacy-touch"))
+        .await
+        .unwrap();
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("legacy-touch", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        let expected = if dry_run {
+            pb::merge_branch_response::Status::Validated
+        } else {
+            pb::merge_branch_response::Status::Applied
+        };
+        assert_eq!(resp.status, expected as i32, "dry_run={dry_run}");
+        assert!(
+            resp.validation
+                .iter()
+                .filter(|i| i.code == "TERM_DANGLING_ENTITY")
+                .all(|i| i.severity == pb::validation_issue::Severity::Info as i32),
+            "dry_run={dry_run}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_branch_invalid_via_dangling_reference() {
     let endpoint = start_server().await;
