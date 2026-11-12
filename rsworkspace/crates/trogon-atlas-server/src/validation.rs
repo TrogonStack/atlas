@@ -8562,6 +8562,15 @@ mod boundary_tests {
         assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0); // declared seam: legal, silent
     }
 
+    fn assert_seam_is_silent(issues: &[pb::ValidationIssue]) {
+        assert_eq!(count(issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
+        assert_eq!(
+            count(issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            0,
+            "{issues:?}"
+        );
+    }
+
     fn bc_with(ns: &str, f: impl FnOnce(&mut pb::BoundedContext)) -> pb::Entity {
         let mut bc = pb::BoundedContext {
             id: Some(id(ns, ns)),
@@ -8603,12 +8612,7 @@ mod boundary_tests {
             &model_with_bc("acme-orders"),
             &[stored(bc), stored(subdomain)],
         );
-        assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
-        assert_eq!(
-            count(&issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
-            0,
-            "{issues:?}"
-        );
+        assert_seam_is_silent(&issues);
     }
 
     #[test]
@@ -8623,12 +8627,7 @@ mod boundary_tests {
         });
         let up = bc_with("acme-orders", |_| {});
         let issues = validate_model(&model_with_bc("acme-billing"), &[stored(down), stored(up)]);
-        assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
-        assert_eq!(
-            count(&issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
-            0,
-            "{issues:?}"
-        );
+        assert_seam_is_silent(&issues);
     }
 
     #[test]
