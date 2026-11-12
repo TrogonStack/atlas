@@ -401,6 +401,832 @@ pub struct GetArtifactContentResponse {
     pub artifact: ::core::option::Option<Artifact>,
     #[prost(bytes="vec", tag="2")]
     pub content: ::prost::alloc::vec::Vec<u8>,
+}
+// ---------- Validation -------------------------------------------------------
+//
+// Validation checks the model against the rules this schema cannot express
+// structurally: dangling references, edge-rule violations (the six allowed
+// edges + cardinality), supersession chains pointing at non-existent
+// versions, traces that violate data completeness, etc.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidationIssue {
+    #[prost(enumeration="validation_issue::Severity", tag="1")]
+    pub severity: i32,
+    /// stable machine code, e.g. "DANGLING_REF"
+    #[prost(string, tag="2")]
+    pub code: ::prost::alloc::string::String,
+    /// human-readable explanation
+    #[prost(string, tag="3")]
+    pub message: ::prost::alloc::string::String,
+    /// entity the issue is attached to (optional)
+    #[prost(message, optional, tag="4")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// structural path inside the entity (optional)
+    #[prost(string, tag="5")]
+    pub subject_field: ::prost::alloc::string::String,
+    /// Inline rule context -- denormalized from the static ValidationRule
+    /// catalog at issue-emit time so consumers can render a finding
+    /// (title, category, default_severity) without a second RPC to
+    /// ListValidationRules. Empty when the validator can't resolve the
+    /// catalog entry (which should never happen -- the drift test guards
+    /// against orphan codes).
+    #[prost(string, tag="6")]
+    pub rule_title: ::prost::alloc::string::String,
+    #[prost(string, tag="7")]
+    pub rule_category: ::prost::alloc::string::String,
+    #[prost(enumeration="validation_issue::Severity", tag="8")]
+    pub rule_default_severity: i32,
+    /// The causes behind this finding, in canonical order so the list is a
+    /// stable part of finding identity (code, subject, subject_field,
+    /// evidence). Empty for rules that still explain their causes only in
+    /// `message`; ValidationRule.evidence_roles says which rules carry it.
+    #[prost(message, repeated, tag="9")]
+    pub evidence: ::prost::alloc::vec::Vec<ValidationEvidence>,
+}
+/// Nested message and enum types in `ValidationIssue`.
+pub mod validation_issue {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Severity {
+        Unspecified = 0,
+        Info = 1,
+        Warning = 2,
+        Error = 3,
+    }
+    impl Severity {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SEVERITY_UNSPECIFIED",
+                Self::Info => "SEVERITY_INFO",
+                Self::Warning => "SEVERITY_WARNING",
+                Self::Error => "SEVERITY_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+                "SEVERITY_INFO" => Some(Self::Info),
+                "SEVERITY_WARNING" => Some(Self::Warning),
+                "SEVERITY_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+/// One cause of a finding, typed so clients never parse `message`. Every
+/// reference names an exact version. Evidence only names entities the
+/// validator read from the caller's visible snapshot, or references those
+/// entities carry.
+///
+/// Canonical order: role, then entity, field, target and occurrence, each
+/// compared by kind, namespace, slug, version, then storyboard position.
+/// `detail` is presentation only and is not part of finding identity.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationEvidence {
+    #[prost(enumeration="validation_evidence::Role", tag="1")]
+    pub role: i32,
+    /// Entity holding the cause.
+    #[prost(message, optional, tag="2")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Structural path inside `entity`, with list indexes (for example
+    /// `emitted_events\[2\]`). Empty when the entity itself is the cause.
+    #[prost(string, tag="3")]
+    pub field: ::prost::alloc::string::String,
+    /// What `entity.field` references, at the exact version it pins.
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Where the cause sits in a storyboard. Set for storyboard-order rules
+    /// so repeated occurrences of one slice stay distinguishable.
+    #[prost(message, optional, tag="5")]
+    pub occurrence: ::core::option::Option<StoryboardOccurrence>,
+    /// Human note for this cause. Presentation only.
+    #[prost(string, tag="6")]
+    pub detail: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `ValidationEvidence`.
+pub mod validation_evidence {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Role {
+        Unspecified = 0,
+        /// `entity.field` wires `target` (a UI or processor) as an issuer of the
+        /// subject command.
+        Issuer = 1,
+        /// `entity.field` names `target` as a command that emits the subject
+        /// event.
+        Emitter = 2,
+        /// `entity.field` pins `target`, an older version than the latest
+        /// loaded.
+        StalePin = 3,
+        /// `entity` is the latest loaded version of a stale pin's target.
+        LatestVersion = 4,
+        /// `entity.field` consumes `target` at `occurrence`.
+        Consumer = 5,
+        /// `entity.field` emits `target`, but only after the consuming
+        /// occurrence in the same storyboard.
+        LaterEmitter = 6,
+        /// `entity.field` emits `target` at the nearest occurrence before the
+        /// consumer.
+        EarlierEmitter = 7,
+        /// `entity` is an action slice placed between an emitter and its
+        /// projection.
+        InterveningAction = 8,
+    }
+    impl Role {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ROLE_UNSPECIFIED",
+                Self::Issuer => "ROLE_ISSUER",
+                Self::Emitter => "ROLE_EMITTER",
+                Self::StalePin => "ROLE_STALE_PIN",
+                Self::LatestVersion => "ROLE_LATEST_VERSION",
+                Self::Consumer => "ROLE_CONSUMER",
+                Self::LaterEmitter => "ROLE_LATER_EMITTER",
+                Self::EarlierEmitter => "ROLE_EARLIER_EMITTER",
+                Self::InterveningAction => "ROLE_INTERVENING_ACTION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ROLE_ISSUER" => Some(Self::Issuer),
+                "ROLE_EMITTER" => Some(Self::Emitter),
+                "ROLE_STALE_PIN" => Some(Self::StalePin),
+                "ROLE_LATEST_VERSION" => Some(Self::LatestVersion),
+                "ROLE_CONSUMER" => Some(Self::Consumer),
+                "ROLE_LATER_EMITTER" => Some(Self::LaterEmitter),
+                "ROLE_EARLIER_EMITTER" => Some(Self::EarlierEmitter),
+                "ROLE_INTERVENING_ACTION" => Some(Self::InterveningAction),
+                _ => None,
+            }
+        }
+    }
+}
+/// One placement of a slice in a storyboard.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoryboardOccurrence {
+    #[prost(message, optional, tag="1")]
+    pub storyboard: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    /// Zero-based index into Storyboard.slices.
+    #[prost(uint32, tag="2")]
+    pub position: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateEventModelRequest {
+    /// Either validate an in-memory model (supplied here) or validate a stored
+    /// one by Id. Exactly one of the two should be set.
+    #[prost(message, optional, tag="1")]
+    pub event_model: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventModel>,
+    #[prost(message, optional, tag="2")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateEventModelResponse {
+    #[prost(message, repeated, tag="1")]
+    pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    /// Absent or empty coverage must not be treated as "everything was checked".
+    #[prost(message, optional, tag="2")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
+}
+/// Static description of a single validation rule. Surfaces the catalog
+/// the validator dispatches on: stable machine `code`, canonical
+/// `default_severity`, and the "why" explanation lifted from the source
+/// comment that documents the rule. Consumers (Studio UI, MCP agents,
+/// CI tooling) use this to render legends, link findings to docs, and
+/// gate releases on specific severity classes without having to
+/// reverse-engineer the validator.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationRule {
+    /// e.g. "EVENT_UNOBSERVED"
+    #[prost(string, tag="1")]
+    pub code: ::prost::alloc::string::String,
+    /// canonical severity for the base case
+    #[prost(enumeration="validation_issue::Severity", tag="2")]
+    pub default_severity: i32,
+    /// short human label
+    #[prost(string, tag="3")]
+    pub title: ::prost::alloc::string::String,
+    /// the "why" -- what the rule asserts and how to fix it
+    #[prost(string, tag="4")]
+    pub doc: ::prost::alloc::string::String,
+    /// primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="5")]
+    pub subject_kind: i32,
+    /// structural path inside the entity (or empty)
+    #[prost(string, tag="6")]
+    pub subject_field: ::prost::alloc::string::String,
+    /// grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
+    #[prost(string, tag="7")]
+    pub category: ::prost::alloc::string::String,
+    /// Evidence roles this rule's findings carry. Empty means the rule
+    /// explains its causes only in the finding message.
+    #[prost(enumeration="validation_evidence::Role", repeated, tag="8")]
+    pub evidence_roles: ::prost::alloc::vec::Vec<i32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListValidationRulesRequest {
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListValidationRulesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub rules: ::prost::alloc::vec::Vec<ValidationRule>,
+}
+/// Validate every EventModel in a project, a domain or a namespace in one
+/// pass, instead of N round trips through ValidateEventModel. The
+/// validator already has the full entity store in memory per call;
+/// looping per-model is pure waste.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidateProjectRequest {
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
+    #[prost(oneof="validate_project_request::Scope", tags="1, 2, 3")]
+    pub scope: ::core::option::Option<validate_project_request::Scope>,
+}
+/// Nested message and enum types in `ValidateProjectRequest`.
+pub mod validate_project_request {
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Scope {
+        #[prost(message, tag="1")]
+        ProjectId(super::super::super::super::r#type::v1alpha1::Id),
+        #[prost(message, tag="2")]
+        DomainId(super::super::super::super::r#type::v1alpha1::Id),
+        /// Every EventModel whose id carries this namespace, whether or not a
+        /// Domain claims it.
+        #[prost(string, tag="3")]
+        Namespace(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateProjectResponse {
+    #[prost(message, repeated, tag="1")]
+    pub reports: ::prost::alloc::vec::Vec<validate_project_response::ModelReport>,
+    /// Aggregate counts across all reports -- quick "is the project healthy"
+    /// glance without summing on the client.
+    #[prost(int32, tag="2")]
+    pub total_errors: i32,
+    #[prost(int32, tag="3")]
+    pub total_warnings: i32,
+    #[prost(int32, tag="4")]
+    pub total_info: i32,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    #[prost(message, optional, tag="5")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
+}
+/// Nested message and enum types in `ValidateProjectResponse`.
+pub mod validate_project_response {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ModelReport {
+        #[prost(message, optional, tag="1")]
+        pub event_model_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::Id>,
+        #[prost(message, repeated, tag="2")]
+        pub issues: ::prost::alloc::vec::Vec<super::ValidationIssue>,
+    }
+}
+// ---------- Coverage ---------------------------------------------------------
+//
+// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
+// checked. A completed suite can still emit Errors; a skipped suite must
+// never be read as a pass. See docs/explanation/validation-coverage.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationCheckResult {
+    /// Stable suite id: "model", "strategic", "store_hygiene", "architecture",
+    /// "scenarios", "request_shape".
+    #[prost(string, tag="1")]
+    pub check_id: ::prost::alloc::string::String,
+    #[prost(enumeration="validation_check_result::State", tag="2")]
+    pub state: i32,
+    /// Why skipped / partial / error. Empty when completed without caveat.
+    #[prost(string, tag="3")]
+    pub reason: ::prost::alloc::string::String,
+    /// Subjects examined when meaningful (models, namespaces, …). Zero is a
+    /// valid completed empty scan and must not be rewritten by clients.
+    #[prost(int32, tag="4")]
+    pub subjects_examined: i32,
+}
+/// Nested message and enum types in `ValidationCheckResult`.
+pub mod validation_check_result {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// Suite finished for the declared scope. Findings may still be Errors.
+        Completed = 1,
+        /// Suite was not applicable on this route or for this request shape.
+        Skipped = 2,
+        /// Suite ran but could not cover the full declared scope (for example a
+        /// truncated snapshot). Do not treat an empty issue list as complete.
+        Partial = 3,
+        /// Suite failed to execute. Distinct from finding Errors inside a
+        /// completed suite.
+        Error = 4,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Completed => "STATE_COMPLETED",
+                Self::Skipped => "STATE_SKIPPED",
+                Self::Partial => "STATE_PARTIAL",
+                Self::Error => "STATE_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATE_COMPLETED" => Some(Self::Completed),
+                "STATE_SKIPPED" => Some(Self::Skipped),
+                "STATE_PARTIAL" => Some(Self::Partial),
+                "STATE_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationScope {
+    /// Empty means baseline (no branch header).
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Effective project/domain/namespace/model when the route has one.
+    #[prost(message, optional, tag="2")]
+    pub project_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="3")]
+    pub domain_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="4")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidationCoverage {
+    #[prost(message, repeated, tag="1")]
+    pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
+    /// What store-wide suites actually examined. For ValidateProject this is the
+    /// full visible snapshot under the branch (namespace / project / domain
+    /// empty): hygiene and architecture are not narrowed to the request filter.
+    /// Model and strategic suite subject counts still follow the request.
+    #[prost(message, optional, tag="2")]
+    pub effective_scope: ::core::option::Option<ValidationScope>,
+    /// True when the entity snapshot hit the configured cap. Shared with the
+    /// truncation package; an empty issue list on a truncated snapshot is not
+    /// a clean bill of health.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
+    /// What the caller asked to validate (project / domain / namespace / model).
+    /// May be narrower than `effective_scope` for store-wide checks.
+    #[prost(message, optional, tag="4")]
+    pub requested_scope: ::core::option::Option<ValidationScope>,
+}
+// ---------- Invariant check --------------------------------------------------
+//
+// What every invariant declared in the write's scope said about the world the
+// write would produce. Evaluated against a snapshot before the write takes the
+// mutation lock; the write then applies only if nothing in its scope was
+// written since that snapshot was read, and is refused as stale otherwise.
+// See docs/explanation/invariant-gates.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvariantCheck {
+    /// One per invariant declared in scope, in carrier then name order.
+    #[prost(message, repeated, tag="1")]
+    pub outcomes: ::prost::alloc::vec::Vec<InvariantOutcome>,
+    /// Snapshot the verdict was computed against, as GetSnapshotId reports it.
+    /// Empty when the snapshot has no content identity.
+    #[prost(string, tag="2")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    /// The carriers and the entities the write touches, each with the etag it
+    /// had in that snapshot. An empty etag records that the entity was absent.
+    #[prost(message, repeated, tag="3")]
+    pub inputs: ::prost::alloc::vec::Vec<InvariantInput>,
+    /// True when no outcome is STATUS_UNEVALUABLE, none is redacted, and
+    /// snapshot_id is set.
+    #[prost(bool, tag="4")]
+    pub complete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvariantOutcome {
+    /// The EventModel declaring the invariant. Unset when `redacted`.
+    #[prost(message, optional, tag="1")]
+    pub carrier: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Unset when `redacted`.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(enumeration="invariant_outcome::Status", tag="3")]
+    pub status: i32,
+    /// Forbidden findings the write introduces. Set only for STATUS_VIOLATED.
+    #[prost(message, repeated, tag="4")]
+    pub violations: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// Why the invariant could not be evaluated. Set only for
+    /// STATUS_UNEVALUABLE.
+    #[prost(enumeration="invariant_outcome::Reason", tag="5")]
+    pub reason: i32,
+    /// Members of the carrier the world lacks. Set only for
+    /// REASON_MISSING_INPUTS.
+    #[prost(message, repeated, tag="6")]
+    pub missing: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// True when the declaration lets an unevaluable outcome through.
+    #[prost(bool, tag="7")]
+    pub advisory: bool,
+    /// Forbidden findings present both before and after the write.
+    #[prost(message, repeated, tag="8")]
+    pub preexisting: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// True when the carrier lives in a namespace the caller may not read:
+    /// the status is kept and every identifying field is cleared.
+    #[prost(bool, tag="9")]
+    pub redacted: bool,
+}
+/// Nested message and enum types in `InvariantOutcome`.
+pub mod invariant_outcome {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Status {
+        Unspecified = 0,
+        /// No forbidden finding after the write.
+        Holds = 1,
+        /// The write introduces a forbidden finding. Refuses the write.
+        Violated = 2,
+        /// The verdict cannot be trusted; see `reason`. Refuses the write unless
+        /// `advisory` is set.
+        Unevaluable = 3,
+        /// Forbidden findings exist, but every one was already there before the
+        /// write. Does not refuse the write.
+        AlreadyViolated = 4,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Holds => "STATUS_HOLDS",
+                Self::Violated => "STATUS_VIOLATED",
+                Self::Unevaluable => "STATUS_UNEVALUABLE",
+                Self::AlreadyViolated => "STATUS_ALREADY_VIOLATED",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATUS_HOLDS" => Some(Self::Holds),
+                "STATUS_VIOLATED" => Some(Self::Violated),
+                "STATUS_UNEVALUABLE" => Some(Self::Unevaluable),
+                "STATUS_ALREADY_VIOLATED" => Some(Self::AlreadyViolated),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// A member of the carrier is missing from the world the write produces.
+        MissingInputs = 1,
+        /// The snapshot hit the entity cap, so absence proves nothing.
+        SnapshotTruncated = 2,
+        /// The scope declares more invariants than one evaluation may check.
+        BudgetExhausted = 3,
+        /// The declaration cannot be decoded or forbids nothing.
+        MalformedDeclaration = 4,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::MissingInputs => "REASON_MISSING_INPUTS",
+                Self::SnapshotTruncated => "REASON_SNAPSHOT_TRUNCATED",
+                Self::BudgetExhausted => "REASON_BUDGET_EXHAUSTED",
+                Self::MalformedDeclaration => "REASON_MALFORMED_DECLARATION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_MISSING_INPUTS" => Some(Self::MissingInputs),
+                "REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+                "REASON_BUDGET_EXHAUSTED" => Some(Self::BudgetExhausted),
+                "REASON_MALFORMED_DECLARATION" => Some(Self::MalformedDeclaration),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InvariantInput {
+    #[prost(message, optional, tag="1")]
+    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+}
+// ---------- Consequence delta ------------------------------------------------
+//
+// What a proposed change would do to the findings of the model it lands in.
+// Both worlds are scanned with the same suites over the caller's whole
+// visible snapshot, then compared by finding identity. Advisory only: a
+// delta never refuses a write. See docs/explanation/consequence-delta.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FindingChange {
+    #[prost(enumeration="finding_change::Kind", tag="1")]
+    pub kind: i32,
+    /// Suite the finding belongs to, as on ValidationCheckResult.check_id.
+    #[prost(string, tag="2")]
+    pub check_id: ::prost::alloc::string::String,
+    /// Representative issue on each side. Unset on the side where the
+    /// identity has no occurrence.
+    #[prost(message, optional, tag="3")]
+    pub before: ::core::option::Option<ValidationIssue>,
+    #[prost(message, optional, tag="4")]
+    pub after: ::core::option::Option<ValidationIssue>,
+    /// Occurrences of this identity this change accounts for.
+    #[prost(uint32, tag="5")]
+    pub occurrences: u32,
+    /// Total occurrences of the identity in each world, so repeated findings
+    /// are visible as counts rather than as duplicate entries.
+    #[prost(uint32, tag="6")]
+    pub occurrences_before: u32,
+    #[prost(uint32, tag="7")]
+    pub occurrences_after: u32,
+    /// Why the change is KIND_UNKNOWN. Empty for every other kind.
+    #[prost(string, tag="8")]
+    pub reason: ::prost::alloc::string::String,
+    /// The entity whose validation pass produced the finding, for suites that
+    /// run once per entity (`model`, `scenarios`). Part of the finding's
+    /// identity: one rule on one subject reported by two models is two
+    /// findings. Absent for suites that scan the whole store.
+    #[prost(message, optional, tag="9")]
+    pub origin: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+}
+/// Nested message and enum types in `FindingChange`.
+pub mod finding_change {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        /// Present after the change and absent before, with the before scan
+        /// complete for its suite.
+        Introduced = 1,
+        /// Present before and absent after, with the after scan complete for its
+        /// suite and the subject still present.
+        Resolved = 2,
+        /// Same identity on both sides with a different severity.
+        SeverityChanged = 3,
+        /// The change removes the finding's subject or origin, so the finding
+        /// goes with it.
+        SubjectRemoved = 4,
+        /// The finding now also appears on a newer version of its subject: the
+        /// successor inherited it rather than introducing a new problem.
+        CarriedToSuccessor = 5,
+        /// Seen on one side only, but the other side's scan could not cover the
+        /// finding's suite. `before` set alone: resolution is unproven. `after`
+        /// set alone: novelty is unproven. `reason` names the gap.
+        Unknown = 6,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Introduced => "KIND_INTRODUCED",
+                Self::Resolved => "KIND_RESOLVED",
+                Self::SeverityChanged => "KIND_SEVERITY_CHANGED",
+                Self::SubjectRemoved => "KIND_SUBJECT_REMOVED",
+                Self::CarriedToSuccessor => "KIND_CARRIED_TO_SUCCESSOR",
+                Self::Unknown => "KIND_UNKNOWN",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_INTRODUCED" => Some(Self::Introduced),
+                "KIND_RESOLVED" => Some(Self::Resolved),
+                "KIND_SEVERITY_CHANGED" => Some(Self::SeverityChanged),
+                "KIND_SUBJECT_REMOVED" => Some(Self::SubjectRemoved),
+                "KIND_CARRIED_TO_SUCCESSOR" => Some(Self::CarriedToSuccessor),
+                "KIND_UNKNOWN" => Some(Self::Unknown),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConsequenceDelta {
+    /// Every identity whose occurrences or severity differ, sorted by suite,
+    /// code and subject.
+    #[prost(message, repeated, tag="1")]
+    pub changes: ::prost::alloc::vec::Vec<FindingChange>,
+    /// Occurrences present on both sides with the same severity.
+    #[prost(uint32, tag="2")]
+    pub unchanged_count: u32,
+    /// Coverage of the scan over the world before the change.
+    #[prost(message, optional, tag="3")]
+    pub before_coverage: ::core::option::Option<ValidationCoverage>,
+    /// Coverage of the scan over the candidate world.
+    #[prost(message, optional, tag="4")]
+    pub after_coverage: ::core::option::Option<ValidationCoverage>,
+    /// True only when every suite the delta compares completed on both sides
+    /// and no applicable suite was left out. False never means "no change";
+    /// it means some finding may be missing from `changes`.
+    #[prost(bool, tag="5")]
+    pub complete: bool,
+    /// Snapshot identity of the visible world the change was compared
+    /// against, computed like GetSnapshotId with no namespace filter.
+    #[prost(string, tag="6")]
+    pub before_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot identity of the candidate world the change would produce.
+    #[prost(string, tag="7")]
+    pub after_snapshot_id: ::prost::alloc::string::String,
+}
+// ---------- Change assessment ------------------------------------------------
+//
+// The server's advisory verdict on landing a branch, computed from the merge
+// dry run's own evidence by server-owned rules. Advisory only: MergeBranch
+// does not consult it, and no caller-supplied threshold changes it. A verdict
+// is only meaningful against the inputs in `binding`; when any of them moves,
+// assess again. See docs/explanation/change-assessment.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangeAssessment {
+    #[prost(enumeration="change_assessment::Verdict", tag="1")]
+    pub verdict: i32,
+    /// Every reason that applies, in enum order. Empty only for VERDICT_LAND.
+    #[prost(enumeration="change_assessment::Reason", repeated, tag="2")]
+    pub reasons: ::prost::alloc::vec::Vec<i32>,
+    /// The inputs the verdict was computed from.
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<AssessmentBinding>,
+}
+/// Nested message and enum types in `ChangeAssessment`.
+pub mod change_assessment {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Verdict {
+        Unspecified = 0,
+        /// Every check the server runs completed and the landing introduces,
+        /// worsens and leaves unknown no finding.
+        Land = 1,
+        /// The landing is admissible, but a person should look first; see
+        /// `reasons`.
+        NeedsReview = 2,
+        /// The merge would be refused as it stands; see `reasons`.
+        Reject = 3,
+    }
+    impl Verdict {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "VERDICT_UNSPECIFIED",
+                Self::Land => "VERDICT_LAND",
+                Self::NeedsReview => "VERDICT_NEEDS_REVIEW",
+                Self::Reject => "VERDICT_REJECT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "VERDICT_UNSPECIFIED" => Some(Self::Unspecified),
+                "VERDICT_LAND" => Some(Self::Land),
+                "VERDICT_NEEDS_REVIEW" => Some(Self::NeedsReview),
+                "VERDICT_REJECT" => Some(Self::Reject),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// The branch conflicts with baseline. Rejects.
+        Conflicts = 1,
+        /// The landed world fails a blocking validation check. Rejects.
+        BlockingFindings = 2,
+        /// The landing introduces a finding.
+        FindingsIntroduced = 3,
+        /// The landing raises the severity of an existing finding.
+        FindingsWorsened = 4,
+        /// A finding appeared or disappeared where the scan cannot vouch for it.
+        FindingsUnknown = 5,
+        /// No consequence delta could be computed.
+        DeltaMissing = 6,
+        /// The consequence delta did not cover every applicable suite.
+        DeltaIncomplete = 7,
+        /// An invariant in scope was not evaluated or is hidden from the caller.
+        InvariantsIncomplete = 8,
+        /// A world the verdict was computed over has no snapshot id, so the
+        /// verdict cannot be bound to it.
+        Unbound = 9,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Conflicts => "REASON_CONFLICTS",
+                Self::BlockingFindings => "REASON_BLOCKING_FINDINGS",
+                Self::FindingsIntroduced => "REASON_FINDINGS_INTRODUCED",
+                Self::FindingsWorsened => "REASON_FINDINGS_WORSENED",
+                Self::FindingsUnknown => "REASON_FINDINGS_UNKNOWN",
+                Self::DeltaMissing => "REASON_DELTA_MISSING",
+                Self::DeltaIncomplete => "REASON_DELTA_INCOMPLETE",
+                Self::InvariantsIncomplete => "REASON_INVARIANTS_INCOMPLETE",
+                Self::Unbound => "REASON_UNBOUND",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_CONFLICTS" => Some(Self::Conflicts),
+                "REASON_BLOCKING_FINDINGS" => Some(Self::BlockingFindings),
+                "REASON_FINDINGS_INTRODUCED" => Some(Self::FindingsIntroduced),
+                "REASON_FINDINGS_WORSENED" => Some(Self::FindingsWorsened),
+                "REASON_FINDINGS_UNKNOWN" => Some(Self::FindingsUnknown),
+                "REASON_DELTA_MISSING" => Some(Self::DeltaMissing),
+                "REASON_DELTA_INCOMPLETE" => Some(Self::DeltaIncomplete),
+                "REASON_INVARIANTS_INCOMPLETE" => Some(Self::InvariantsIncomplete),
+                "REASON_UNBOUND" => Some(Self::Unbound),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssessmentBinding {
+    /// The branch assessed.
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Snapshot id of the baseline the landing was compared against. Empty
+    /// when unbound.
+    #[prost(string, tag="2")]
+    pub baseline_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot id of the world the landing would produce. Empty when unbound.
+    #[prost(string, tag="3")]
+    pub landed_snapshot_id: ::prost::alloc::string::String,
+    /// Each landable entry with the baseline etag it was planned against. An
+    /// empty etag means the entry adds an entity baseline does not have.
+    #[prost(message, repeated, tag="4")]
+    pub entries: ::prost::alloc::vec::Vec<AssessmentPin>,
+    /// The caller's read scope: "*" for an unrestricted caller, otherwise
+    /// the owner boundary it is held to.
+    #[prost(string, tag="5")]
+    pub scope: ::prost::alloc::string::String,
+    /// Revision of the rule catalogue and assessment rules the verdict used.
+    #[prost(string, tag="6")]
+    pub catalogue_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AssessmentPin {
+    #[prost(message, optional, tag="1")]
+    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub baseline_etag: ::prost::alloc::string::String,
+}
+// ---------- Backing report ---------------------------------------------------
+//
+// How much of the visible model carries evidence: an ACCEPTED Decision or a
+// Document selecting the exact entity, or a CodeRefAnnotation on the entity
+// itself. The report measures evidence presence only. It never judges whether
+// a rationale is sound or whether referenced code still exists. See
+// docs/reference/backing-report.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBackingReportRequest {
     /// Count subjects only in these namespaces. Empty means every visible
     /// namespace. Evidence is always read from the whole visible snapshot, so a
@@ -2227,822 +3053,6 @@ pub struct SearchResult {
     /// optional human-readable snippet
     #[prost(string, tag="3")]
     pub excerpt: ::prost::alloc::string::String,
-}
-// ---------- Validation -------------------------------------------------------
-//
-// Validation checks the model against the rules this schema cannot express
-// structurally: dangling references, edge-rule violations (the six allowed
-// edges + cardinality), supersession chains pointing at non-existent
-// versions, traces that violate data completeness, etc.
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidationIssue {
-    #[prost(enumeration="validation_issue::Severity", tag="1")]
-    pub severity: i32,
-    /// stable machine code, e.g. "DANGLING_REF"
-    #[prost(string, tag="2")]
-    pub code: ::prost::alloc::string::String,
-    /// human-readable explanation
-    #[prost(string, tag="3")]
-    pub message: ::prost::alloc::string::String,
-    /// entity the issue is attached to (optional)
-    #[prost(message, optional, tag="4")]
-    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// structural path inside the entity (optional)
-    #[prost(string, tag="5")]
-    pub subject_field: ::prost::alloc::string::String,
-    /// Inline rule context -- denormalized from the static ValidationRule
-    /// catalog at issue-emit time so consumers can render a finding
-    /// (title, category, default_severity) without a second RPC to
-    /// ListValidationRules. Empty when the validator can't resolve the
-    /// catalog entry (which should never happen -- the drift test guards
-    /// against orphan codes).
-    #[prost(string, tag="6")]
-    pub rule_title: ::prost::alloc::string::String,
-    #[prost(string, tag="7")]
-    pub rule_category: ::prost::alloc::string::String,
-    #[prost(enumeration="validation_issue::Severity", tag="8")]
-    pub rule_default_severity: i32,
-    /// The causes behind this finding, in canonical order so the list is a
-    /// stable part of finding identity (code, subject, subject_field,
-    /// evidence). Empty for rules that still explain their causes only in
-    /// `message`; ValidationRule.evidence_roles says which rules carry it.
-    #[prost(message, repeated, tag="9")]
-    pub evidence: ::prost::alloc::vec::Vec<ValidationEvidence>,
-}
-/// Nested message and enum types in `ValidationIssue`.
-pub mod validation_issue {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Severity {
-        Unspecified = 0,
-        Info = 1,
-        Warning = 2,
-        Error = 3,
-    }
-    impl Severity {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "SEVERITY_UNSPECIFIED",
-                Self::Info => "SEVERITY_INFO",
-                Self::Warning => "SEVERITY_WARNING",
-                Self::Error => "SEVERITY_ERROR",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
-                "SEVERITY_INFO" => Some(Self::Info),
-                "SEVERITY_WARNING" => Some(Self::Warning),
-                "SEVERITY_ERROR" => Some(Self::Error),
-                _ => None,
-            }
-        }
-    }
-}
-/// One cause of a finding, typed so clients never parse `message`. Every
-/// reference names an exact version. Evidence only names entities the
-/// validator read from the caller's visible snapshot, or references those
-/// entities carry.
-///
-/// Canonical order: role, then entity, field, target and occurrence, each
-/// compared by kind, namespace, slug, version, then storyboard position.
-/// `detail` is presentation only and is not part of finding identity.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationEvidence {
-    #[prost(enumeration="validation_evidence::Role", tag="1")]
-    pub role: i32,
-    /// Entity holding the cause.
-    #[prost(message, optional, tag="2")]
-    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// Structural path inside `entity`, with list indexes (for example
-    /// `emitted_events\[2\]`). Empty when the entity itself is the cause.
-    #[prost(string, tag="3")]
-    pub field: ::prost::alloc::string::String,
-    /// What `entity.field` references, at the exact version it pins.
-    #[prost(message, optional, tag="4")]
-    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// Where the cause sits in a storyboard. Set for storyboard-order rules
-    /// so repeated occurrences of one slice stay distinguishable.
-    #[prost(message, optional, tag="5")]
-    pub occurrence: ::core::option::Option<StoryboardOccurrence>,
-    /// Human note for this cause. Presentation only.
-    #[prost(string, tag="6")]
-    pub detail: ::prost::alloc::string::String,
-}
-/// Nested message and enum types in `ValidationEvidence`.
-pub mod validation_evidence {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Role {
-        Unspecified = 0,
-        /// `entity.field` wires `target` (a UI or processor) as an issuer of the
-        /// subject command.
-        Issuer = 1,
-        /// `entity.field` names `target` as a command that emits the subject
-        /// event.
-        Emitter = 2,
-        /// `entity.field` pins `target`, an older version than the latest
-        /// loaded.
-        StalePin = 3,
-        /// `entity` is the latest loaded version of a stale pin's target.
-        LatestVersion = 4,
-        /// `entity.field` consumes `target` at `occurrence`.
-        Consumer = 5,
-        /// `entity.field` emits `target`, but only after the consuming
-        /// occurrence in the same storyboard.
-        LaterEmitter = 6,
-        /// `entity.field` emits `target` at the nearest occurrence before the
-        /// consumer.
-        EarlierEmitter = 7,
-        /// `entity` is an action slice placed between an emitter and its
-        /// projection.
-        InterveningAction = 8,
-    }
-    impl Role {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "ROLE_UNSPECIFIED",
-                Self::Issuer => "ROLE_ISSUER",
-                Self::Emitter => "ROLE_EMITTER",
-                Self::StalePin => "ROLE_STALE_PIN",
-                Self::LatestVersion => "ROLE_LATEST_VERSION",
-                Self::Consumer => "ROLE_CONSUMER",
-                Self::LaterEmitter => "ROLE_LATER_EMITTER",
-                Self::EarlierEmitter => "ROLE_EARLIER_EMITTER",
-                Self::InterveningAction => "ROLE_INTERVENING_ACTION",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
-                "ROLE_ISSUER" => Some(Self::Issuer),
-                "ROLE_EMITTER" => Some(Self::Emitter),
-                "ROLE_STALE_PIN" => Some(Self::StalePin),
-                "ROLE_LATEST_VERSION" => Some(Self::LatestVersion),
-                "ROLE_CONSUMER" => Some(Self::Consumer),
-                "ROLE_LATER_EMITTER" => Some(Self::LaterEmitter),
-                "ROLE_EARLIER_EMITTER" => Some(Self::EarlierEmitter),
-                "ROLE_INTERVENING_ACTION" => Some(Self::InterveningAction),
-                _ => None,
-            }
-        }
-    }
-}
-/// One placement of a slice in a storyboard.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StoryboardOccurrence {
-    #[prost(message, optional, tag="1")]
-    pub storyboard: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-    /// Zero-based index into Storyboard.slices.
-    #[prost(uint32, tag="2")]
-    pub position: u32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateEventModelRequest {
-    /// Either validate an in-memory model (supplied here) or validate a stored
-    /// one by Id. Exactly one of the two should be set.
-    #[prost(message, optional, tag="1")]
-    pub event_model: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventModel>,
-    #[prost(message, optional, tag="2")]
-    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateEventModelResponse {
-    #[prost(message, repeated, tag="1")]
-    pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
-    /// Suites that ran for this call, plus whether the snapshot was truncated.
-    /// Absent or empty coverage must not be treated as "everything was checked".
-    #[prost(message, optional, tag="2")]
-    pub coverage: ::core::option::Option<ValidationCoverage>,
-}
-/// Static description of a single validation rule. Surfaces the catalog
-/// the validator dispatches on: stable machine `code`, canonical
-/// `default_severity`, and the "why" explanation lifted from the source
-/// comment that documents the rule. Consumers (Studio UI, MCP agents,
-/// CI tooling) use this to render legends, link findings to docs, and
-/// gate releases on specific severity classes without having to
-/// reverse-engineer the validator.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationRule {
-    /// e.g. "EVENT_UNOBSERVED"
-    #[prost(string, tag="1")]
-    pub code: ::prost::alloc::string::String,
-    /// canonical severity for the base case
-    #[prost(enumeration="validation_issue::Severity", tag="2")]
-    pub default_severity: i32,
-    /// short human label
-    #[prost(string, tag="3")]
-    pub title: ::prost::alloc::string::String,
-    /// the "why" -- what the rule asserts and how to fix it
-    #[prost(string, tag="4")]
-    pub doc: ::prost::alloc::string::String,
-    /// primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
-    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="5")]
-    pub subject_kind: i32,
-    /// structural path inside the entity (or empty)
-    #[prost(string, tag="6")]
-    pub subject_field: ::prost::alloc::string::String,
-    /// grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
-    #[prost(string, tag="7")]
-    pub category: ::prost::alloc::string::String,
-    /// Evidence roles this rule's findings carry. Empty means the rule
-    /// explains its causes only in the finding message.
-    #[prost(enumeration="validation_evidence::Role", repeated, tag="8")]
-    pub evidence_roles: ::prost::alloc::vec::Vec<i32>,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ListValidationRulesRequest {
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListValidationRulesResponse {
-    #[prost(message, repeated, tag="1")]
-    pub rules: ::prost::alloc::vec::Vec<ValidationRule>,
-}
-/// Validate every EventModel in a project, a domain or a namespace in one
-/// pass, instead of N round trips through ValidateEventModel. The
-/// validator already has the full entity store in memory per call;
-/// looping per-model is pure waste.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidateProjectRequest {
-    /// Scope by Project.id (if your store carries Projects), by Domain.id
-    /// (legacy) or by namespace. Exactly one must be set.
-    #[prost(oneof="validate_project_request::Scope", tags="1, 2, 3")]
-    pub scope: ::core::option::Option<validate_project_request::Scope>,
-}
-/// Nested message and enum types in `ValidateProjectRequest`.
-pub mod validate_project_request {
-    /// Scope by Project.id (if your store carries Projects), by Domain.id
-    /// (legacy) or by namespace. Exactly one must be set.
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Scope {
-        #[prost(message, tag="1")]
-        ProjectId(super::super::super::super::r#type::v1alpha1::Id),
-        #[prost(message, tag="2")]
-        DomainId(super::super::super::super::r#type::v1alpha1::Id),
-        /// Every EventModel whose id carries this namespace, whether or not a
-        /// Domain claims it.
-        #[prost(string, tag="3")]
-        Namespace(::prost::alloc::string::String),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateProjectResponse {
-    #[prost(message, repeated, tag="1")]
-    pub reports: ::prost::alloc::vec::Vec<validate_project_response::ModelReport>,
-    /// Aggregate counts across all reports -- quick "is the project healthy"
-    /// glance without summing on the client.
-    #[prost(int32, tag="2")]
-    pub total_errors: i32,
-    #[prost(int32, tag="3")]
-    pub total_warnings: i32,
-    #[prost(int32, tag="4")]
-    pub total_info: i32,
-    /// Suites that ran for this call, plus whether the snapshot was truncated.
-    #[prost(message, optional, tag="5")]
-    pub coverage: ::core::option::Option<ValidationCoverage>,
-}
-/// Nested message and enum types in `ValidateProjectResponse`.
-pub mod validate_project_response {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ModelReport {
-        #[prost(message, optional, tag="1")]
-        pub event_model_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::Id>,
-        #[prost(message, repeated, tag="2")]
-        pub issues: ::prost::alloc::vec::Vec<super::ValidationIssue>,
-    }
-}
-// ---------- Coverage ---------------------------------------------------------
-//
-// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
-// checked. A completed suite can still emit Errors; a skipped suite must
-// never be read as a pass. See docs/explanation/validation-coverage.md.
-
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationCheckResult {
-    /// Stable suite id: "model", "strategic", "store_hygiene", "architecture",
-    /// "scenarios", "request_shape".
-    #[prost(string, tag="1")]
-    pub check_id: ::prost::alloc::string::String,
-    #[prost(enumeration="validation_check_result::State", tag="2")]
-    pub state: i32,
-    /// Why skipped / partial / error. Empty when completed without caveat.
-    #[prost(string, tag="3")]
-    pub reason: ::prost::alloc::string::String,
-    /// Subjects examined when meaningful (models, namespaces, …). Zero is a
-    /// valid completed empty scan and must not be rewritten by clients.
-    #[prost(int32, tag="4")]
-    pub subjects_examined: i32,
-}
-/// Nested message and enum types in `ValidationCheckResult`.
-pub mod validation_check_result {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum State {
-        Unspecified = 0,
-        /// Suite finished for the declared scope. Findings may still be Errors.
-        Completed = 1,
-        /// Suite was not applicable on this route or for this request shape.
-        Skipped = 2,
-        /// Suite ran but could not cover the full declared scope (for example a
-        /// truncated snapshot). Do not treat an empty issue list as complete.
-        Partial = 3,
-        /// Suite failed to execute. Distinct from finding Errors inside a
-        /// completed suite.
-        Error = 4,
-    }
-    impl State {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "STATE_UNSPECIFIED",
-                Self::Completed => "STATE_COMPLETED",
-                Self::Skipped => "STATE_SKIPPED",
-                Self::Partial => "STATE_PARTIAL",
-                Self::Error => "STATE_ERROR",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
-                "STATE_COMPLETED" => Some(Self::Completed),
-                "STATE_SKIPPED" => Some(Self::Skipped),
-                "STATE_PARTIAL" => Some(Self::Partial),
-                "STATE_ERROR" => Some(Self::Error),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationScope {
-    /// Empty means baseline (no branch header).
-    #[prost(string, tag="1")]
-    pub branch: ::prost::alloc::string::String,
-    /// Effective project/domain/namespace/model when the route has one.
-    #[prost(message, optional, tag="2")]
-    pub project_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-    #[prost(message, optional, tag="3")]
-    pub domain_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="4")]
-    pub namespace: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="5")]
-    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidationCoverage {
-    #[prost(message, repeated, tag="1")]
-    pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
-    /// What store-wide suites actually examined. For ValidateProject this is the
-    /// full visible snapshot under the branch (namespace / project / domain
-    /// empty): hygiene and architecture are not narrowed to the request filter.
-    /// Model and strategic suite subject counts still follow the request.
-    #[prost(message, optional, tag="2")]
-    pub effective_scope: ::core::option::Option<ValidationScope>,
-    /// True when the entity snapshot hit the configured cap. Shared with the
-    /// truncation package; an empty issue list on a truncated snapshot is not
-    /// a clean bill of health.
-    #[prost(bool, tag="3")]
-    pub snapshot_truncated: bool,
-    /// What the caller asked to validate (project / domain / namespace / model).
-    /// May be narrower than `effective_scope` for store-wide checks.
-    #[prost(message, optional, tag="4")]
-    pub requested_scope: ::core::option::Option<ValidationScope>,
-}
-// ---------- Invariant check --------------------------------------------------
-//
-// What every invariant declared in the write's scope said about the world the
-// write would produce. Evaluated against a snapshot before the write takes the
-// mutation lock; the write then applies only if nothing in its scope was
-// written since that snapshot was read, and is refused as stale otherwise.
-// See docs/explanation/invariant-gates.md.
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InvariantCheck {
-    /// One per invariant declared in scope, in carrier then name order.
-    #[prost(message, repeated, tag="1")]
-    pub outcomes: ::prost::alloc::vec::Vec<InvariantOutcome>,
-    /// Snapshot the verdict was computed against, as GetSnapshotId reports it.
-    /// Empty when the snapshot has no content identity.
-    #[prost(string, tag="2")]
-    pub snapshot_id: ::prost::alloc::string::String,
-    /// The carriers and the entities the write touches, each with the etag it
-    /// had in that snapshot. An empty etag records that the entity was absent.
-    #[prost(message, repeated, tag="3")]
-    pub inputs: ::prost::alloc::vec::Vec<InvariantInput>,
-    /// True when no outcome is STATUS_UNEVALUABLE, none is redacted, and
-    /// snapshot_id is set.
-    #[prost(bool, tag="4")]
-    pub complete: bool,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InvariantOutcome {
-    /// The EventModel declaring the invariant. Unset when `redacted`.
-    #[prost(message, optional, tag="1")]
-    pub carrier: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// Unset when `redacted`.
-    #[prost(string, tag="2")]
-    pub name: ::prost::alloc::string::String,
-    #[prost(enumeration="invariant_outcome::Status", tag="3")]
-    pub status: i32,
-    /// Forbidden findings the write introduces. Set only for STATUS_VIOLATED.
-    #[prost(message, repeated, tag="4")]
-    pub violations: ::prost::alloc::vec::Vec<ValidationIssue>,
-    /// Why the invariant could not be evaluated. Set only for
-    /// STATUS_UNEVALUABLE.
-    #[prost(enumeration="invariant_outcome::Reason", tag="5")]
-    pub reason: i32,
-    /// Members of the carrier the world lacks. Set only for
-    /// REASON_MISSING_INPUTS.
-    #[prost(message, repeated, tag="6")]
-    pub missing: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// True when the declaration lets an unevaluable outcome through.
-    #[prost(bool, tag="7")]
-    pub advisory: bool,
-    /// Forbidden findings present both before and after the write.
-    #[prost(message, repeated, tag="8")]
-    pub preexisting: ::prost::alloc::vec::Vec<ValidationIssue>,
-    /// True when the carrier lives in a namespace the caller may not read:
-    /// the status is kept and every identifying field is cleared.
-    #[prost(bool, tag="9")]
-    pub redacted: bool,
-}
-/// Nested message and enum types in `InvariantOutcome`.
-pub mod invariant_outcome {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Status {
-        Unspecified = 0,
-        /// No forbidden finding after the write.
-        Holds = 1,
-        /// The write introduces a forbidden finding. Refuses the write.
-        Violated = 2,
-        /// The verdict cannot be trusted; see `reason`. Refuses the write unless
-        /// `advisory` is set.
-        Unevaluable = 3,
-        /// Forbidden findings exist, but every one was already there before the
-        /// write. Does not refuse the write.
-        AlreadyViolated = 4,
-    }
-    impl Status {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "STATUS_UNSPECIFIED",
-                Self::Holds => "STATUS_HOLDS",
-                Self::Violated => "STATUS_VIOLATED",
-                Self::Unevaluable => "STATUS_UNEVALUABLE",
-                Self::AlreadyViolated => "STATUS_ALREADY_VIOLATED",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "STATUS_UNSPECIFIED" => Some(Self::Unspecified),
-                "STATUS_HOLDS" => Some(Self::Holds),
-                "STATUS_VIOLATED" => Some(Self::Violated),
-                "STATUS_UNEVALUABLE" => Some(Self::Unevaluable),
-                "STATUS_ALREADY_VIOLATED" => Some(Self::AlreadyViolated),
-                _ => None,
-            }
-        }
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Reason {
-        Unspecified = 0,
-        /// A member of the carrier is missing from the world the write produces.
-        MissingInputs = 1,
-        /// The snapshot hit the entity cap, so absence proves nothing.
-        SnapshotTruncated = 2,
-        /// The scope declares more invariants than one evaluation may check.
-        BudgetExhausted = 3,
-        /// The declaration cannot be decoded or forbids nothing.
-        MalformedDeclaration = 4,
-    }
-    impl Reason {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "REASON_UNSPECIFIED",
-                Self::MissingInputs => "REASON_MISSING_INPUTS",
-                Self::SnapshotTruncated => "REASON_SNAPSHOT_TRUNCATED",
-                Self::BudgetExhausted => "REASON_BUDGET_EXHAUSTED",
-                Self::MalformedDeclaration => "REASON_MALFORMED_DECLARATION",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
-                "REASON_MISSING_INPUTS" => Some(Self::MissingInputs),
-                "REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
-                "REASON_BUDGET_EXHAUSTED" => Some(Self::BudgetExhausted),
-                "REASON_MALFORMED_DECLARATION" => Some(Self::MalformedDeclaration),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct InvariantInput {
-    #[prost(message, optional, tag="1")]
-    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    #[prost(string, tag="2")]
-    pub etag: ::prost::alloc::string::String,
-}
-// ---------- Consequence delta ------------------------------------------------
-//
-// What a proposed change would do to the findings of the model it lands in.
-// Both worlds are scanned with the same suites over the caller's whole
-// visible snapshot, then compared by finding identity. Advisory only: a
-// delta never refuses a write. See docs/explanation/consequence-delta.md.
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FindingChange {
-    #[prost(enumeration="finding_change::Kind", tag="1")]
-    pub kind: i32,
-    /// Suite the finding belongs to, as on ValidationCheckResult.check_id.
-    #[prost(string, tag="2")]
-    pub check_id: ::prost::alloc::string::String,
-    /// Representative issue on each side. Unset on the side where the
-    /// identity has no occurrence.
-    #[prost(message, optional, tag="3")]
-    pub before: ::core::option::Option<ValidationIssue>,
-    #[prost(message, optional, tag="4")]
-    pub after: ::core::option::Option<ValidationIssue>,
-    /// Occurrences of this identity this change accounts for.
-    #[prost(uint32, tag="5")]
-    pub occurrences: u32,
-    /// Total occurrences of the identity in each world, so repeated findings
-    /// are visible as counts rather than as duplicate entries.
-    #[prost(uint32, tag="6")]
-    pub occurrences_before: u32,
-    #[prost(uint32, tag="7")]
-    pub occurrences_after: u32,
-    /// Why the change is KIND_UNKNOWN. Empty for every other kind.
-    #[prost(string, tag="8")]
-    pub reason: ::prost::alloc::string::String,
-    /// The entity whose validation pass produced the finding, for suites that
-    /// run once per entity (`model`, `scenarios`). Part of the finding's
-    /// identity: one rule on one subject reported by two models is two
-    /// findings. Absent for suites that scan the whole store.
-    #[prost(message, optional, tag="9")]
-    pub origin: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-}
-/// Nested message and enum types in `FindingChange`.
-pub mod finding_change {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Kind {
-        Unspecified = 0,
-        /// Present after the change and absent before, with the before scan
-        /// complete for its suite.
-        Introduced = 1,
-        /// Present before and absent after, with the after scan complete for its
-        /// suite and the subject still present.
-        Resolved = 2,
-        /// Same identity on both sides with a different severity.
-        SeverityChanged = 3,
-        /// The change removes the finding's subject or origin, so the finding
-        /// goes with it.
-        SubjectRemoved = 4,
-        /// The finding now also appears on a newer version of its subject: the
-        /// successor inherited it rather than introducing a new problem.
-        CarriedToSuccessor = 5,
-        /// Seen on one side only, but the other side's scan could not cover the
-        /// finding's suite. `before` set alone: resolution is unproven. `after`
-        /// set alone: novelty is unproven. `reason` names the gap.
-        Unknown = 6,
-    }
-    impl Kind {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "KIND_UNSPECIFIED",
-                Self::Introduced => "KIND_INTRODUCED",
-                Self::Resolved => "KIND_RESOLVED",
-                Self::SeverityChanged => "KIND_SEVERITY_CHANGED",
-                Self::SubjectRemoved => "KIND_SUBJECT_REMOVED",
-                Self::CarriedToSuccessor => "KIND_CARRIED_TO_SUCCESSOR",
-                Self::Unknown => "KIND_UNKNOWN",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
-                "KIND_INTRODUCED" => Some(Self::Introduced),
-                "KIND_RESOLVED" => Some(Self::Resolved),
-                "KIND_SEVERITY_CHANGED" => Some(Self::SeverityChanged),
-                "KIND_SUBJECT_REMOVED" => Some(Self::SubjectRemoved),
-                "KIND_CARRIED_TO_SUCCESSOR" => Some(Self::CarriedToSuccessor),
-                "KIND_UNKNOWN" => Some(Self::Unknown),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ConsequenceDelta {
-    /// Every identity whose occurrences or severity differ, sorted by suite,
-    /// code and subject.
-    #[prost(message, repeated, tag="1")]
-    pub changes: ::prost::alloc::vec::Vec<FindingChange>,
-    /// Occurrences present on both sides with the same severity.
-    #[prost(uint32, tag="2")]
-    pub unchanged_count: u32,
-    /// Coverage of the scan over the world before the change.
-    #[prost(message, optional, tag="3")]
-    pub before_coverage: ::core::option::Option<ValidationCoverage>,
-    /// Coverage of the scan over the candidate world.
-    #[prost(message, optional, tag="4")]
-    pub after_coverage: ::core::option::Option<ValidationCoverage>,
-    /// True only when every suite the delta compares completed on both sides
-    /// and no applicable suite was left out. False never means "no change";
-    /// it means some finding may be missing from `changes`.
-    #[prost(bool, tag="5")]
-    pub complete: bool,
-    /// Snapshot identity of the visible world the change was compared
-    /// against, computed like GetSnapshotId with no namespace filter.
-    #[prost(string, tag="6")]
-    pub before_snapshot_id: ::prost::alloc::string::String,
-    /// Snapshot identity of the candidate world the change would produce.
-    #[prost(string, tag="7")]
-    pub after_snapshot_id: ::prost::alloc::string::String,
-}
-// ---------- Change assessment ------------------------------------------------
-//
-// The server's advisory verdict on landing a branch, computed from the merge
-// dry run's own evidence by server-owned rules. Advisory only: MergeBranch
-// does not consult it, and no caller-supplied threshold changes it. A verdict
-// is only meaningful against the inputs in `binding`; when any of them moves,
-// assess again. See docs/explanation/change-assessment.md.
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ChangeAssessment {
-    #[prost(enumeration="change_assessment::Verdict", tag="1")]
-    pub verdict: i32,
-    /// Every reason that applies, in enum order. Empty only for VERDICT_LAND.
-    #[prost(enumeration="change_assessment::Reason", repeated, tag="2")]
-    pub reasons: ::prost::alloc::vec::Vec<i32>,
-    /// The inputs the verdict was computed from.
-    #[prost(message, optional, tag="3")]
-    pub binding: ::core::option::Option<AssessmentBinding>,
-}
-/// Nested message and enum types in `ChangeAssessment`.
-pub mod change_assessment {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Verdict {
-        Unspecified = 0,
-        /// Every check the server runs completed and the landing introduces,
-        /// worsens and leaves unknown no finding.
-        Land = 1,
-        /// The landing is admissible, but a person should look first; see
-        /// `reasons`.
-        NeedsReview = 2,
-        /// The merge would be refused as it stands; see `reasons`.
-        Reject = 3,
-    }
-    impl Verdict {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "VERDICT_UNSPECIFIED",
-                Self::Land => "VERDICT_LAND",
-                Self::NeedsReview => "VERDICT_NEEDS_REVIEW",
-                Self::Reject => "VERDICT_REJECT",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "VERDICT_UNSPECIFIED" => Some(Self::Unspecified),
-                "VERDICT_LAND" => Some(Self::Land),
-                "VERDICT_NEEDS_REVIEW" => Some(Self::NeedsReview),
-                "VERDICT_REJECT" => Some(Self::Reject),
-                _ => None,
-            }
-        }
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Reason {
-        Unspecified = 0,
-        /// The branch conflicts with baseline. Rejects.
-        Conflicts = 1,
-        /// The landed world fails a blocking validation check. Rejects.
-        BlockingFindings = 2,
-        /// The landing introduces a finding.
-        FindingsIntroduced = 3,
-        /// The landing raises the severity of an existing finding.
-        FindingsWorsened = 4,
-        /// A finding appeared or disappeared where the scan cannot vouch for it.
-        FindingsUnknown = 5,
-        /// No consequence delta could be computed.
-        DeltaMissing = 6,
-        /// The consequence delta did not cover every applicable suite.
-        DeltaIncomplete = 7,
-        /// An invariant in scope was not evaluated or is hidden from the caller.
-        InvariantsIncomplete = 8,
-        /// A world the verdict was computed over has no snapshot id, so the
-        /// verdict cannot be bound to it.
-        Unbound = 9,
-    }
-    impl Reason {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "REASON_UNSPECIFIED",
-                Self::Conflicts => "REASON_CONFLICTS",
-                Self::BlockingFindings => "REASON_BLOCKING_FINDINGS",
-                Self::FindingsIntroduced => "REASON_FINDINGS_INTRODUCED",
-                Self::FindingsWorsened => "REASON_FINDINGS_WORSENED",
-                Self::FindingsUnknown => "REASON_FINDINGS_UNKNOWN",
-                Self::DeltaMissing => "REASON_DELTA_MISSING",
-                Self::DeltaIncomplete => "REASON_DELTA_INCOMPLETE",
-                Self::InvariantsIncomplete => "REASON_INVARIANTS_INCOMPLETE",
-                Self::Unbound => "REASON_UNBOUND",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
-                "REASON_CONFLICTS" => Some(Self::Conflicts),
-                "REASON_BLOCKING_FINDINGS" => Some(Self::BlockingFindings),
-                "REASON_FINDINGS_INTRODUCED" => Some(Self::FindingsIntroduced),
-                "REASON_FINDINGS_WORSENED" => Some(Self::FindingsWorsened),
-                "REASON_FINDINGS_UNKNOWN" => Some(Self::FindingsUnknown),
-                "REASON_DELTA_MISSING" => Some(Self::DeltaMissing),
-                "REASON_DELTA_INCOMPLETE" => Some(Self::DeltaIncomplete),
-                "REASON_INVARIANTS_INCOMPLETE" => Some(Self::InvariantsIncomplete),
-                "REASON_UNBOUND" => Some(Self::Unbound),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AssessmentBinding {
-    /// The branch assessed.
-    #[prost(string, tag="1")]
-    pub branch: ::prost::alloc::string::String,
-    /// Snapshot id of the baseline the landing was compared against. Empty
-    /// when unbound.
-    #[prost(string, tag="2")]
-    pub baseline_snapshot_id: ::prost::alloc::string::String,
-    /// Snapshot id of the world the landing would produce. Empty when unbound.
-    #[prost(string, tag="3")]
-    pub landed_snapshot_id: ::prost::alloc::string::String,
-    /// Each landable entry with the baseline etag it was planned against. An
-    /// empty etag means the entry adds an entity baseline does not have.
-    #[prost(message, repeated, tag="4")]
-    pub entries: ::prost::alloc::vec::Vec<AssessmentPin>,
-    /// The caller's read scope: "*" for an unrestricted caller, otherwise
-    /// the owner boundary it is held to.
-    #[prost(string, tag="5")]
-    pub scope: ::prost::alloc::string::String,
-    /// Revision of the rule catalogue and assessment rules the verdict used.
-    #[prost(string, tag="6")]
-    pub catalogue_revision: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct AssessmentPin {
-    #[prost(message, optional, tag="1")]
-    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    #[prost(string, tag="2")]
-    pub baseline_etag: ::prost::alloc::string::String,
 }
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the

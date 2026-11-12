@@ -1,8 +1,6 @@
-use std::collections::BTreeSet;
-
 use tonic::Status;
 
-use super::{pb, snapshot_digest, EventModelServiceImpl, Lens, Visibility};
+use super::{pb, readable_scope, snapshot_digest, EventModelServiceImpl, Lens, Visibility};
 use crate::backing::{self, SubjectScope, ViewLimits, VisibleNamespaces};
 
 impl EventModelServiceImpl {
@@ -18,7 +16,7 @@ impl EventModelServiceImpl {
         let (rows, truncated) = self
             .snapshot_with_truncation(branch.as_deref(), vis)
             .await?;
-        let digest = snapshot_digest(&rows, &BTreeSet::new(), false)?;
+        let digest = snapshot_digest(&rows, &readable_scope(vis), false)?;
         let visibility = match self.lens(vis).await? {
             Lens::Everything => VisibleNamespaces::All,
             Lens::Only(ids) => {

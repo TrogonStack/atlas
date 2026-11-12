@@ -1235,6 +1235,37 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Evidence presence across the visible model, bound to its snapshot id.
+*/
+        pub async fn get_backing_report(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetBackingReportRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBackingReportResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetBackingReport",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         ///
         pub async fn get_design_graph_detail(
             &mut self,
@@ -3689,6 +3720,15 @@ pub mod event_model_service_server {
             request: tonic::Request<super::ListIncomingDocumentDeclarationsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListIncomingDocumentDeclarationsResponse>,
+            tonic::Status,
+        >;
+        /** Evidence presence across the visible model, bound to its snapshot id.
+*/
+        async fn get_backing_report(
+            &self,
+            request: tonic::Request<super::GetBackingReportRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBackingReportResponse>,
             tonic::Status,
         >;
         ///

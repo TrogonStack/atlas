@@ -284,102 +284,6 @@ impl EntityKind {
         }
     }
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryRef {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// A tenant-owned set of protobuf definitions, stored as source text and
-/// compiled by the server on demand. `id.slug` is the package prefix the
-/// library owns: every file's `package` must equal it or start with it
-/// followed by a dot, and no two live libraries in the same namespace and
-/// branch may own overlapping prefixes.
-///
-/// The source is the only stored form. The compiled descriptors are derived
-/// state the server rebuilds whenever it needs them.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TypeLibrary {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub files: ::prost::alloc::vec::Vec<ProtoSourceFile>,
-    /// Libraries whose files these files may import, in the same namespace.
-    #[prost(message, repeated, tag="5")]
-    pub dependencies: ::prost::alloc::vec::Vec<TypeLibraryRef>,
-    #[prost(message, optional, tag="6")]
-    pub provenance: ::core::option::Option<TypeLibraryProvenance>,
-    #[prost(message, repeated, tag="7")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="8")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProtoSourceFile {
-    /// Relative import path, e.g. "acme/orders/v1/orders.proto".
-    #[prost(string, tag="1")]
-    pub path: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub content: ::prost::alloc::string::String,
-}
-/// Where the source text came from. A record only: the server never fetches
-/// anything it names. Remote origins are pulled client-side and arrive as
-/// `TypeLibrary.files`.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryProvenance {
-    #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
-    pub source: ::core::option::Option<type_library_provenance::Source>,
-}
-/// Nested message and enum types in `TypeLibraryProvenance`.
-pub mod type_library_provenance {
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct InlineSource {
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct BufModuleSnapshot {
-        #[prost(string, tag="1")]
-        pub remote: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub owner: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub module: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub commit: ::prost::alloc::string::String,
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct GitSnapshot {
-        #[prost(string, tag="1")]
-        pub repository_url: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub r#ref: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub commit: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub subdirectory: ::prost::alloc::string::String,
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Source {
-        #[prost(message, tag="1")]
-        Inline(InlineSource),
-        #[prost(message, tag="2")]
-        BufModule(BufModuleSnapshot),
-        #[prost(message, tag="3")]
-        Git(GitSnapshot),
-    }
-}
-/// Field paths are diagnostics only; references survive collection reordering.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ConnectionRef {
-    #[prost(message, optional, tag="1")]
-    pub owner: ::core::option::Option<EntityRef>,
-    #[prost(message, optional, tag="2")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(string, tag="3")]
-    pub owner_uid: ::prost::alloc::string::String,
-}
 /// One typed edge message per type kind. An Edge is a Ref + free-form doc +
 /// a typed annotation list (repeated google.protobuf.Any). Edges are used
 /// wherever a slice or storyboard endpoint may want to carry design data
@@ -2069,16 +1973,6 @@ pub struct EventModel {
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-/// Field paths are diagnostics only; references survive collection reordering.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ConnectionRef {
-    #[prost(message, optional, tag="1")]
-    pub owner: ::core::option::Option<EntityRef>,
-    #[prost(message, optional, tag="2")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(string, tag="3")]
-    pub owner_uid: ::prost::alloc::string::String,
-}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryRef {
     #[prost(message, optional, tag="1")]
@@ -2164,6 +2058,16 @@ pub mod type_library_provenance {
         #[prost(message, tag="3")]
         Git(GitSnapshot),
     }
+}
+/// Field paths are diagnostics only; references survive collection reordering.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionRef {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<EntityRef>,
+    #[prost(message, optional, tag="2")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, tag="3")]
+    pub owner_uid: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ComponentRef {
