@@ -14,6 +14,7 @@ import { ScreensBoard } from '@/components/canvas/ScreensBoard';
 import { SequenceBoard } from '@/components/canvas/SequenceBoard';
 import { SliceBoard } from '@/components/canvas/SliceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
+import { StateMachineBoard } from '@/components/canvas/StateMachineBoard';
 import { WaterfallBoard } from '@/components/canvas/WaterfallBoard';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -34,6 +35,7 @@ import { useStudioFeatureFlags } from '@/lib/feature-flags';
 import { EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import type { BoardEdgeData } from '@/lib/layout';
 import { buildModel, entityKey, hasStreamEvents, type Model } from '@/lib/model';
+import { hasLifecycles } from '@/lib/statemachine';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
 import { activeSnapshot, type SnapshotStamp } from '@/lib/snapshot';
@@ -53,7 +55,7 @@ function edgeIdentity(data: BoardEdgeData): string {
 // swaps this module for a stub by its resolved path.
 const ThreeView = lazy(() => import('@/components/canvas/ThreeView').then((m) => ({ default: m.ThreeView })));
 
-const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain', 'waterfall', 'lanes', 'towers'] as const;
+const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain', 'waterfall', 'states', 'lanes', 'towers'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABELS: Record<View, string> = {
   board: 'Board',
@@ -63,6 +65,7 @@ const VIEW_LABELS: Record<View, string> = {
   plan: 'Plan',
   domain: 'Domain',
   waterfall: 'Waterfall',
+  states: 'State machine',
   lanes: 'Lane mesh',
   towers: 'Stream towers',
 };
@@ -558,6 +561,7 @@ export function ModelShell({
     // A saved board is one inlined runtime file without three.js, so it has no 3D views.
     if (v === 'lanes') return featureFlags.laneMesh && !snapshot && model.slices.length > 0;
     if (v === 'towers') return featureFlags.streamTowers && !snapshot && hasStreamEvents(model);
+    if (v === 'states') return featureFlags.stateMachine && hasLifecycles(model);
     return true;
   });
   // Deep links to a hidden view (?view=ui on a UI-less EM) render the
@@ -734,6 +738,10 @@ export function ModelShell({
                 ) : activeView === 'waterfall' ? (
                   <ErrorBoundary>
                     <WaterfallBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : activeView === 'states' ? (
+                  <ErrorBoundary>
+                    <StateMachineBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
                 ) : (
                   <ErrorBoundary>

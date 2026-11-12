@@ -31,7 +31,11 @@ describe('TopBarMenu', () => {
   });
 
   function PreviewMenu() {
-    const [flags, setFlags] = useState<StudioFeatureFlags>({ laneMesh: false, streamTowers: false });
+    const [flags, setFlags] = useState<StudioFeatureFlags>({
+      laneMesh: false,
+      streamTowers: false,
+      stateMachine: false,
+    });
     return (
       <TopBarMenu
         onRefresh={vi.fn()}

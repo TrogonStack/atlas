@@ -4,6 +4,7 @@ import { z } from 'zod';
 const studioFeatureFlagsSchema = z.object({
   laneMesh: z.boolean().catch(false),
   streamTowers: z.boolean().catch(false),
+  stateMachine: z.boolean().catch(false),
 });
 
 export type StudioFeatureFlags = Readonly<z.infer<typeof studioFeatureFlagsSchema>>;
@@ -11,7 +12,8 @@ export type StudioFeatureFlags = Readonly<z.infer<typeof studioFeatureFlagsSchem
 export type StudioFeatureFlag = keyof StudioFeatureFlags;
 
 const STORAGE_KEY = 'trogon-atlas.studio.feature-flags';
-const DEFAULT_FLAGS: StudioFeatureFlags = Object.freeze({ laneMesh: false, streamTowers: false });
+const DEFAULT_FLAGS: StudioFeatureFlags = Object.freeze({ laneMesh: false, streamTowers: false, stateMachine: false });
+const FLAG_NAMES = Object.keys(DEFAULT_FLAGS) as StudioFeatureFlag[];
 const listeners = new Set<() => void>();
 let snapshot = DEFAULT_FLAGS;
 let storedValue: string | null | undefined;
@@ -27,7 +29,7 @@ function parseFlags(value: string | null): StudioFeatureFlags {
 }
 
 function updateSnapshot(flags: StudioFeatureFlags) {
-  if (snapshot.laneMesh !== flags.laneMesh || snapshot.streamTowers !== flags.streamTowers) {
+  if (FLAG_NAMES.some((name) => snapshot[name] !== flags[name])) {
     snapshot = Object.freeze(flags);
   }
 }
