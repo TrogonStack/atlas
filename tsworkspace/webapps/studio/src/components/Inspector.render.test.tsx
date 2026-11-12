@@ -396,6 +396,31 @@ describe('Inspector', () => {
     expect(screen.getByText('(ada)')).toBeDefined();
   });
 
+  it('shows owner and due on an open question annotation', () => {
+    const model = buildModel([
+      {
+        event: {
+          id: mkId('orders', 'placed'),
+          title: 'Order placed',
+          metadata: [
+            {
+              '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation',
+              question: 'who refunds a split shipment?',
+              author: 'ada',
+              owner: 'payments team',
+              due: { value: '2026-12-01' },
+            },
+          ],
+        },
+      },
+    ] as never);
+    const event = mustFind(model.entities.find((e) => e.kind === 'event'));
+    render(<Inspector model={model} entity={event} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText('who refunds a split shipment?')).toBeDefined();
+    expect(screen.getByText('Owner: payments team')).toBeDefined();
+    expect(screen.getByText('Due: 2026-12-01')).toBeDefined();
+  });
+
   it('renders the annotations section for a failure mode annotation', () => {
     const model = buildModel([
       {

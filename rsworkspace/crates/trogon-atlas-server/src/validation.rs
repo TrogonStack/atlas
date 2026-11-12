@@ -291,6 +291,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("MEMBER_NOT_FOUND", Error, "Member not found in store",
           "A member's (kind, id) does not resolve in the store; either the entity was deleted or the model is pointing at nothing.",
           Unspecified, "", "model"),
+        r("OPEN_QUESTION_DUE_INVALID", Warning, "Open question due date is not a calendar date",
+          "An OpenQuestionAnnotation carries a due date that is not a Gregorian YYYY-MM-DD date. The validator never compares the date to the clock, so it only checks the format.",
+          Unspecified, "metadata", "model"),
         r("OPEN_QUESTION_PRESENT", Info, "Entity carries an open question",
           "An entity or scenario carries an OpenQuestionAnnotation: an unanswered design question pinned to it. Informational; humans answer by editing the annotation or removing it once resolved.",
           Unspecified, "metadata", "model"),
@@ -713,6 +716,7 @@ mod catalog_drift_tests {
         "INVALID_KIND",
         "MEMBER_NOT_FOUND",
         "MISSING_ID",
+        "OPEN_QUESTION_DUE_INVALID",
         "OPEN_QUESTION_PRESENT",
         "ORPHAN_DOC_EMPTY",
         "ORPHAN_FLAG_OBSOLETE",
@@ -1008,13 +1012,42 @@ fn push_annotation_findings(
             if let Ok(a) =
                 <pb::OpenQuestionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
+                // Pure on purpose: no overdue check, so a bundle validates the
+                // same whenever it is checked.
+                let due = a
+                    .due
+                    .as_ref()
+                    .map(|d| d.value.as_str())
+                    .filter(|d| !d.is_empty());
+                let mut message = format!(
+                    "{label} has an open question ({}): {}",
+                    a.author, a.question
+                );
+                if !a.owner.is_empty() {
+                    message = format!("{message} [owner: {}]", a.owner);
+                }
+                if let Some(due) = due {
+                    message = format!("{message} [due: {due}]");
+                    if due
+                        .parse::<trogon_atlas_core::authored_date::AuthoredDate>()
+                        .is_err()
+                    {
+                        issues.push(pb::ValidationIssue {
+                            severity: pb::validation_issue::Severity::Warning as i32,
+                            code: "OPEN_QUESTION_DUE_INVALID".into(),
+                            message: format!(
+                                "{label} has an open question with due {due:?}: expected a Gregorian calendar date in YYYY-MM-DD format"
+                            ),
+                            subject: subject.cloned(),
+                            subject_field: subject_field.into(),
+                            ..Default::default()
+                        });
+                    }
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Info as i32,
                     code: "OPEN_QUESTION_PRESENT".into(),
-                    message: format!(
-                        "{label} has an open question ({}): {}",
-                        a.author, a.question
-                    ),
+                    message,
                     subject: subject.cloned(),
                     subject_field: subject_field.into(),
                     ..Default::default()
@@ -14407,6 +14440,8 @@ mod annotation_finding_tests {
             question: question.into(),
             author: author.into(),
             created_at: String::new(),
+            owner: String::new(),
+            due: None,
         };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
@@ -14455,6 +14490,73 @@ mod annotation_finding_tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    fn open_question_with_owner_due(owner: &str, due: &str) -> prost_types::Any {
+        use prost::Message;
+        let ann = pb::OpenQuestionAnnotation {
+            question: "who refunds a split shipment?".into(),
+            author: "alex".into(),
+            created_at: String::new(),
+            owner: owner.into(),
+            due: Some(pb::CalendarDate { value: due.into() }),
+        };
+        prost_types::Any {
+            type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
+                .into(),
+            value: ann.encode_to_vec(),
+        }
+    }
+
+    fn open_question_issues(any: prost_types::Any) -> Vec<pb::ValidationIssue> {
+        let all = vec![stored(event_with_metadata("order.placed", vec![any]))];
+        validate_model(&model(&[(pb::EntityKind::Event, "order.placed")]), &all)
+    }
+
+    #[test]
+    fn open_question_owner_and_due_appear_in_message() {
+        let issues =
+            open_question_issues(open_question_with_owner_due("payments team", "2026-12-01"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(
+            hit.message
+                .ends_with("[owner: payments team] [due: 2026-12-01]"),
+            "{}",
+            hit.message
+        );
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
+    }
+
+    #[test]
+    fn open_question_without_owner_or_due_keeps_old_message() {
+        let issues = open_question_issues(open_question_any("why?", "alex"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(hit.message.ends_with("(alex): why?"), "{}", hit.message);
+    }
+
+    #[test]
+    fn open_question_malformed_due_warns() {
+        for bad in ["next week", "2026-02-30", "2026-1-5"] {
+            let issues = open_question_issues(open_question_with_owner_due("", bad));
+            let hit = issues
+                .iter()
+                .find(|i| i.code == "OPEN_QUESTION_DUE_INVALID")
+                .unwrap_or_else(|| panic!("{bad}: {issues:?}"));
+            assert_eq!(hit.severity, pb::validation_issue::Severity::Warning as i32);
+            assert!(issues.iter().any(|i| i.code == "OPEN_QUESTION_PRESENT"));
+        }
+    }
+
+    #[test]
+    fn open_question_empty_due_value_is_unset() {
+        let issues = open_question_issues(open_question_with_owner_due("", ""));
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
     }
 
     #[test]
