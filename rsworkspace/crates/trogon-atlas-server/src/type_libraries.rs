@@ -592,7 +592,10 @@ impl TypeLibraryGate {
                 libraries: LibraryConsultation::Checked,
             });
         };
-        match self.live_pool(store, &id.namespace, pending, branch).await {
+        match self
+            .live_pool(store, &id.namespace, pending, &[], branch)
+            .await
+        {
             Ok(live) => Ok(UnknownAnnotationTypes {
                 annotations: annotations_outside(&live.pool, entity).annotations,
                 libraries: LibraryConsultation::Checked,
@@ -613,11 +616,13 @@ impl TypeLibraryGate {
     pub(crate) fn annotation_lookup<'a>(
         &'a self,
         pending: &'a [&'a pb::TypeLibrary],
+        removed: &'a [pb::Id],
         branch: Option<&'a str>,
     ) -> AnnotationTypeLookup<'a> {
         AnnotationTypeLookup {
             gate: self,
             pending,
+            removed,
             branch,
             pools: HashMap::new(),
         }
@@ -637,7 +642,7 @@ impl TypeLibraryGate {
         pending: &[&pb::TypeLibrary],
         branch: Option<&str>,
     ) -> Result<LivePool, Status> {
-        self.live_pool(store, namespace, pending, branch)
+        self.live_pool(store, namespace, pending, &[], branch)
             .await
             .map_err(PoolLookup::status)
     }
@@ -647,11 +652,17 @@ impl TypeLibraryGate {
         store: &dyn Store,
         namespace: &str,
         pending: &[&pb::TypeLibrary],
+        removed: &[pb::Id],
         branch: Option<&str>,
     ) -> Result<LivePool, PoolLookup> {
         let mut registered = load(store, namespace, branch)
             .await
             .map_err(PoolLookup::Propagate)?;
+        for id in removed {
+            if id.namespace == namespace {
+                registered.remove(&LibraryVersion::of(id));
+            }
+        }
         let admission = TypeLibraryAdmission {
             namespace: namespace.to_owned(),
             seen: registered
@@ -860,6 +871,7 @@ enum CachedPool {
 pub(crate) struct AnnotationTypeLookup<'a> {
     gate: &'a TypeLibraryGate,
     pending: &'a [&'a pb::TypeLibrary],
+    removed: &'a [pb::Id],
     branch: Option<&'a str>,
     pools: HashMap<String, CachedPool>,
 }
@@ -883,7 +895,7 @@ impl AnnotationTypeLookup<'_> {
         if !self.pools.contains_key(&id.namespace) {
             let cached = match self
                 .gate
-                .live_pool(store, &id.namespace, self.pending, self.branch)
+                .live_pool(store, &id.namespace, self.pending, self.removed, self.branch)
                 .await
             {
                 Ok(live) => CachedPool::Ready(live.pool),
@@ -1033,9 +1045,20 @@ fn unresolved_type_url(pool: &DescriptorPool, any: &DynamicMessage) -> Option<St
         return None;
     }
     let raw = any_type_url(any).unwrap_or_default();
-    let known =
-        TypeUrl::parse(&raw).is_ok_and(|url| pool.get_message_by_name(url.full_name()).is_some());
+    let known = TypeUrl::parse(&raw).is_ok_and(|url| annotation_type_is_known(pool, &url));
     (!known).then_some(raw)
+}
+
+fn annotation_type_is_known(pool: &DescriptorPool, url: &TypeUrl) -> bool {
+    if crate::annotation_type::BuiltinAnnotation::is_annotation(url.full_name()) {
+        return true;
+    }
+    let Some(message) = pool.get_message_by_name(url.full_name()) else {
+        return false;
+    };
+    let parent = message.parent_file();
+    let file = parent.name();
+    !file.starts_with("google/protobuf/") && !file.starts_with("trogonatlas/")
 }
 
 fn any_payload(pool: &DescriptorPool, any: &mut DynamicMessage) -> Option<DynamicMessage> {

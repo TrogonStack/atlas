@@ -11,6 +11,7 @@ use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl
 const BUILT_IN: &str = "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.OrphanAnnotation";
 const TENANT: &str = "type.googleapis.com/acme.notes.v1.ReviewNote";
 const MISSPELLED: &str = "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.OrphanAnotation";
+const TIMESTAMP: &str = "type.googleapis.com/google.protobuf.Timestamp";
 
 async fn service() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
@@ -143,6 +144,68 @@ fn misspelled_at(namespace: &str, path: &str) -> Vec<(i32, pb::Id, String, bool)
         path.into(),
         true,
     )]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_warns_about_a_well_known_type_used_as_an_annotation() {
+    let service = service().await;
+    let ns = "uat-timestamp";
+
+    let response = put(&service, annotated_event(ns, &[TIMESTAMP]), false).await;
+
+    assert_eq!(
+        unknown_annotations(&response.validation),
+        vec![(
+            pb::validation_issue::Severity::Warning as i32,
+            id(ns, "placed"),
+            "metadata[0]".into(),
+            false,
+        )]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_delete_of_a_library_warns_about_its_annotation() {
+    let service = service().await;
+    let ns = "uat-deleted-library";
+    put(&service, notes_library(ns), false).await;
+
+    let response = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: vec![
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                        kind: pb::EntityKind::TypeLibrary as i32,
+                        id: Some(id(ns, "acme.notes")),
+                        ..Default::default()
+                    })),
+                },
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(put_request(
+                        annotated_event(ns, &[TENANT]),
+                        false,
+                    ))),
+                },
+            ],
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let put = match &response.results[1].result {
+        Some(pb::batch_mutate_op_result::Result::Put(put)) => put,
+        other => panic!("expected a put result, got {other:?}"),
+    };
+
+    assert_eq!(
+        unknown_annotations(&put.validation),
+        vec![(
+            pb::validation_issue::Severity::Warning as i32,
+            id(ns, "placed"),
+            "metadata[0]".into(),
+            false,
+        )]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
