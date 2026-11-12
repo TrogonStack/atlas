@@ -3,8 +3,7 @@
 Model a workflow that runs several automated steps in order, with
 compensation when a step fails. Atlas has no process-manager kind. A
 progress read model and one AutomationSlice for each step carry the
-routing. The
-[`acme-order-workflow`](../../examples/manifests/acme-order-workflow/)
+routing. The [`acme-order-workflow`](../../examples/manifests/acme-order-workflow/)
 namespace is the finished result: tax, then payment, then shipping, and a
 cancellation when payment fails.
 
@@ -53,8 +52,8 @@ Four automations read this read model, so name them in a
 ## 2. Add one AutomationSlice for each step
 
 Each step has its own Processor, its own AutomationSlice, and exactly one
-command. The tax step (YAML in this guide is abbreviated, and `...` stands for the
-`namespace` and `version` of the reference):
+command. This is the tax step. YAML in this guide is abbreviated, and `...`
+stands for the `namespace` and `version` of the reference:
 
 ```yaml
 kind: AutomationSlice
@@ -104,11 +103,11 @@ rows on which it stays idle.
 
 ## 4. Let one command emit either outcome
 
-Issue 362 asks for a worker that sends `CompletePayment` or `FailPayment`. The
-rule is "a processor issues exactly one command"
-(`PROCESSOR_MULTIPLE_COMMANDS`, Error), so two commands need two
-processors. Use one command instead. The payment gateway decides the
-outcome, and the lane's transitions declare both roads:
+A payment step can succeed or fail. A processor issues exactly one command
+(`PROCESSOR_MULTIPLE_COMMANDS`, Error), so a worker that sends
+`CompletePayment` or `FailPayment` needs two processors. Use one command
+instead. The payment gateway decides the outcome, and the lane's
+transitions declare both outcomes:
 
 ```yaml
 kind: Swimlane
@@ -135,9 +134,8 @@ commands, so they are different automations.
 The storyboard lists the slices in time order. Each AutomationSlice sits
 after the projection of the event that made its row true. The board reads
 as the chain: `calculate-tax`, the progress projection, `capture-payment`,
-and then two roads from the payment projection: `ship-order` and
-`cancel-order`. The lane's transitions give the fork, and the `noCommand`
-scenarios show which road each automation refuses.
+and then two branches from the payment projection: `ship-order` and
+`cancel-order`.
 
 ## Validate
 
