@@ -5997,7 +5997,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
             .await?;
         graph::validate_responsibility_discovery_budget(&all)?;
-        let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true)?;
+        let mut all_nodes =
+            graph::impact(&all, kind, &id, max_depth, true, req.include_containers)?;
 
         if !req.filter_kinds.is_empty() {
             let allowed: std::collections::HashSet<i32> =

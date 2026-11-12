@@ -58,8 +58,8 @@ Use existing model tools before searching exports manually:
 | `get_entity_json` | Fetch an exact definition and retain its opaque `etag`. |
 | `get_outgoing_references` | Find definitions referenced by the subject or a related slice. |
 | `get_incoming_references` | Find consumers, emitting slices, containing storyboards, and model memberships. |
-| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. |
-| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. |
+| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. Containers such as event models are reported but their members are not expanded unless `include_containers` is true. |
+| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. It walks incoming references only, so it is the dependents-only view. |
 
 Except for `classify_impact`, these tools take flat identity arguments, for
 example:

@@ -5657,6 +5657,11 @@ pub struct GetImpactRequest {
     pub page_size: i32,
     #[prost(string, tag="5")]
     pub page_token: ::prost::alloc::string::String,
+    /// Walk down through every member of a container (event model, component)
+    /// reached on the way. Off by default because a container lists all of its
+    /// members, so unrelated siblings would otherwise count as impacted.
+    #[prost(bool, tag="6")]
+    pub include_containers: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetImpactResponse {

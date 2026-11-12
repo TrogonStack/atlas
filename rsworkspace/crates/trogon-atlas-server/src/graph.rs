@@ -993,14 +993,30 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
     }
 }
 
+/// True for the outbound ref a container uses to list one of its members.
+fn is_container_member_ref(source: pb::EntityKind, from_field: &str) -> bool {
+    match source {
+        pb::EntityKind::EventModel | pb::EntityKind::Component => {
+            from_field.starts_with("members[")
+        }
+        pb::EntityKind::Storyboard => {
+            from_field.starts_with("slices[") || from_field.starts_with("traces[")
+        }
+        _ => false,
+    }
+}
+
 /// Breadth-first impact analysis from a root `EntityRef`. Each visited node
-/// records hop count and the path of references taken to reach it.
+/// records hop count and the path of references taken to reach it. Unless
+/// `include_containers` is set, a non-root container (event model, storyboard,
+/// component) is emitted but its members are not walked.
 pub fn impact(
     all: &[StoredEntity],
     root_kind: pb::EntityKind,
     root_id: &pb::Id,
     max_depth: u32,
     follow_incoming: bool,
+    include_containers: bool,
 ) -> Result<Vec<pb::ImpactNode>, Status> {
     let known: HashSet<pb::EntityKey> = all
         .iter()
@@ -1082,6 +1098,16 @@ pub fn impact(
                     continue;
                 }
             };
+            // A container lists every member, so walking down through one
+            // reaches siblings that never depend on the root. The root itself
+            // is exempt so impact of a container still lists its members.
+            if !is_incoming
+                && !include_containers
+                && depth > 0
+                && is_container_member_ref(k, &r.from_field)
+            {
+                continue;
+            }
             let okey = pb::EntityKey::new(ok, oid);
             let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
@@ -1406,6 +1432,7 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             /*follow_incoming=*/ true,
+            /*include_containers=*/ false,
         )
         .unwrap();
         let entity_ids: Vec<String> = nodes
@@ -1424,6 +1451,93 @@ mod impact_tests {
             entity_ids.iter().any(|s| s.contains("place")),
             "root must always be present: {entity_ids:?}"
         );
+    }
+
+    fn stored_event_model(
+        ns: &str,
+        slug: &str,
+        members: &[(pb::EntityKind, &str)],
+    ) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                    id: Some(id(ns, slug)),
+                    title: slug.into(),
+                    members: members
+                        .iter()
+                        .map(|(k, s)| pb::EntityRef {
+                            kind: *k as i32,
+                            id: Some(id(ns, s)),
+                        })
+                        .collect(),
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        }
+    }
+
+    fn impact_slugs(include_containers: bool) -> Vec<String> {
+        let all = vec![
+            stored_event_model(
+                "shop",
+                "model",
+                &[
+                    (pb::EntityKind::CommandSlice, "cart"),
+                    (pb::EntityKind::CommandSlice, "reviews"),
+                ],
+            ),
+            stored_command_slice("shop", "cart", None),
+            stored_command_slice("shop", "reviews", None),
+        ];
+        let nodes = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("shop", "cart"),
+            4,
+            true,
+            include_containers,
+        )
+        .unwrap();
+        nodes
+            .iter()
+            .filter_map(|n| n.entity.as_ref()?.id.as_ref().map(|i| i.slug.clone()))
+            .collect()
+    }
+
+    /// Pins that a container is reported but not walked down into, so an
+    /// unrelated sibling member is not part of the impact.
+    #[test]
+    fn impact_does_not_expand_container_members_by_default() {
+        let slugs = impact_slugs(false);
+        assert!(slugs.contains(&"model".to_string()), "{slugs:?}");
+        assert!(!slugs.contains(&"reviews".to_string()), "{slugs:?}");
+    }
+
+    #[test]
+    fn impact_expands_container_members_when_requested() {
+        let slugs = impact_slugs(true);
+        assert!(slugs.contains(&"model".to_string()), "{slugs:?}");
+        assert!(slugs.contains(&"reviews".to_string()), "{slugs:?}");
+    }
+
+    #[test]
+    fn impact_of_container_root_lists_its_members() {
+        let all = vec![
+            stored_event_model("shop", "model", &[(pb::EntityKind::CommandSlice, "cart")]),
+            stored_command_slice("shop", "cart", None),
+        ];
+        let nodes = impact(
+            &all,
+            pb::EntityKind::EventModel,
+            &id("shop", "model"),
+            2,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(nodes.len(), 2);
     }
 
     /// `filter_refs_by_kinds` must filter the *other* end of the ref,
@@ -1617,6 +1731,7 @@ mod impact_tests {
             &id("app", "checkout"),
             2,
             true,
+            false,
         )
         .unwrap();
         let has_ui = nodes.iter().any(|n| {
@@ -1687,6 +1802,7 @@ mod impact_tests {
             &id("checkout", "review"),
             2,
             true,
+            false,
         )
         .unwrap();
         let has_amb = nodes.iter().any(|n| {
@@ -1759,6 +1875,7 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             true,
+            false,
         )
         .unwrap();
         let has_sibling = nodes.iter().any(|n| {

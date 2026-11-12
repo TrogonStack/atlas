@@ -2710,6 +2710,7 @@ async fn get_impact_includes_referencing_slice() {
             filter_kinds: Vec::new(),
             page_size: 0,
             page_token: String::new(),
+            include_containers: false,
         }))
         .await
         .unwrap()
@@ -2727,6 +2728,72 @@ async fn get_impact_includes_referencing_slice() {
         "impact of order-confirmed must include place-order-slice; nodes: {:?}",
         resp.nodes
     );
+}
+
+/// Impact of one member of an event model must not list unrelated siblings
+/// unless `include_containers` is set. The model itself is still reported.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_impact_skips_container_members_unless_requested() {
+    let svc = svc().await;
+    let ns = "impactcont";
+    let mut model = make_event_model(ns, "storefront");
+    if let Some(pb::entity::Kind::EventModel(m)) = model.kind.as_mut() {
+        m.members = ["cart-slice", "reviews-slice"]
+            .iter()
+            .map(|s| pb::EntityRef {
+                kind: pb::EntityKind::CommandSlice as i32,
+                id: Some(id(ns, s, 1)),
+            })
+            .collect();
+    }
+    for entity in [
+        make_event(ns, "cart-event", 1),
+        make_event(ns, "reviews-event", 1),
+        make_command_slice_referencing_event(ns, "cart-slice", "cart-event"),
+        make_command_slice_referencing_event(ns, "reviews-slice", "reviews-event"),
+        model,
+    ] {
+        svc.put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(entity),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap();
+    }
+
+    let slugs = |include_containers: bool| {
+        let svc = &svc;
+        async move {
+            svc.get_impact(Request::new(pb::GetImpactRequest {
+                root: Some(pb::EntityRef {
+                    kind: pb::EntityKind::CommandSlice as i32,
+                    id: Some(id(ns, "cart-slice", 1)),
+                }),
+                include_containers,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .nodes
+            .into_iter()
+            .filter_map(|n| n.entity?.id.map(|i| i.slug))
+            .collect::<Vec<_>>()
+        }
+    };
+
+    let default = slugs(false).await;
+    assert!(default.contains(&"storefront".to_string()), "{default:?}");
+    assert!(
+        !default.contains(&"reviews-slice".to_string()),
+        "{default:?}"
+    );
+    let full = slugs(true).await;
+    assert!(full.contains(&"reviews-slice".to_string()), "{full:?}");
 }
 
 /// A non-empty `filter_kinds` must restrict the returned impact nodes to
@@ -2770,6 +2837,7 @@ async fn get_impact_filter_kinds_restricts_result_kinds() {
             filter_kinds: vec![pb::EntityKind::ReadModel as i32],
             page_size: 0,
             page_token: String::new(),
+            include_containers: false,
         }))
         .await
         .unwrap()

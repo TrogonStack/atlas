@@ -132,6 +132,8 @@ struct ImpactParamsDe {
     max_depth: u32,
     #[serde(default)]
     filter_kinds: Option<Vec<String>>,
+    #[serde(default)]
+    include_containers: bool,
 }
 
 #[derive(Debug, schemars::JsonSchema)]
@@ -148,6 +150,11 @@ pub struct ImpactParams {
     #[serde(default)]
     pub max_depth: u32,
     pub filter_kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Also walk down through every member of event models and components reached. Default false, so unrelated sibling members are not reported."
+    )]
+    #[serde(default)]
+    pub include_containers: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -177,6 +184,7 @@ impl<'de> Deserialize<'de> for ImpactParams {
             version: raw.version,
             max_depth: raw.max_depth,
             filter_kinds: raw.filter_kinds,
+            include_containers: raw.include_containers,
         })
     }
 }
