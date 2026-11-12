@@ -1930,15 +1930,11 @@ pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::Validation
     issues
 }
 
+type LaneTransitions<'a> = HashMap<pb::IdKey, &'a Vec<pb::swimlane::Transition>>;
+
 /// Event-to-lane and lane-to-transitions maps shared by the rules that read
 /// swimlane lifecycles. Lanes without transitions are left out of the second map.
-#[allow(clippy::type_complexity)]
-fn lane_maps(
-    all: &[StoredEntity],
-) -> (
-    HashMap<pb::IdKey, pb::Id>,
-    HashMap<pb::IdKey, &Vec<pb::swimlane::Transition>>,
-) {
+fn lane_maps(all: &[StoredEntity]) -> (HashMap<pb::IdKey, pb::Id>, LaneTransitions<'_>) {
     let event_lane = all
         .iter()
         .filter_map(|se| match se.entity.kind.as_ref() {
@@ -6004,7 +6000,7 @@ pub fn validate_model_content(
         }
     }
 
-    // Rule 2: updates from divergent branches are separate slices. A read
+    // Updates from divergent branches are separate slices. A read
     // model slice that projects two alternative successors of one lane
     // transition merges the fork into one moment.
     {
