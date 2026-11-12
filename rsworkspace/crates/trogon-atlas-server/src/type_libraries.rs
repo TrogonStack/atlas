@@ -431,7 +431,7 @@ impl TypeLibraryGate {
         type_url: &TypeUrl,
         branch: Option<&str>,
     ) -> Result<pb::ResolveTypeResponse, Status> {
-        let live = self.live_pool(store, namespace, &[], branch).await?;
+        let live = self.live_pool_status(store, namespace, &[], branch).await?;
         let message = live
             .pool
             .get_message_by_name(type_url.full_name())
@@ -458,7 +458,7 @@ impl TypeLibraryGate {
         namespace: &str,
         branch: Option<&str>,
     ) -> Result<pb::GetTypeLibraryDescriptorSetResponse, Status> {
-        let live = self.live_pool(store, namespace, &[], branch).await?;
+        let live = self.live_pool_status(store, namespace, &[], branch).await?;
         let files: Vec<FileDescriptor> = live
             .pool
             .files()
@@ -494,7 +494,9 @@ impl TypeLibraryGate {
         pending: &[&pb::TypeLibrary],
         branch: Option<&str>,
     ) -> Result<Vec<prost_types::FileDescriptorProto>, Status> {
-        let live = self.live_pool(store, namespace, pending, branch).await?;
+        let live = self
+            .live_pool_status(store, namespace, pending, branch)
+            .await?;
         let files: Vec<FileDescriptor> = live
             .pool
             .files()
@@ -533,7 +535,7 @@ impl TypeLibraryGate {
         let type_url = TypeUrl::parse(&schema.type_url)
             .map_err(|e| invalid(format!("schema.type_url: {e}")))?;
         let live = self
-            .live_pool(store, &id.namespace, pending, branch)
+            .live_pool_status(store, &id.namespace, pending, branch)
             .await?;
         let message = live
             .pool
@@ -566,8 +568,9 @@ impl TypeLibraryGate {
     /// Annotations on `entity`, at any depth, whose type neither the
     /// built-in types nor the namespace's live type libraries declare.
     /// `pending` are type libraries written alongside the entity. Live
-    /// libraries that do not compile together leave tenant types unresolved
-    /// instead of refusing the write.
+    /// libraries that do not compile together, and a compiler that times out
+    /// or is unavailable, leave tenant types unresolved instead of refusing
+    /// the write. A failure to load the libraries still refuses it.
     ///
     /// # Errors
     ///
@@ -593,13 +596,25 @@ impl TypeLibraryGate {
                 annotations: annotations_outside(&live.pool, entity),
                 libraries_unresolved: false,
             }),
-            Err(status) if status.code() == Code::FailedPrecondition => {
-                Ok(UnknownAnnotationTypes {
-                    annotations: unknown,
-                    libraries_unresolved: true,
-                })
-            }
-            Err(status) => Err(status),
+            Err(PoolLookup::Advisory(_)) => Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries_unresolved: true,
+            }),
+            Err(PoolLookup::Propagate(status)) => Err(status),
+        }
+    }
+
+    /// One type-library lookup per namespace, shared by every put in a batch.
+    pub(crate) fn annotation_lookup<'a>(
+        &'a self,
+        pending: &'a [&'a pb::TypeLibrary],
+        branch: Option<&'a str>,
+    ) -> AnnotationTypeLookup<'a> {
+        AnnotationTypeLookup {
+            gate: self,
+            pending,
+            branch,
+            pools: HashMap::new(),
         }
     }
 
@@ -610,14 +625,28 @@ impl TypeLibraryGate {
             .is_some()
     }
 
-    async fn live_pool(
+    async fn live_pool_status(
         &self,
         store: &dyn Store,
         namespace: &str,
         pending: &[&pb::TypeLibrary],
         branch: Option<&str>,
     ) -> Result<LivePool, Status> {
-        let mut registered = load(store, namespace, branch).await?;
+        self.live_pool(store, namespace, pending, branch)
+            .await
+            .map_err(PoolLookup::status)
+    }
+
+    async fn live_pool(
+        &self,
+        store: &dyn Store,
+        namespace: &str,
+        pending: &[&pb::TypeLibrary],
+        branch: Option<&str>,
+    ) -> Result<LivePool, PoolLookup> {
+        let mut registered = load(store, namespace, branch)
+            .await
+            .map_err(PoolLookup::Propagate)?;
         let admission = TypeLibraryAdmission {
             namespace: namespace.to_owned(),
             seen: registered
@@ -643,9 +672,11 @@ impl TypeLibraryGate {
             let Some(id) = entry.library.id.as_ref() else {
                 continue;
             };
-            let source = self.source_of(&entry.library)?;
+            let source = self
+                .source_of(&entry.library)
+                .map_err(PoolLookup::Propagate)?;
             owners.push((source.prefix().clone(), id.clone()));
-            let dependencies = dependency_keys(id, &entry.library)?
+            let dependencies = dependency_keys(id, &entry.library).map_err(PoolLookup::Propagate)?
                 .into_iter()
                 .map(|dependency| {
                     live.get(dependency.slug.as_str())
@@ -662,7 +693,7 @@ impl TypeLibraryGate {
             .pools
             .get_or_build(PoolScope::new(namespace, branch), members)
             .await
-            .map_err(|e| pool_err(namespace, e))?;
+            .map_err(|e| pool_lookup(namespace, e))?;
         Ok(LivePool {
             pool,
             owners,
@@ -804,6 +835,59 @@ pub struct UnknownAnnotationTypes {
     pub libraries_unresolved: bool,
 }
 
+enum CachedPool {
+    Ready(Arc<DescriptorPool>),
+    Unresolved,
+}
+
+pub(crate) struct AnnotationTypeLookup<'a> {
+    gate: &'a TypeLibraryGate,
+    pending: &'a [&'a pb::TypeLibrary],
+    branch: Option<&'a str>,
+    pools: HashMap<String, CachedPool>,
+}
+
+impl AnnotationTypeLookup<'_> {
+    pub(crate) async fn unknown(
+        &mut self,
+        store: &dyn Store,
+        entity: &pb::Entity,
+    ) -> Result<UnknownAnnotationTypes, Status> {
+        let builtins = self.gate.pools.builtins();
+        let unknown = annotations_outside(builtins, entity);
+        let Some(id) = trogon_atlas_core::refs::entity_id(entity).filter(|_| !unknown.is_empty())
+        else {
+            return Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries_unresolved: false,
+            });
+        };
+        if !self.pools.contains_key(&id.namespace) {
+            let cached = match self
+                .gate
+                .live_pool(store, &id.namespace, self.pending, self.branch)
+                .await
+            {
+                Ok(live) => CachedPool::Ready(live.pool),
+                Err(PoolLookup::Advisory(_)) => CachedPool::Unresolved,
+                Err(PoolLookup::Propagate(status)) => return Err(status),
+            };
+            self.pools.insert(id.namespace.clone(), cached);
+        }
+        match self.pools.get(&id.namespace) {
+            Some(CachedPool::Ready(pool)) => Ok(UnknownAnnotationTypes {
+                annotations: annotations_outside(pool, entity),
+                libraries_unresolved: false,
+            }),
+            Some(CachedPool::Unresolved) => Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries_unresolved: true,
+            }),
+            None => Err(Status::internal("annotation type pool was not recorded")),
+        }
+    }
+}
+
 const ANY_MESSAGE: &str = "google.protobuf.Any";
 const ENTITY_MESSAGE: &str = "trogonatlas.eventmodel.v1alpha1.Entity";
 
@@ -861,13 +945,28 @@ fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> Vec<Unknow
                     .map(|(i, value)| (value, format!("{path}[{i}]"))),
             ),
             Value::Map(values) => {
-                pending.extend(values.into_values().map(|value| (value, path.clone())));
+                pending.extend(
+                    values
+                        .into_iter()
+                        .map(|(key, value)| (value, format!("{path}[{}]", map_key(&key)))),
+                );
             }
             _ => {}
         }
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+fn map_key(key: &prost_reflect::MapKey) -> String {
+    match key {
+        prost_reflect::MapKey::Bool(value) => value.to_string(),
+        prost_reflect::MapKey::I32(value) => value.to_string(),
+        prost_reflect::MapKey::I64(value) => value.to_string(),
+        prost_reflect::MapKey::U32(value) => value.to_string(),
+        prost_reflect::MapKey::U64(value) => value.to_string(),
+        prost_reflect::MapKey::String(value) => value.clone(),
+    }
 }
 
 fn any_type_url(any: &DynamicMessage) -> Option<String> {
@@ -907,15 +1006,32 @@ fn unknown_type(namespace: &str, type_url: &TypeUrl) -> Status {
     )
 }
 
-fn pool_err(namespace: &str, error: PoolError<LibraryVersion>) -> Status {
+enum PoolLookup {
+    /// The libraries could not be compiled. An annotation check reports that
+    /// instead of refusing the write.
+    Advisory(Status),
+    /// The libraries could not be loaded, or one of them is not a valid
+    /// library. The write cannot proceed.
+    Propagate(Status),
+}
+
+impl PoolLookup {
+    fn status(self) -> Status {
+        match self {
+            Self::Advisory(status) | Self::Propagate(status) => status,
+        }
+    }
+}
+
+fn pool_lookup(namespace: &str, error: PoolError<LibraryVersion>) -> PoolLookup {
     match error {
         PoolError::Compile {
             error: error @ (CompileError::TimedOut(_) | CompileError::Unavailable),
             ..
-        } => compile_err(error),
-        other => Status::failed_precondition(format!(
+        } => PoolLookup::Advisory(compile_err(error)),
+        other => PoolLookup::Advisory(Status::failed_precondition(format!(
             "the live type libraries in namespace {namespace} do not compile together: {other}"
-        )),
+        ))),
     }
 }
 

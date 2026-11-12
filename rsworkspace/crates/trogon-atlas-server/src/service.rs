@@ -8446,6 +8446,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .collect();
         let mut annotation_issues: Vec<Vec<pb::ValidationIssue>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
+        let mut annotation_types = self
+            .type_libraries
+            .annotation_lookup(&pending_libraries, branch.as_deref());
         for (m, issues) in metas.iter().zip(&mut annotation_issues) {
             let Some(entity) = m.entity.as_ref().filter(|_| m.is_put) else {
                 continue;
@@ -8464,15 +8467,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     kind: m.kind as i32,
                     id: Some(m.id.clone()),
                 },
-                &self
-                    .type_libraries
-                    .unknown_annotation_types(
-                        &*self.store,
-                        entity,
-                        &pending_libraries,
-                        branch.as_deref(),
-                    )
-                    .await?,
+                &annotation_types.unknown(&*self.store, entity).await?,
             );
         }
 
