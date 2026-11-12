@@ -1,7 +1,7 @@
 //! Stable identities for explicit connection occurrences within an entity.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
     str::FromStr,
     sync::LazyLock,
@@ -756,6 +756,60 @@ pub fn assign_connection_ids(entity: &mut Entity) -> Result<usize, ConnectionErr
     Ok(assigned)
 }
 
+/// Copy stored IDs onto ID-less occurrences of a client-authored manifest.
+///
+/// Occurrences are paired per signature, in order: the Nth ID-less occurrence
+/// takes the Nth stored occurrence with the same reference. Stored IDs that the
+/// manifest already carries are never reused. Unmatched stored occurrences are
+/// removals and unmatched manifest occurrences stay new.
+pub fn adopt_connection_ids(
+    current: &Entity,
+    desired: &mut Entity,
+) -> Result<usize, ConnectionError> {
+    validate_stored_connection_ids(current)?;
+    validate_connection_ids(desired)?;
+    let present: HashSet<_> = connection_occurrences(desired)?
+        .into_iter()
+        .filter_map(|item| item.id)
+        .collect();
+    let mut stored: HashMap<Vec<u8>, VecDeque<ConnectionId>> = HashMap::new();
+    for item in connection_occurrences(current)? {
+        if let Some(id) = item.id.filter(|id| !present.contains(id)) {
+            stored.entry(item.signature).or_default().push_back(id);
+        }
+    }
+    let mut normalized = dynamic(desired)?;
+    let mut adopted = 0;
+    visit(&mut normalized, "", "", &[], &mut |message, occurrence| {
+        if occurrence.id.is_some() {
+            return Ok(());
+        }
+        let Some(id) = stored
+            .get_mut(&occurrence.signature)
+            .and_then(VecDeque::pop_front)
+        else {
+            return Ok(());
+        };
+        let field = message
+            .descriptor()
+            .get_field_by_name(identity_field(message))
+            .ok_or_else(|| ConnectionError::Encoding("connection ID descriptor missing".into()))?;
+        let prost_reflect::Kind::Message(descriptor) = field.kind() else {
+            return Err(ConnectionError::Encoding(
+                "connection ID is not a message".into(),
+            ));
+        };
+        let mut value = DynamicMessage::new(descriptor);
+        value.set_field_by_name("value", Value::String(id.to_string()));
+        message.set_field(&field, Value::Message(value));
+        adopted += 1;
+        Ok(())
+    })?;
+    *desired = Entity::decode(normalized.encode_to_vec().as_slice())
+        .map_err(|error| ConnectionError::Encoding(error.to_string()))?;
+    Ok(adopted)
+}
+
 /// Check identity continuity against the current owner before minting IDs for additions.
 pub fn reconcile_connection_ids(
     previous: &Entity,
@@ -925,6 +979,85 @@ mod tests {
         let decoded = Entity::decode(reordered.encode_to_vec().as_slice()).unwrap();
         let resolved = resolve_connection(&decoded, &old_ref).unwrap();
         assert_eq!(resolved.path, "command_slice.emitted_events[1]");
+    }
+
+    fn emitted_ids(entity: &mut Entity) -> Vec<Option<String>> {
+        slice(entity)
+            .emitted_events
+            .iter()
+            .map(|edge| edge.connection_id.as_ref().map(|id| id.value.clone()))
+            .collect()
+    }
+
+    fn stripped(entity: &Entity) -> Entity {
+        let mut copy = entity.clone();
+        let slice = slice(&mut copy);
+        slice.command.as_mut().unwrap().connection_id = None;
+        for edge in &mut slice.emitted_events {
+            edge.connection_id = None;
+        }
+        copy
+    }
+
+    #[test]
+    fn adopt_pairs_repeated_endpoints_in_order() {
+        let mut stored = fixture();
+        assign_connection_ids(&mut stored).unwrap();
+        let mut desired = stripped(&stored);
+        slice(&mut desired).emitted_events[1].doc = "annotation".into();
+        assert_eq!(adopt_connection_ids(&stored, &mut desired).unwrap(), 3);
+        assert_eq!(emitted_ids(&mut desired), emitted_ids(&mut stored));
+        assert_eq!(
+            slice(&mut desired).command.as_ref().unwrap().connection_id,
+            slice(&mut stored).command.as_ref().unwrap().connection_id
+        );
+        assert!(reconcile_connection_ids(&stored, &mut desired).is_ok());
+    }
+
+    #[test]
+    fn adopt_skips_occurrences_whose_reference_is_gone() {
+        let mut stored = fixture();
+        assign_connection_ids(&mut stored).unwrap();
+        let mut desired = stripped(&stored);
+        slice(&mut desired).emitted_events[0]
+            .event
+            .as_mut()
+            .unwrap()
+            .id = Some(id("order-rejected"));
+        assert_eq!(adopt_connection_ids(&stored, &mut desired).unwrap(), 2);
+        let ids = emitted_ids(&mut desired);
+        assert_eq!(ids[0], None);
+        assert_eq!(ids[1], emitted_ids(&mut stored)[0]);
+    }
+
+    #[test]
+    fn adopt_leaves_extra_occurrences_new() {
+        let mut stored = fixture();
+        assign_connection_ids(&mut stored).unwrap();
+        let mut desired = stripped(&stored);
+        let extra = slice(&mut desired).emitted_events[0].clone();
+        slice(&mut desired).emitted_events.push(extra);
+        assert_eq!(adopt_connection_ids(&stored, &mut desired).unwrap(), 3);
+        let ids = emitted_ids(&mut desired);
+        assert_eq!(ids[..2], emitted_ids(&mut stored)[..]);
+        assert_eq!(ids[2], None);
+        assert_eq!(reconcile_connection_ids(&stored, &mut desired).unwrap(), 1);
+    }
+
+    #[test]
+    fn adopt_never_reuses_an_id_the_manifest_already_carries() {
+        let mut stored = fixture();
+        assign_connection_ids(&mut stored).unwrap();
+        let mut desired = stripped(&stored);
+        let kept = emitted_ids(&mut stored)[0].clone().unwrap();
+        slice(&mut desired).emitted_events[1].connection_id =
+            Some(trogon_atlas_proto::ConnectionId {
+                value: kept.clone(),
+            });
+        assert_eq!(adopt_connection_ids(&stored, &mut desired).unwrap(), 2);
+        let ids = emitted_ids(&mut desired);
+        assert_eq!(ids[1].as_deref(), Some(kept.as_str()));
+        assert_eq!(ids[0], emitted_ids(&mut stored)[1]);
     }
 
     #[test]

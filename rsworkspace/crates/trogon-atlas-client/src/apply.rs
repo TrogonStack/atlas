@@ -166,12 +166,23 @@ pub async fn plan(
     manifests
         .into_iter()
         .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
-        .map(|(manifest, ((entity, found), etag))| {
+        .map(|(mut manifest, ((entity, found), etag))| {
             let observed = match Revision::from_wire(&etag)? {
                 Revision::Absent if found => None,
                 revision => Some(revision),
             };
             let current = found.then_some(entity);
+            if let Some(current) = &current {
+                // A manifest authored without connection IDs adopts the stored
+                // ones. A stored entity the helper rejects is left for the
+                // server to report.
+                let mut adopted = manifest.entity.clone();
+                if trogon_atlas_core::connections::adopt_connection_ids(current, &mut adopted)
+                    .is_ok()
+                {
+                    manifest.entity = adopted;
+                }
+            }
             let action = classify(&manifest.entity, current.as_ref());
             Ok(PlannedChange {
                 manifest,
@@ -770,6 +781,50 @@ mod tests {
         slice.command.as_mut().unwrap().connection_id =
             Some(trogon_atlas_core::connections::ConnectionId::new().into());
         assert_eq!(classify(&changed_id, Some(&current)), Action::Configure);
+    }
+
+    #[test]
+    fn idless_manifest_with_an_added_annotation_adopts_stored_ids_and_configures() {
+        let mut current = pb::Entity {
+            kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(pb::Id {
+                    namespace: "acme-orders".into(),
+                    slug: "place-order-slice".into(),
+                    version: 1,
+                }),
+                command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(pb::Id {
+                            namespace: "acme-orders".into(),
+                            slug: "place-order".into(),
+                            version: 1,
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            system: None,
+        };
+        trogon_atlas_core::connections::assign_connection_ids(&mut current).unwrap();
+        let stored_id = |entity: &pb::Entity| match entity.kind.as_ref() {
+            Some(pb::entity::Kind::CommandSlice(slice)) => {
+                slice.command.as_ref().unwrap().connection_id.clone()
+            }
+            _ => panic!("expected slice"),
+        };
+        let mut planned = current.clone();
+        let Some(pb::entity::Kind::CommandSlice(slice)) = planned.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        let edge = slice.command.as_mut().unwrap();
+        edge.connection_id = None;
+        edge.doc = "open question".into();
+
+        trogon_atlas_core::connections::adopt_connection_ids(&current, &mut planned).unwrap();
+        assert_eq!(classify(&planned, Some(&current)), Action::Configure);
+        assert_eq!(stored_id(&planned), stored_id(&current));
+        assert!(stored_id(&planned).is_some());
     }
 
     #[test]

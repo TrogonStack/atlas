@@ -110,15 +110,20 @@ On creation and when adding an occurrence, an omitted ID requests a fresh
 server-generated ID. Distinct occurrences receive distinct IDs even when their
 endpoints match. The returned/stored entity is authoritative: clients preserve
 its IDs on subsequent edits. A caller cannot introduce an arbitrary supplied ID
-on an existing owner, even if it has valid UUID syntax. An edit that strips IDs
-from retained connections is rejected rather than silently rematched by list
-index or endpoint.
-For declarative manifests, export the stored result after the initial apply and
-retain the assigned IDs in the authored manifests before editing them again.
-Reapplying an unchanged id-less manifest remains a no-op: comparison can ignore
-assigned IDs only when the complete remaining content matches. The backend
-preserves the stored IDs for that exact-content case too. This does not authorize
-an identity-stripping update or match edited connections by endpoint or position.
+on an existing owner, even if it has valid UUID syntax. A raw write that strips
+IDs from retained connections is rejected. The server does not rematch them by
+list index or endpoint. To change the reference of a connection with a raw
+write, remove it in one write and add it again in a second write.
+
+The `apply` and `diff` commands, and the matching MCP tools, accept manifests
+without connection IDs. For each occurrence without an ID, the client copies
+the stored ID of the occurrence that has the same reference. When an endpoint
+is repeated, the occurrences are paired in order: the first omitted ID takes
+the first stored ID with that reference. An ID that the manifest already
+carries is never copied to a second occurrence. A stored occurrence with no
+match in the manifest is a removal. A manifest occurrence with no stored match
+is new and receives a fresh ID. Reapplying an unchanged id-less manifest is a
+no-op.
 
 Validation-only preparation may show newly assigned IDs but does not reserve
 them. Keep new occurrence IDs omitted in the eventual write to an existing
