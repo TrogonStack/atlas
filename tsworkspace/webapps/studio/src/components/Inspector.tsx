@@ -522,7 +522,7 @@ export function Inspector({
   const ownSlice = useMemo(() => model.slices.find((s) => s.entity.key === entity.key), [model, entity]);
   const sliceScenarios = ownSlice?.scenarios ?? [];
   const activeTab =
-    (requestedTab === 'scenarios' && sliceScenarios.length === 0) || (requestedTab === 'validation' && !showValidation)
+    (requestedTab === 'scenarios' && !ownSlice) || (requestedTab === 'validation' && !showValidation)
       ? 'details'
       : requestedTab;
   const previousActiveTab = useRef<InspectorTab>('details');
@@ -614,7 +614,7 @@ export function Inspector({
       >
         <TabsList variant="underline" className="overflow-x-auto px-4">
           <TabsTab value="details">Details</TabsTab>
-          {sliceScenarios.length > 0 ? <TabsTab value="scenarios">Scenarios ({sliceScenarios.length})</TabsTab> : null}
+          {ownSlice ? <TabsTab value="scenarios">Scenarios ({sliceScenarios.length})</TabsTab> : null}
           {showValidation ? (
             <TabsTab value="validation">
               Validation
@@ -1284,9 +1284,13 @@ export function Inspector({
           ) : null}
         </TabsPanel>
         <TabsPanel value="scenarios" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-4 text-sm">
-          {sliceScenarios.map((s, i) => (
-            <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
-          ))}
+          {sliceScenarios.length === 0 ? (
+            <p className="text-[11px] italic text-muted-foreground">This slice has no scenarios.</p>
+          ) : (
+            sliceScenarios.map((s, i) => (
+              <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
+            ))
+          )}
         </TabsPanel>
         {showValidation ? (
           <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
