@@ -803,21 +803,14 @@ impl NatsStore {
         Ok(Some((decode_namespace_record(&entry.value)?, revision)))
     }
 
-    /// Deletes a namespace row and its name index, each with a revision CAS.
-    /// `None` when the row is already gone.
+    /// Deletes a namespace row and its name index, each with a revision CAS
+    /// against the `revision` the caller read the record at.
     async fn remove_namespace_row(
         &self,
         id: &NamespaceId,
-        allow_permanent: bool,
-    ) -> StoreResult<Option<NamespaceRecord>> {
-        let Some((record, revision)) = self.read_namespace_row(id).await? else {
-            return Ok(None);
-        };
-        if !allow_permanent && record.tenure == NamespaceTenure::Permanent {
-            return Err(StoreError::InvalidArgument(
-                "cannot release a permanent namespace".into(),
-            ));
-        }
+        record: &NamespaceRecord,
+        revision: u64,
+    ) -> StoreResult<()> {
         let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
         // Recovery can recreate the same ID with a newer index incarnation.
         let index_revision = self
@@ -844,7 +837,7 @@ impl NatsStore {
             .map_err(|_| StoreError::Backend(format!("namespace kv.delete {index_key}: timeout")))?
             .map_err(|e| StoreError::Backend(format!("namespace kv.delete {index_key}: {e}")))?;
         }
-        Ok(Some(record))
+        Ok(())
     }
 
     /// Read a name-index row: the id it points at, plus its revision.
@@ -4704,7 +4697,15 @@ impl Store for NatsStore {
     async fn release_namespace(&self, id: &NamespaceId) -> StoreResult<()> {
         self.source_guarded(async {
             self.require_writer()?;
-            self.remove_namespace_row(id, false).await.map(|_| ())
+            let Some((record, revision)) = self.read_namespace_row(id).await? else {
+                return Ok(());
+            };
+            if record.tenure == NamespaceTenure::Permanent {
+                return Err(StoreError::InvalidArgument(
+                    "cannot release a permanent namespace".into(),
+                ));
+            }
+            self.remove_namespace_row(id, &record, revision).await
         })
         .await
     }
@@ -4712,9 +4713,12 @@ impl Store for NatsStore {
     async fn delete_namespace(&self, id: &NamespaceId) -> StoreResult<NamespaceRecord> {
         self.source_guarded(async {
             self.require_writer()?;
-            self.remove_namespace_row(id, true)
+            let (record, revision) = self
+                .read_namespace_row(id)
                 .await?
-                .ok_or(StoreError::NotFound)
+                .ok_or(StoreError::NotFound)?;
+            self.remove_namespace_row(id, &record, revision).await?;
+            Ok(record)
         })
         .await
     }
