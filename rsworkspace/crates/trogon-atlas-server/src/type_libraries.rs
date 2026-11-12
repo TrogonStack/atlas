@@ -18,6 +18,12 @@ use trogon_atlas_types::{
 
 use crate::conv::{reason, store_err, ERROR_DOMAIN};
 
+/// One type-library change in a batch, in the order the batch states it.
+pub(crate) enum LibraryChange<'a> {
+    Put(&'a pb::TypeLibrary),
+    Remove(&'a pb::Id),
+}
+
 /// One version of one type library inside a namespace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LibraryVersion {
@@ -592,10 +598,9 @@ impl TypeLibraryGate {
                 libraries: LibraryConsultation::Checked,
             });
         };
-        match self
-            .live_pool(store, &id.namespace, pending, &[], branch)
-            .await
-        {
+        let changes: Vec<LibraryChange<'_>> =
+            pending.iter().copied().map(LibraryChange::Put).collect();
+        match self.live_pool(store, &id.namespace, &changes, branch).await {
             Ok(live) => Ok(UnknownAnnotationTypes {
                 annotations: annotations_outside(&live.pool, entity).annotations,
                 libraries: LibraryConsultation::Checked,
@@ -615,14 +620,12 @@ impl TypeLibraryGate {
     /// One type-library lookup per namespace, shared by every put in a batch.
     pub(crate) fn annotation_lookup<'a>(
         &'a self,
-        pending: &'a [&'a pb::TypeLibrary],
-        removed: &'a [pb::Id],
+        changes: &'a [LibraryChange<'a>],
         branch: Option<&'a str>,
     ) -> AnnotationTypeLookup<'a> {
         AnnotationTypeLookup {
             gate: self,
-            pending,
-            removed,
+            changes,
             branch,
             pools: HashMap::new(),
         }
@@ -642,7 +645,9 @@ impl TypeLibraryGate {
         pending: &[&pb::TypeLibrary],
         branch: Option<&str>,
     ) -> Result<LivePool, Status> {
-        self.live_pool(store, namespace, pending, &[], branch)
+        let changes: Vec<LibraryChange<'_>> =
+            pending.iter().copied().map(LibraryChange::Put).collect();
+        self.live_pool(store, namespace, &changes, branch)
             .await
             .map_err(PoolLookup::status)
     }
@@ -651,18 +656,12 @@ impl TypeLibraryGate {
         &self,
         store: &dyn Store,
         namespace: &str,
-        pending: &[&pb::TypeLibrary],
-        removed: &[pb::Id],
+        changes: &[LibraryChange<'_>],
         branch: Option<&str>,
     ) -> Result<LivePool, PoolLookup> {
         let mut registered = load(store, namespace, branch)
             .await
             .map_err(PoolLookup::Propagate)?;
-        for id in removed {
-            if id.namespace == namespace {
-                registered.remove(&LibraryVersion::of(id));
-            }
-        }
         let admission = TypeLibraryAdmission {
             namespace: namespace.to_owned(),
             seen: registered
@@ -670,15 +669,23 @@ impl TypeLibraryGate {
                 .map(|(k, r)| (k.clone(), r.etag.clone()))
                 .collect(),
         };
-        for library in pending {
-            if let Some(id) = library.id.as_ref().filter(|id| id.namespace == namespace) {
-                registered.insert(
-                    LibraryVersion::of(id),
-                    Registered {
-                        library: (*library).clone(),
-                        etag: String::new(),
-                    },
-                );
+        for change in changes {
+            match change {
+                LibraryChange::Remove(id) if id.namespace == namespace => {
+                    registered.remove(&LibraryVersion::of(id));
+                }
+                LibraryChange::Put(library) => {
+                    if let Some(id) = library.id.as_ref().filter(|id| id.namespace == namespace) {
+                        registered.insert(
+                            LibraryVersion::of(id),
+                            Registered {
+                                library: (*library).clone(),
+                                etag: String::new(),
+                            },
+                        );
+                    }
+                }
+                LibraryChange::Remove(_) => {}
             }
         }
         let live = latest_per_slug(&registered);
@@ -870,8 +877,7 @@ enum CachedPool {
 
 pub(crate) struct AnnotationTypeLookup<'a> {
     gate: &'a TypeLibraryGate,
-    pending: &'a [&'a pb::TypeLibrary],
-    removed: &'a [pb::Id],
+    changes: &'a [LibraryChange<'a>],
     branch: Option<&'a str>,
     pools: HashMap<String, CachedPool>,
 }
@@ -895,13 +901,7 @@ impl AnnotationTypeLookup<'_> {
         if !self.pools.contains_key(&id.namespace) {
             let cached = match self
                 .gate
-                .live_pool(
-                    store,
-                    &id.namespace,
-                    self.pending,
-                    self.removed,
-                    self.branch,
-                )
+                .live_pool(store, &id.namespace, self.changes, self.branch)
                 .await
             {
                 Ok(live) => CachedPool::Ready(live.pool),

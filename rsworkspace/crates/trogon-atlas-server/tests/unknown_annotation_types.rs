@@ -220,6 +220,44 @@ async fn batch_delete_of_a_library_warns_about_its_annotation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn batch_refuses_to_put_and_delete_the_same_library_version() {
+    let service = service().await;
+    let ns = "uat-put-then-delete";
+    put(&service, notes_library(ns), false).await;
+
+    let error = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: vec![
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(put_request(
+                        notes_library(ns),
+                        false,
+                    ))),
+                },
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                        kind: pb::EntityKind::TypeLibrary as i32,
+                        id: Some(id(ns, "acme.notes")),
+                        ..Default::default()
+                    })),
+                },
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(put_request(
+                        annotated_event(ns, &[TENANT]),
+                        false,
+                    ))),
+                },
+            ],
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("duplicate overlay owner"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn put_warns_only_about_the_misspelled_annotation() {
     let service = service().await;
     for validate_only in [true, false] {

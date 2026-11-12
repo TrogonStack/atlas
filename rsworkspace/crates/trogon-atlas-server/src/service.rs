@@ -3941,6 +3941,27 @@ struct OpMetaLike {
     entity: Option<pb::Entity>,
 }
 
+fn library_changes(metas: &[OpMetaLike]) -> Vec<crate::type_libraries::LibraryChange<'_>> {
+    metas
+        .iter()
+        .filter_map(|meta| {
+            if meta.kind != pb::EntityKind::TypeLibrary {
+                return None;
+            }
+            if meta.is_put {
+                match meta.entity.as_ref()?.kind.as_ref()? {
+                    pb::entity::Kind::TypeLibrary(library) => {
+                        Some(crate::type_libraries::LibraryChange::Put(library))
+                    }
+                    _ => None,
+                }
+            } else {
+                Some(crate::type_libraries::LibraryChange::Remove(&meta.id))
+            }
+        })
+        .collect()
+}
+
 // `PAGE_TOKEN_PREFIX` keeps clients out of the encoding's internals: a bare
 // integer offset reads like an integer offset and clients will start to
 // depend on the format. Wrapping the offset in an opaque-looking prefix +
@@ -8444,18 +8465,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 _ => None,
             })
             .collect();
+        let library_changes = library_changes(&metas);
         let mut annotation_issues: Vec<Vec<pb::ValidationIssue>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
-        let removed_libraries: Vec<pb::Id> = metas
-            .iter()
-            .filter(|m| !m.is_put && m.kind == pb::EntityKind::TypeLibrary)
-            .map(|m| m.id.clone())
-            .collect();
-        let mut annotation_types = self.type_libraries.annotation_lookup(
-            &pending_libraries,
-            &removed_libraries,
-            branch.as_deref(),
-        );
+        let mut annotation_types = self
+            .type_libraries
+            .annotation_lookup(&library_changes, branch.as_deref());
         for (m, issues) in metas.iter().zip(&mut annotation_issues) {
             let Some(entity) = m.entity.as_ref().filter(|_| m.is_put) else {
                 continue;
