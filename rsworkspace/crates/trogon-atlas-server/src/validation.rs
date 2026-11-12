@@ -14434,20 +14434,21 @@ mod annotation_finding_tests {
         }
     }
 
-    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+    fn pack_open_question(ann: &pb::OpenQuestionAnnotation) -> prost_types::Any {
         use prost::Message;
-        let ann = pb::OpenQuestionAnnotation {
-            question: question.into(),
-            author: author.into(),
-            created_at: String::new(),
-            owner: String::new(),
-            due: None,
-        };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
                 .into(),
             value: ann.encode_to_vec(),
         }
+    }
+
+    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+        pack_open_question(&pb::OpenQuestionAnnotation {
+            question: question.into(),
+            author: author.into(),
+            ..Default::default()
+        })
     }
 
     fn assumption_any(statement: &str, author: &str) -> prost_types::Any {
@@ -14493,19 +14494,13 @@ mod annotation_finding_tests {
     }
 
     fn open_question_with_owner_due(owner: &str, due: &str) -> prost_types::Any {
-        use prost::Message;
-        let ann = pb::OpenQuestionAnnotation {
+        pack_open_question(&pb::OpenQuestionAnnotation {
             question: "who refunds a split shipment?".into(),
             author: "alex".into(),
-            created_at: String::new(),
             owner: owner.into(),
             due: Some(pb::CalendarDate { value: due.into() }),
-        };
-        prost_types::Any {
-            type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
-                .into(),
-            value: ann.encode_to_vec(),
-        }
+            ..Default::default()
+        })
     }
 
     fn open_question_issues(any: prost_types::Any) -> Vec<pb::ValidationIssue> {
