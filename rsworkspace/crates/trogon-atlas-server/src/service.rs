@@ -2325,6 +2325,40 @@ impl EventModelServiceImpl {
         ))
     }
 
+    /// Authorization runs before the mutation lock, so a row it saw can be
+    /// released while the write waits, and landing anyway leaves entities in
+    /// a namespace the next writer of any owner claims. Dry runs and
+    /// principal-less writes never claim a row, so they have none to lose.
+    async fn require_targets_still_registered(
+        &self,
+        principal: Option<&crate::auth::Principal>,
+        targets: &WriteTargets,
+        effect: WriteEffect,
+    ) -> Result<(), Status> {
+        let (Some(_), WriteTargets::Known(namespaces), WriteEffect::Persist) =
+            (principal, targets, effect)
+        else {
+            return Ok(());
+        };
+        for namespace in namespaces {
+            let id = NamespaceId::parse(namespace).map_err(|e| {
+                Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
+            })?;
+            if self
+                .store
+                .get_namespace(&id)
+                .await
+                .map_err(store_err)?
+                .is_none()
+            {
+                return Err(Status::failed_precondition(format!(
+                    "namespace {namespace:?} was removed while this write waited; retry the write",
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// The namespace half of `authorize_write`, on its own. Used by
     /// `MergeBranch`, which lands on baseline by design and so must not
     /// consult baseline protection, but must still respect the caller's
@@ -7539,6 +7573,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
 
         let guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &WriteTargets::of(&id.namespace),
+            WriteEffect::of(req.validate_only),
+        )
+        .await?;
         let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
         let resumed = match (&protect_reason, EntityIdentity::of(kind, &id)) {
             (Some(_), Some(identity)) => self
@@ -8536,6 +8576,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
 
         let guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &targets,
+            WriteEffect::of(any_dry_run),
+        )
+        .await?;
         let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
         let resumed = self
             .protections_resumed_by(
@@ -9897,6 +9943,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &targets,
+            WriteEffect::of(req.dry_run),
+        )
+        .await?;
         // Protection can be lifted, so refusing on it is not a final answer
         // for this id: release the claim, as `DeleteEntity` does.
         if let Err(status) = self
@@ -11887,7 +11939,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
-        if matches!(
+        let authorized = matches!(
             kind,
             pb::EntityKind::SystemGroup
                 | pb::EntityKind::Channel
@@ -11900,7 +11952,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 | pb::EntityKind::Term
                 | pb::EntityKind::Document
                 | pb::EntityKind::DesignGraph
-        ) {
+        );
+        if authorized {
             self.authorize_write(
                 principal.as_ref(),
                 Some(&req.name),
@@ -11924,6 +11977,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
 
         let _guard = self.lock_mutations().await;
+        if authorized {
+            self.require_targets_still_registered(
+                principal.as_ref(),
+                &WriteTargets::of(&id.namespace),
+                WriteEffect::Persist,
+            )
+            .await?;
+        }
         if !take_theirs {
             self.refuse_protected([(kind, &id)]).await?;
         }
