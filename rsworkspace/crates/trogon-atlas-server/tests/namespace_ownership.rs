@@ -1282,3 +1282,126 @@ async fn a_user_principal_stays_refused_on_an_unowned_branch() {
         .expect_err("a classic branch name carries no owner, so a bound user stays refused");
     assert_eq!(err.code(), Code::PermissionDenied, "got {err:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Deleting a namespace
+// ---------------------------------------------------------------------------
+
+async fn register(c: &mut EventModelServiceClient<Channel>, name: &str) -> String {
+    c.register_namespace(authed(
+        pb::RegisterNamespaceRequest {
+            name: name.into(),
+            parent: "acme".into(),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap()
+    .into_inner()
+    .namespace
+    .unwrap()
+    .id
+}
+
+async fn delete_namespace(
+    c: &mut EventModelServiceClient<Channel>,
+    id: &str,
+    token: &str,
+) -> Result<(), tonic::Status> {
+    c.delete_namespace(authed(pb::DeleteNamespaceRequest { id: id.into() }, token))
+        .await
+        .map(|_| ())
+}
+
+async fn delete_event(c: &mut EventModelServiceClient<Channel>, ns: &str, slug: &str) {
+    c.delete_entity(authed(
+        pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(pb::Id {
+                namespace: ns.into(),
+                slug: slug.into(),
+                version: 1,
+            }),
+            ..Default::default()
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_namespace_is_deleted_and_leaves_the_listing() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-delete").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(!seen.iter().any(|(seen_id, _)| seen_id == &id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_holding_an_entity_is_not_deleted() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-held").await;
+    c.put_entity(authed(put_req(event(&id, "x")), UNBOUND_TOKEN))
+        .await
+        .unwrap();
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    delete_event(&mut c, &id, "x").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_held_only_by_a_branch_is_not_deleted() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-branch").await;
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: "delete-ns-branch".into(),
+            doc: String::new(),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+    c.put_entity(authed_on_branch(
+        put_req(event(&id, "x")),
+        ADMIN_TOKEN,
+        "delete-ns-branch",
+    ))
+    .await
+    .unwrap();
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(err.message().contains("delete-ns-branch"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_namespace_is_not_deleted_even_when_empty() {
+    let mut c = client().await;
+    c.put_entity(authed(
+        put_req(event("acme-legacy-delete", "x")),
+        ACME_TOKEN,
+    ))
+    .await
+    .unwrap();
+    delete_event(&mut c, "acme-legacy-delete", "x").await;
+    let err = delete_namespace(&mut c, "acme-legacy-delete", ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(err.message().contains("legacy"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_writer_may_not_delete_a_namespace() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-writer").await;
+    let err = delete_namespace(&mut c, &id, ACME_TOKEN).await.unwrap_err();
+    assert_eq!(err.code(), Code::PermissionDenied);
+}

@@ -25,7 +25,7 @@ the profiles its row and annotations imply.
 | `source-integration` | Every source tool, plus reads in discovery and model. |
 | `read-only` | Every read outside administration. |
 
-Administration tools (`delete_by_query`, `move_namespace`, `protect_entity`,
+Administration tools (`delete_by_query`, `delete_namespace`, `move_namespace`, `protect_entity`,
 `unprotect_entity`) belong to no profile. They are offered only to a session
 that runs without one.
 

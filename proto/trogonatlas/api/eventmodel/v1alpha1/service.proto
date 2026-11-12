@@ -958,6 +958,18 @@ message MoveNamespaceResponse {
   trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
 }
 
+message DeleteNamespaceRequest {
+  // Namespace id, not name, as for MoveNamespace. Refused with
+  // FAILED_PRECONDITION unless the namespace holds no entity on baseline and
+  // on every branch.
+  string id = 1;
+}
+
+message DeleteNamespaceResponse {
+  // The registry row that was removed.
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
 // ---------- Entity protection -------------------------------------------------
 //
 // Protecting an identity freezes it on every route: no new version, no edit,
@@ -1409,6 +1421,7 @@ service EventModelService {
   // an existing namespace without touching a single entity.
   rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
   rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
   // Entity protection. Setting and lifting are admin-only and baseline-only;
   // reading is open to any reader.
   rpc ProtectEntity(ProtectEntityRequest) returns (ProtectEntityResponse);
