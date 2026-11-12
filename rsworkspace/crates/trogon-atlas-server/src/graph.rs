@@ -35,13 +35,13 @@ pub struct ReverseIndex {
 
 impl ReverseIndex {
     pub fn build(all: &[StoredEntity]) -> Result<Self, Status> {
-        Self::build_counted(all, responsibility_occurrence_count(all)?)
+        Self::build_counted(all, responsibility_occurrence_count(all)?, &[])
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
         let occurrences = responsibility_occurrence_count(all)?;
         check_responsibility_occurrence_count(occurrences)?;
-        Self::build_counted(all, occurrences)
+        Self::build_counted(all, occurrences, &[])
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
@@ -54,10 +54,12 @@ impl ReverseIndex {
     fn build_counted(
         all: &[StoredEntity],
         responsibility_occurrences: usize,
+        extra_known: &[pb::EntityKey],
     ) -> Result<Self, Status> {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
-        let known: HashSet<pb::EntityKey> = all
+        // `extra_known` keeps a target resolvable after this world has deleted it.
+        let mut known: HashSet<pb::EntityKey> = all
             .iter()
             .filter_map(|se| {
                 let k = ref_entity_kind(&se.entity)?;
@@ -65,6 +67,7 @@ impl ReverseIndex {
                 Some(pb::EntityKey::new(k, i))
             })
             .collect();
+        known.extend(extra_known.iter().cloned());
         let mut by_target: HashMap<pb::EntityKey, Vec<pb::Reference>> = HashMap::new();
         for se in all {
             let (Some(from_kind), Some(from_id)) =
@@ -562,6 +565,100 @@ pub fn supersession_descendants(
         }
     }
     out
+}
+
+/// Referrer entries one unbridged-removal report may carry before it stops
+/// and marks itself incomplete.
+pub const UNBRIDGED_REFERRER_BUDGET: usize = 4_096;
+
+pub struct UnbridgedReport {
+    pub removals: Vec<pb::UnbridgedRemoval>,
+    pub incomplete: bool,
+}
+
+/// Retired versions that no entity in `world` supersedes while the latest
+/// version of some other entity still references them. `world` is the store
+/// as it will be once the change lands.
+pub fn unbridged_removals(
+    world: &[StoredEntity],
+    retired: &[pb::EntityRef],
+) -> Result<UnbridgedReport, Status> {
+    let mut bridged: HashSet<pb::EntityKey> = HashSet::new();
+    let mut latest: HashMap<(pb::EntityKind, &str, &str), u64> = HashMap::new();
+    for se in world {
+        let (Some(kind), Some(id)) = (ref_entity_kind(&se.entity), ref_entity_id(&se.entity))
+        else {
+            continue;
+        };
+        if let Some(parent) = supersedes_of(&se.entity) {
+            bridged.insert(pb::EntityKey::new(kind, parent));
+        }
+        let version = latest
+            .entry((kind, id.namespace.as_str(), id.slug.as_str()))
+            .or_default();
+        *version = (*version).max(id.version);
+    }
+    let is_live = |r: &pb::EntityRef| {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(r.kind), r.id.as_ref()) else {
+            return false;
+        };
+        latest.get(&(kind, id.namespace.as_str(), id.slug.as_str())) == Some(&id.version)
+    };
+    let retired_keys: Vec<pb::EntityKey> = retired
+        .iter()
+        .filter_map(|entity| {
+            let kind = pb::EntityKind::try_from(entity.kind).ok()?;
+            let id = entity.id.as_ref()?;
+            Some(pb::EntityKey::new(kind, id))
+        })
+        .collect();
+    let index = ReverseIndex::build_counted(
+        world,
+        responsibility_occurrence_count(world)?,
+        &retired_keys,
+    )?;
+    let mut report = UnbridgedReport {
+        removals: Vec::new(),
+        incomplete: false,
+    };
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    let mut emitted = 0;
+    for entity in retired {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(entity.kind), entity.id.as_ref())
+        else {
+            continue;
+        };
+        let key = pb::EntityKey::new(kind, id);
+        if bridged.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        let room = UNBRIDGED_REFERRER_BUDGET - emitted;
+        let referrers: Vec<pb::Reference> = index
+            .incoming(kind, id)
+            .iter()
+            .filter(|r| r.from_field != "supersedes")
+            .filter(|r| {
+                r.from
+                    .as_ref()
+                    .is_some_and(|from| from != entity && is_live(from))
+            })
+            .take(room + 1)
+            .cloned()
+            .collect();
+        if referrers.is_empty() {
+            continue;
+        }
+        if referrers.len() > room {
+            report.incomplete = true;
+            break;
+        }
+        emitted += referrers.len();
+        report.removals.push(pb::UnbridgedRemoval {
+            entity: Some(entity.clone()),
+            remaining_referrers: referrers,
+        });
+    }
+    Ok(report)
 }
 
 #[must_use]
@@ -1386,6 +1483,32 @@ mod impact_tests {
             !incoming.is_empty(),
             "ReverseIndex must surface Storyboard→CommandSlice via untyped slice ref; got {incoming:?}"
         );
+    }
+
+    #[test]
+    fn unbridged_report_keeps_a_deleted_slice_resolvable() {
+        let slice_id = id("orders", "place-slice");
+        let board = StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Storyboard(pb::Storyboard {
+                    id: Some(id("orders", "happy-path")),
+                    title: "happy".into(),
+                    slices: vec![pb::SliceRef {
+                        id: Some(slice_id.clone()),
+                    }],
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        };
+        let retired = pb::EntityRef {
+            kind: pb::EntityKind::CommandSlice as i32,
+            id: Some(slice_id),
+        };
+        let report = unbridged_removals(std::slice::from_ref(&board), &[retired]).unwrap();
+        assert!(!report.incomplete);
+        assert_eq!(report.removals.len(), 1);
     }
 
     fn stored_ui(ns: &str, slug: &str, screen: Option<(&str, &str)>) -> StoredEntity {
