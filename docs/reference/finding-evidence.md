@@ -42,6 +42,7 @@ causes only in `message`; every rule not listed below is in that state.
 | `EVENT_MULTIPLE_EMITTERS` | One `ROLE_EMITTER` per emitting command slice, with the exact command version it names. |
 | `SLICE_STALE_REF` | `ROLE_STALE_PIN` for the pinned reference and `ROLE_LATEST_VERSION` for the newer version. |
 | `PROJECTION_BEFORE_EMITTER` | `ROLE_CONSUMER` and one `ROLE_LATER_EMITTER` per emitting occurrence after it. No emitter evidence when the storyboard never emits the event. |
+| `PROJECTION_MERGES_BRANCHES` | One `ROLE_CONSUMER` per merged source event. |
 | `PROJECTION_NOT_ADJACENT` | `ROLE_CONSUMER`, `ROLE_EARLIER_EMITTER` and one `ROLE_INTERVENING_ACTION` per action slice in between. |
 
 A slice placed more than once in a storyboard yields one finding per

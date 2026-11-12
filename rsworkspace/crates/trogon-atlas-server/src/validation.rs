@@ -433,6 +433,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("PROJECTION_NOT_ADJACENT", Error, "Projection separated from its emitter by an action slice",
           "A read model slice projects an event, but one or more command/automation slices run between the emitter and the projection. Project each event into its read models before the next command or automation acts.",
           ReadModelSlice, "source_events", "storyboard"),
+        r("PROJECTION_MERGES_BRANCHES", Warning, "Read model slice merges divergent branches",
+          "A read model slice projects two or more events that are alternative successors in one lane transition (for example review.approved and review.rejected). Divergent branches are separate slices: split into one projection slice per branch, or use one event with an outcome field, which drops the fork from the lane transitions.",
+          ReadModelSlice, "source_events", "storyboard"),
         r("RM_SLICE_EVENT_NOT_DECLARED", Error, "Read model slice consumes event not declared on the read model",
           "A ReadModelSlice cites an event in source_events that the ReadModel itself does not declare it consumes.",
           ReadModelSlice, "source_events", "storyboard"),
@@ -649,6 +652,7 @@ fn evidence_roles(code: &str) -> &'static [Role] {
         "EVENT_MULTIPLE_EMITTERS" => &[Role::Emitter],
         "SLICE_STALE_REF" => &[Role::StalePin, Role::LatestVersion],
         "PROJECTION_BEFORE_EMITTER" => &[Role::Consumer, Role::LaterEmitter],
+        "PROJECTION_MERGES_BRANCHES" => &[Role::Consumer],
         "PROJECTION_NOT_ADJACENT" => &[
             Role::Consumer,
             Role::EarlierEmitter,
@@ -725,6 +729,7 @@ mod catalog_drift_tests {
         "PROCESSOR_MULTIPLE_COMMANDS",
         "PROJECT_SLUG_MISMATCH",
         "PROJECTION_BEFORE_EMITTER",
+        "PROJECTION_MERGES_BRANCHES",
         "PROJECTION_NOT_ADJACENT",
         "READ_MODEL_FIELD_UNSOURCED",
         "READ_MODEL_MULTIPLE_AUTOMATIONS",
@@ -888,6 +893,7 @@ mod catalog_drift_tests {
             "EVENT_MULTIPLE_EMITTERS",
             "SLICE_STALE_REF",
             "PROJECTION_BEFORE_EMITTER",
+            "PROJECTION_MERGES_BRANCHES",
             "PROJECTION_NOT_ADJACENT",
         ] {
             assert!(!roles(code).is_empty(), "{code} carries evidence");
@@ -1924,6 +1930,39 @@ pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::Validation
     issues
 }
 
+/// Event-to-lane and lane-to-transitions maps shared by the rules that read
+/// swimlane lifecycles. Lanes without transitions are left out of the second map.
+#[allow(clippy::type_complexity)]
+fn lane_maps(
+    all: &[StoredEntity],
+) -> (
+    HashMap<pb::IdKey, pb::Id>,
+    HashMap<pb::IdKey, &Vec<pb::swimlane::Transition>>,
+) {
+    let event_lane = all
+        .iter()
+        .filter_map(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Event(e)) => {
+                let id = e.id.as_ref()?;
+                let lane = e.swimlane.as_ref()?.id.as_ref()?;
+                Some((pb::IdKey::new(id), lane.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let lane_transitions = all
+        .iter()
+        .filter_map(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Swimlane(l)) if !l.transitions.is_empty() => {
+                let id = l.id.as_ref()?;
+                Some((pb::IdKey::new(id), &l.transitions))
+            }
+            _ => None,
+        })
+        .collect();
+    (event_lane, lane_transitions)
+}
+
 #[must_use]
 pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
@@ -2029,27 +2068,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
             // scenario may only emit a legal successor of the last given
             // event on that stream. The swimlane decides the fork; GWTs
             // must not invent roads the aggregate would refuse.
-            let event_lane: HashMap<pb::IdKey, pb::Id> = all
-                .iter()
-                .filter_map(|se| match se.entity.kind.as_ref() {
-                    Some(pb::entity::Kind::Event(e)) => {
-                        let id = e.id.as_ref()?;
-                        let lane = e.swimlane.as_ref()?.id.as_ref()?;
-                        Some((pb::IdKey::new(id), lane.clone()))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let lane_transitions: HashMap<pb::IdKey, &Vec<pb::swimlane::Transition>> = all
-                .iter()
-                .filter_map(|se| match se.entity.kind.as_ref() {
-                    Some(pb::entity::Kind::Swimlane(l)) if !l.transitions.is_empty() => {
-                        let id = l.id.as_ref()?;
-                        Some((pb::IdKey::new(id), &l.transitions))
-                    }
-                    _ => None,
-                })
-                .collect();
+            let (event_lane, lane_transitions) = lane_maps(all);
             let key = |i: &pb::Id| pb::IdKey::new(i);
             for sc in &s.scenarios {
                 let mut last_on: HashMap<pb::IdKey, pb::Id> = HashMap::new();
@@ -5978,6 +5997,94 @@ pub fn validate_model_content(
                                 .into_iter()
                                 .chain(intervening),
                         ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // Rule 2: updates from divergent branches are separate slices. A read
+    // model slice that projects two alternative successors of one lane
+    // transition merges the fork into one moment.
+    {
+        let (event_lane, lane_transitions) = lane_maps(all);
+        for m in &model.members {
+            let (Some(rs_id), Ok(pb::EntityKind::ReadModelSlice)) =
+                (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
+            else {
+                continue;
+            };
+            let Some(rs) = all.iter().find_map(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::ReadModelSlice(rs)) if rs.id.as_ref() == Some(rs_id) => {
+                    Some(rs)
+                }
+                _ => None,
+            }) else {
+                continue;
+            };
+            let sources: Vec<(usize, &pb::Id)> = rs
+                .source_events
+                .iter()
+                .enumerate()
+                .filter_map(|(n, x)| Some((n, x.event.as_ref()?.id.as_ref()?)))
+                .collect();
+            let mut reported: HashSet<(pb::IdKey, Vec<pb::IdKey>)> = HashSet::new();
+            for (n, ev) in &sources {
+                let Some(lane) = event_lane.get(&pb::IdKey::new(ev)) else {
+                    continue;
+                };
+                let Some(transitions) = lane_transitions.get(&pb::IdKey::new(lane)) else {
+                    continue;
+                };
+                for t in *transitions {
+                    let next: Vec<&pb::Id> = t
+                        .next
+                        .iter()
+                        .filter_map(|x| x.event.as_ref()?.id.as_ref())
+                        .collect();
+                    if !next.contains(ev) {
+                        continue;
+                    }
+                    let merged: Vec<(usize, &pb::Id)> = sources
+                        .iter()
+                        .filter(|(_, s)| next.iter().any(|x| x == s))
+                        .filter(|(_, s)| event_lane.get(&pb::IdKey::new(s)) == Some(lane))
+                        .copied()
+                        .collect();
+                    if merged.len() < 2 || merged[0].0 != *n {
+                        continue;
+                    }
+                    let group = (
+                        pb::IdKey::new(lane),
+                        merged.iter().map(|(_, s)| pb::IdKey::new(s)).collect(),
+                    );
+                    if !reported.insert(group) {
+                        continue;
+                    }
+                    let names: Vec<String> = merged
+                        .iter()
+                        .map(|(_, s)| format!("{}/{}@{}", s.namespace, s.slug, s.version))
+                        .collect();
+                    issues.push(pb::ValidationIssue {
+                        severity: pb::validation_issue::Severity::Warning as i32,
+                        code: "PROJECTION_MERGES_BRANCHES".into(),
+                        message: format!(
+                            "read model slice {}/{}@{} projects {} which are alternative successors on lane {}/{}@{}; divergent branches are separate slices: split into one projection slice per branch, or emit one event with an outcome field (this drops the fork from the lane transitions)",
+                            rs_id.namespace, rs_id.slug, rs_id.version,
+                            names.join(" and "),
+                            lane.namespace, lane.slug, lane.version,
+                        ),
+                        subject: Some(pb::EntityRef {
+                            kind: pb::EntityKind::ReadModelSlice as i32,
+                            id: Some(rs_id.clone()),
+                        }),
+                        subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(merged.iter().map(|(k, s)| {
+                            Evidence::new(Role::Consumer, pb::EntityKind::ReadModelSlice, rs_id)
+                                .at(format!("source_events[{k}]"))
+                                .pointing_at(pb::EntityKind::Event, s)
+                        })),
                         ..Default::default()
                     });
                 }
@@ -14179,6 +14286,114 @@ mod projection_ordering_tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    fn event(slug: &str, lane: &str) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Event(pb::Event {
+                id: Some(id(slug)),
+                title: slug.into(),
+                swimlane: Some(pb::SwimlaneRef { id: Some(id(lane)) }),
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn lane_with_transitions(transitions: &[(&str, &[&str])]) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("review")),
+                title: "review".into(),
+                transitions: transitions
+                    .iter()
+                    .map(|(after, next)| pb::swimlane::Transition {
+                        after: Some(pb::EventRef {
+                            id: Some(id(after)),
+                        }),
+                        next: next
+                            .iter()
+                            .map(|n| pb::swimlane::transition::Next {
+                                connection_id: None,
+                                event: Some(pb::EventRef { id: Some(id(n)) }),
+                                doc: "guard".into(),
+                                metadata: Vec::new(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn merge_findings(
+        transitions: &[(&str, &[&str])],
+        events: &[&str],
+        lane_events: &[&str],
+    ) -> Vec<pb::ValidationIssue> {
+        let mut all = vec![stored(rm_slice("status", events))];
+        if !transitions.is_empty() {
+            all.push(stored(lane_with_transitions(transitions)));
+        }
+        all.extend(lane_events.iter().map(|e| stored(event(e, "review"))));
+        let m = model(&[(pb::EntityKind::ReadModelSlice, "status")]);
+        validate_model(&m, &all)
+            .into_iter()
+            .filter(|i| i.code == "PROJECTION_MERGES_BRANCHES")
+            .collect()
+    }
+
+    const FORK: &[(&str, &[&str])] =
+        &[("review.submitted", &["review.approved", "review.rejected"])];
+    const ALL_EVENTS: &[&str] = &["review.submitted", "review.approved", "review.rejected"];
+
+    #[test]
+    fn merged_siblings_warn_and_name_both_events() {
+        let issues = merge_findings(FORK, &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        let hit = &issues[0];
+        assert_eq!(hit.severity, pb::validation_issue::Severity::Warning as i32);
+        assert!(
+            hit.message.contains("t/review.approved@1"),
+            "{}",
+            hit.message
+        );
+        assert!(
+            hit.message.contains("t/review.rejected@1"),
+            "{}",
+            hit.message
+        );
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "consumer read_model_slice:t/status@1.source_events[0] -> event:t/review.approved@1",
+                "consumer read_model_slice:t/status@1.source_events[1] -> event:t/review.rejected@1",
+            ],
+        );
+    }
+
+    #[test]
+    fn sequential_events_in_one_slice_do_not_warn() {
+        let chain: &[(&str, &[&str])] = &[
+            ("review.submitted", &["review.approved"]),
+            ("review.approved", &["review.rejected"]),
+        ];
+        let issues = merge_findings(chain, &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn single_branch_does_not_warn() {
+        let issues = merge_findings(FORK, &["review.approved"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn events_without_lane_transitions_do_not_warn() {
+        let issues = merge_findings(&[], &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
     }
 
     // Catalog: "emitting command slice comes later (or never)".
