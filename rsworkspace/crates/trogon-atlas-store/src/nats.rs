@@ -114,11 +114,11 @@ const LIVE_TAIL_CHANNEL_CAPACITY: usize = 1024;
 /// entity.
 const SCHEMA_VERSION_KEY: &str = "_schema";
 
-/// Value of `SCHEMA_VERSION_KEY` for a store whose Event, Command and
-/// ReadModel rows declare their fields only through `schema`. A binary that
-/// predates it reads this as a foreign version and refuses to open the store,
-/// so an old server cannot write the retired layout back.
-pub const STORE_SCHEMA_MARKER: &str = "trogonatlas.eventmodel.v1alpha1+schema-fields";
+/// Rejects startup by older binaries that could restore retired field layouts
+/// or expose artifact Ready rows without publication receipts. Already-running
+/// older processes must be stopped before the coordinated upgrade.
+pub const STORE_SCHEMA_MARKER: &str =
+    "trogonatlas.eventmodel.v1alpha1+schema-fields+artifact-receipts-v1";
 
 /// Value of [`SCHEMA_VERSION_KEY`] written by binaries that still stored the
 /// retired `fields` lists.
@@ -294,7 +294,7 @@ pub struct NatsStoreConfig {
     /// `GetOperation` before JetStream expires it. Reported to clients as
     /// `Limits.operation_retention_seconds`.
     pub operations_retention: Duration,
-    /// KV bucket holding the single writer-lease row. See
+    /// KV bucket holding the writer lease and immutable artifact publication receipts. See
     /// `docs/explanation/single-writer.md`.
     pub lease_bucket: String,
     /// This process's configured writer role. `Writer` and `Standby` both
@@ -326,6 +326,13 @@ pub struct NatsStoreConfig {
 }
 
 impl NatsStoreConfig {
+    pub fn connection_options(&self) -> async_nats::ConnectOptions {
+        let options = async_nats::ConnectOptions::new();
+        match &self.credentials {
+            Some(credentials) => credentials.apply(options),
+            None => options,
+        }
+    }
     pub fn new(url: impl Into<String>, metrics: StoreMetrics) -> Self {
         let (url, credentials) = split_url_credentials(&url.into());
         Self {
@@ -600,7 +607,8 @@ impl NatsStore {
         config.take_url_credentials();
         config.validate()?;
         let metrics = config.metrics.clone();
-        let connect_options = async_nats::ConnectOptions::new()
+        let connect_options = config
+            .connection_options()
             .connection_timeout(Duration::from_secs(10))
             .retry_on_initial_connect()
             .event_callback(move |event| {
@@ -619,10 +627,6 @@ impl NatsStore {
                     }
                 }
             });
-        let connect_options = match &config.credentials {
-            Some(credentials) => credentials.apply(connect_options),
-            None => connect_options,
-        };
         let client = connect_options.connect(&config.url).await.map_err(|e| {
             StoreError::Unavailable(format!("nats connect {url}: {e}", url = config.url))
         })?;
@@ -697,7 +701,7 @@ impl NatsStore {
         let lease_kv = ensure_kv(
             &js,
             &config.lease_bucket,
-            "Event Modeling writer lease (single row: holder + epoch + expiry)",
+            "Event Modeling writer lease and immutable artifact publication receipts",
         )
         .await?;
         ensure_changes_stream(&js, &config).await?;
@@ -718,6 +722,7 @@ impl NatsStore {
         ));
         let lease_ready = Arc::new(Notify::new());
         let lease_task = tokio::spawn(writer_lease::run_writer_lease(
+            js.clone(),
             lease_kv.clone(),
             lease.clone(),
             lease_ready.clone(),
@@ -885,11 +890,9 @@ impl NatsStore {
     ///
     /// # Write ordering
     ///
-    /// The record row is written before the name index, never the other way
-    /// round. A crash between the two leaves a namespace that exists but is
-    /// unreachable by name, which the next claim of that name repairs. The
-    /// opposite order would leave a name permanently claimed by a namespace
-    /// that does not exist, and nothing would ever clean it up.
+    /// A name index must not grant ownership without a matching record.
+    /// Interrupted claims leave derived indices repairable by the next claim;
+    /// cleanup must preserve a winner or an acknowledged retention reservation.
     async fn claim_namespace(
         &self,
         id: NamespaceId,
@@ -931,7 +934,7 @@ impl NatsStore {
 
         let record_key = namespace_record_key(record.id.as_str());
 
-        let we_created_the_row = match tokio::time::timeout(
+        let created_revision = match tokio::time::timeout(
             KV_OP_TIMEOUT,
             self.namespaces_kv
                 .create(&record_key, encode_namespace_record(&record)),
@@ -939,7 +942,7 @@ impl NatsStore {
         .await
         .map_err(|_| StoreError::Backend(format!("namespace kv.create {record_key}: timeout")))?
         {
-            Ok(_) => true,
+            Ok(revision) => Some(revision),
             Err(e) => {
                 use async_nats::jetstream::kv::CreateErrorKind;
                 if !matches!(e.kind(), CreateErrorKind::AlreadyExists) {
@@ -959,9 +962,10 @@ impl NatsStore {
                 if existing.parent != record.parent || existing.name != record.name {
                     return Err(StoreError::AlreadyExists);
                 }
-                false
+                None
             }
         };
+        let we_created_the_row = created_revision.is_some();
 
         if let Ok(()) = self.write_name_index(&index_key, &record.id, None).await {
             Ok(NamespaceClaim {
@@ -973,15 +977,30 @@ impl NatsStore {
             // Either a concurrent claim won the race, or the row is stale
             // from an interrupted write.
             if let Some(winner) = self.follow_name_index(&index_key, parent, name).await? {
-                if we_created_the_row {
-                    // Our record row is now an orphan nobody can reach.
-                    let _ =
-                        tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&record_key))
-                            .await;
+                let created = we_created_the_row && winner.id == record.id;
+                if created {
+                    let (indexed_id, revision) = self
+                        .read_name_index(&index_key)
+                        .await?
+                        .ok_or(StoreError::NotFound)?;
+                    if indexed_id != record.id {
+                        return Err(StoreError::AlreadyExists);
+                    }
+                    // Fence an older release's pending index deletion.
+                    self.write_name_index(&index_key, &record.id, Some(revision))
+                        .await?;
+                } else if let Some(revision) = created_revision {
+                    // Retention may already have claimed this unindexed row.
+                    let _ = tokio::time::timeout(
+                        KV_OP_TIMEOUT,
+                        self.namespaces_kv
+                            .delete_expect_revision(&record_key, Some(revision)),
+                    )
+                    .await;
                 }
                 return Ok(NamespaceClaim {
                     record: winner,
-                    created: false,
+                    created,
                 });
             }
             let revision = self.read_name_index(&index_key).await?.map(|(_, rev)| rev);
@@ -2701,6 +2720,18 @@ fn escape_subject_token(s: &str) -> String {
 
 #[async_trait]
 impl Store for NatsStore {
+    fn artifact_publication_authority(
+        &self,
+    ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
+        Ok(Arc::new(
+            artifact_publication::NatsArtifactPublicationAuthority::new(
+                self.js.clone(),
+                self.lease_kv.clone(),
+                self.lease.clone(),
+            ),
+        ))
+    }
+
     fn is_writer(&self) -> bool {
         self.lease.is_writer()
     }
@@ -4629,25 +4660,44 @@ impl Store for NatsStore {
     async fn release_namespace(&self, id: &NamespaceId) -> StoreResult<()> {
         self.source_guarded(async {
             self.require_writer()?;
-            let Some((record, _)) = self.read_namespace_row(id).await? else {
+            let Some((record, revision)) = self.read_namespace_row(id).await? else {
                 return Ok(());
             };
-            // The index row goes first. A crash between the two leaves a record
-            // nothing resolves to, which the next claim of the name repairs; the
-            // opposite order leaves a name pointing at a record that is gone,
-            // which nothing repairs.
+            if record.tenure == NamespaceTenure::Permanent {
+                return Err(StoreError::InvalidArgument(
+                    "cannot release a permanent namespace".into(),
+                ));
+            }
             let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
-            let _ =
-                tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&index_key)).await;
+            // Recovery can recreate the same ID with a newer index incarnation.
+            let index_revision = self
+                .read_name_index(&index_key)
+                .await?
+                .filter(|(indexed_id, _)| indexed_id == id)
+                .map(|(_, revision)| revision);
             let record_key = namespace_record_key(id.as_str());
-            tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&record_key))
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.namespaces_kv
+                    .delete_expect_revision(&record_key, Some(revision)),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("namespace kv.delete {record_key}: timeout")))?
+            .map_err(|e| StoreError::Backend(format!("namespace kv.delete {record_key}: {e}")))?;
+            if let Some(revision) = index_revision {
+                tokio::time::timeout(
+                    KV_OP_TIMEOUT,
+                    self.namespaces_kv
+                        .delete_expect_revision(&index_key, Some(revision)),
+                )
                 .await
                 .map_err(|_| {
-                    StoreError::Backend(format!("namespace kv.delete {record_key}: timeout"))
+                    StoreError::Backend(format!("namespace kv.delete {index_key}: timeout"))
                 })?
                 .map_err(|e| {
-                    StoreError::Backend(format!("namespace kv.delete {record_key}: {e}"))
+                    StoreError::Backend(format!("namespace kv.delete {index_key}: {e}"))
                 })?;
+            }
             Ok(())
         })
         .await
@@ -4659,16 +4709,12 @@ impl Store for NatsStore {
             let Some((record, revision)) = self.read_namespace_row(id).await? else {
                 return Ok(None);
             };
-            if record.tenure == NamespaceTenure::Permanent {
-                return Ok(Some(record));
-            }
             let promoted = NamespaceRecord {
                 tenure: NamespaceTenure::Permanent,
                 ..record
             };
             let record_key = namespace_record_key(id.as_str());
-            // CAS, so a concurrent move or release loses rather than being
-            // silently reverted by this write.
+            // Even Permanent rows need a new revision to fence older cleanup.
             tokio::time::timeout(
                 KV_OP_TIMEOUT,
                 self.namespaces_kv.update(
@@ -6347,6 +6393,9 @@ mod source_publication;
 
 #[path = "writer_lease.rs"]
 mod writer_lease;
+
+#[path = "nats_artifact_publication.rs"]
+mod artifact_publication;
 
 #[path = "legacy_fields.rs"]
 mod legacy_fields;

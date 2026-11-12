@@ -320,6 +320,16 @@ impl Failure {
     /// `tonic::Status` at the chain's root. Never matches on error text.
     #[must_use]
     pub fn classify(err: &anyhow::Error) -> Self {
+        if let Some(completion) = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<crate::artifacts::UploadCompletionError>())
+        {
+            let mut failure = Self::classify(&completion.source);
+            let mut details = failure.details.into_json();
+            details["artifact_upload"] = json!(completion.recovery);
+            failure.details = FailureDetails::from_json(details);
+            return failure;
+        }
         if let Some(stale) = err.chain().find_map(|c| c.downcast_ref::<StalePlan>()) {
             return Self::new(FailureCategory::StaleState, stale.to_string())
                 .with_details(FailureDetails::from_json(stale.to_json()));

@@ -275,6 +275,133 @@ impl AnalysisProvenance {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Artifact {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub artifact_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub filename: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub media_type: ::prost::alloc::string::String,
+    #[prost(uint64, tag="5")]
+    pub size: u64,
+    #[prost(string, tag="6")]
+    pub sha256: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactStorageInfoRequest {
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactStorageInfoResponse {
+    #[prost(bool, tag="1")]
+    pub enabled: bool,
+    #[prost(string, tag="2")]
+    pub backend: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub max_bytes: u64,
+    #[prost(uint64, tag="4")]
+    pub upload_ttl_seconds: u64,
+    #[prost(bool, tag="5")]
+    pub direct_upload: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BeginArtifactUploadRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub filename: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub media_type: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub size: u64,
+    #[prost(string, tag="5")]
+    pub sha256: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BeginArtifactUploadResponse {
+    #[prost(string, tag="1")]
+    pub upload_id: ::prost::alloc::string::String,
+    /// S3 presigned PUT target only. Empty when direct_upload=false; send
+    /// content through UploadArtifactContent instead.
+    #[prost(string, tag="2")]
+    pub upload_url: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="3")]
+    pub headers: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(int64, tag="4")]
+    pub expires_unix_seconds: i64,
+    #[prost(bool, tag="5")]
+    pub direct_upload: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UploadArtifactContentRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub upload_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub content: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UploadArtifactContentResponse {
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CompleteArtifactUploadRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub upload_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CompleteArtifactUploadResponse {
+    #[prost(message, optional, tag="1")]
+    pub artifact: ::core::option::Option<Artifact>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub artifact_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactResponse {
+    #[prost(message, optional, tag="1")]
+    pub artifact: ::core::option::Option<Artifact>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactDownloadRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub artifact_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetArtifactDownloadResponse {
+    /// S3 presigned GET target only. Backends without direct downloads refuse
+    /// this RPC with FAILED_PRECONDITION; use GetArtifactContent instead.
+    #[prost(string, tag="1")]
+    pub url: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="2")]
+    pub headers: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(int64, tag="3")]
+    pub expires_unix_seconds: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactContentRequest {
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub artifact_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetArtifactContentResponse {
+    #[prost(message, optional, tag="1")]
+    pub artifact: ::core::option::Option<Artifact>,
+    #[prost(bytes="vec", tag="2")]
+    pub content: ::prost::alloc::vec::Vec<u8>,
+}
 /// The state a mutation was planned against no longer holds. An etag is never
 /// empty, so an empty value here means the key is absent.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

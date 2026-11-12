@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
@@ -695,6 +695,14 @@ pub struct ChangesetPage<'a> {
 /// management, and `docs/explanation/branching.md` for the full design.
 #[async_trait]
 pub trait Store: Send + Sync {
+    fn artifact_publication_authority(
+        &self,
+    ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
+        Err(StoreError::Unavailable(
+            "artifact publication authority is unsupported by this store".into(),
+        ))
+    }
+
     // ---- Single-writer fencing --------------------------------------------
     //
     // Only one process may mutate at a time; see `docs/explanation/single-writer.md`.
@@ -1596,7 +1604,7 @@ mod tests {
 
     fn record(ops: Vec<ChangesetOp>) -> ChangesetRecord {
         ChangesetRecord {
-            id: "0190f5a0-0000-7000-8000-000000000000".to_owned(),
+            id: uuid::Uuid::now_v7().to_string(),
             author: "acme-bot".to_owned(),
             at: "2026-10-15T00:00:00Z".to_owned(),
             message: String::new(),

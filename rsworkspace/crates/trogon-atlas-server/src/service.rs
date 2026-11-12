@@ -499,6 +499,7 @@ fn identity_from_request(kind: i32, namespace: &str, slug: &str) -> Result<Entit
 
 pub struct EventModelServiceImpl {
     pub store: Arc<dyn Store>,
+    artifacts: Option<Arc<crate::artifacts::ArtifactService>>,
     pub git_mirror: Option<Arc<GitMirror>>,
     pub llm_analyzer: Option<Arc<LlmAnalyzer>>,
     pub jev_analyzer: Option<Arc<crate::jev::JevAnalyzer>>,
@@ -716,6 +717,7 @@ impl EventModelServiceImpl {
         let source_retention_task = source_integration::spawn_retention_sweep(store.clone());
         Ok(Self {
             store,
+            artifacts: None,
             git_mirror: None,
             llm_analyzer: None,
             jev_analyzer: None,
@@ -1800,6 +1802,67 @@ impl EventModelServiceImpl {
     pub fn with_authorizer(mut self, authorizer: Arc<dyn NamespaceAuthorizer>) -> Self {
         self.authorizer = authorizer;
         self
+    }
+
+    pub fn with_artifacts(mut self, artifacts: Arc<crate::artifacts::ArtifactService>) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+
+    fn artifact_service(&self) -> Result<&crate::artifacts::ArtifactService, Status> {
+        self.artifacts
+            .as_deref()
+            .ok_or_else(|| Status::failed_precondition("artifact storage is disabled"))
+    }
+
+    async fn artifact_authorize<T>(
+        &self,
+        request: &Request<T>,
+        namespace: &str,
+        write: bool,
+    ) -> Result<String, Status> {
+        crate::artifacts::validate_namespace(namespace)?;
+        let vis = Self::visibility_of(request);
+        if write {
+            let _guard = self.mutation_lock.lock().await;
+            self.artifact_service()?;
+            if !self.store.is_writer() {
+                return Err(Status::failed_precondition(
+                    "artifact upload requires the active writer",
+                ));
+            }
+            let principal =
+                Self::principal_from_metadata(request).unwrap_or_else(|| crate::auth::Principal {
+                    name: Arc::from(UNAUTHENTICATED_PRINCIPAL),
+                    role: crate::auth::Role::Admin,
+                    kind: crate::auth::PrincipalKind::User,
+                    is_anonymous: true,
+                    namespaces: crate::scope::NamespaceScope::unrestricted(),
+                    parent: None,
+                });
+            if principal.role < crate::auth::Role::Writer {
+                return Err(Status::permission_denied(
+                    "artifact upload requires writer role",
+                ));
+            }
+            self.require_namespace_scope_as(
+                Some(&principal),
+                &WriteTargets::of(namespace),
+                &NamespaceTenure::Permanent,
+                WriteEffect::Persist,
+            )
+            .await?;
+            let id = NamespaceId::parse(namespace)
+                .map_err(|_| Status::invalid_argument("invalid namespace ID"))?;
+            self.store
+                .promote_namespace(&id)
+                .await
+                .map_err(store_err)?
+                .ok_or_else(|| Status::aborted("artifact namespace reservation disappeared"))?;
+            self.invalidate_directory().await;
+        }
+        self.require_visible(&vis, namespace).await?;
+        Ok(vis.principal().to_owned())
     }
 
     /// The registry cache this service reads namespace rows through.
@@ -4351,6 +4414,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::RegisterNamespaceRequest>,
     ) -> Result<Response<pb::RegisterNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         let vis = Self::visibility_of(&req);
         let principal = Self::principal_from_metadata(&req);
         let msg = req.into_inner();
@@ -4386,6 +4450,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::MoveNamespaceRequest>,
     ) -> Result<Response<pb::MoveNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         // Deliberately no `visibility_of` gate on the source: a move is the
         // one operation that crosses an ownership boundary, so a caller who
         // could only act inside their own could never complete one. It is
@@ -4831,6 +4896,110 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         self.human_interaction(req.into_inner(), branch.as_deref(), &vis)
             .await
             .map(Response::new)
+    }
+
+    async fn get_artifact_storage_info(
+        &self,
+        _request: Request<pb::GetArtifactStorageInfoRequest>,
+    ) -> Result<Response<pb::GetArtifactStorageInfoResponse>, Status> {
+        Ok(Response::new(self.artifacts.as_ref().map_or_else(
+            || pb::GetArtifactStorageInfoResponse {
+                backend: "disabled".into(),
+                ..Default::default()
+            },
+            |artifacts| artifacts.info(),
+        )))
+    }
+
+    async fn begin_artifact_upload(
+        &self,
+        request: Request<pb::BeginArtifactUploadRequest>,
+    ) -> Result<Response<pb::BeginArtifactUploadResponse>, Status> {
+        let principal = self
+            .artifact_authorize(&request, &request.get_ref().namespace, true)
+            .await?;
+        self.artifact_service()?
+            .begin(request.into_inner(), &principal)
+            .await
+            .map(Response::new)
+    }
+
+    async fn upload_artifact_content(
+        &self,
+        request: Request<pb::UploadArtifactContentRequest>,
+    ) -> Result<Response<pb::UploadArtifactContentResponse>, Status> {
+        let principal = self
+            .artifact_authorize(&request, &request.get_ref().namespace, true)
+            .await?;
+        let request = request.into_inner();
+        self.artifact_service()?
+            .upload(
+                &request.namespace,
+                &request.upload_id,
+                &principal,
+                request.content.into(),
+            )
+            .await?;
+        Ok(Response::new(pb::UploadArtifactContentResponse {}))
+    }
+
+    async fn complete_artifact_upload(
+        &self,
+        request: Request<pb::CompleteArtifactUploadRequest>,
+    ) -> Result<Response<pb::CompleteArtifactUploadResponse>, Status> {
+        let principal = self
+            .artifact_authorize(&request, &request.get_ref().namespace, true)
+            .await?;
+        let request = request.into_inner();
+        let artifact = self
+            .artifact_service()?
+            .complete(&request.namespace, &request.upload_id, &principal)
+            .await?;
+        Ok(Response::new(pb::CompleteArtifactUploadResponse {
+            artifact: Some(artifact),
+        }))
+    }
+
+    async fn get_artifact(
+        &self,
+        request: Request<pb::GetArtifactRequest>,
+    ) -> Result<Response<pb::GetArtifactResponse>, Status> {
+        self.artifact_authorize(&request, &request.get_ref().namespace, false)
+            .await?;
+        let request = request.into_inner();
+        let artifact = self
+            .artifact_service()?
+            .get(&request.namespace, &request.artifact_id)
+            .await?;
+        Ok(Response::new(pb::GetArtifactResponse {
+            artifact: Some(artifact),
+        }))
+    }
+
+    async fn get_artifact_download(
+        &self,
+        request: Request<pb::GetArtifactDownloadRequest>,
+    ) -> Result<Response<pb::GetArtifactDownloadResponse>, Status> {
+        self.artifact_authorize(&request, &request.get_ref().namespace, false)
+            .await?;
+        let request = request.into_inner();
+        self.artifact_service()?
+            .download(&request.namespace, &request.artifact_id)
+            .await
+            .map(Response::new)
+    }
+
+    async fn get_artifact_content(
+        &self,
+        request: Request<pb::GetArtifactContentRequest>,
+    ) -> Result<Response<pb::GetArtifactContentResponse>, Status> {
+        self.artifact_authorize(&request, &request.get_ref().namespace, false)
+            .await?;
+        let request = request.into_inner();
+        self.artifact_service()?
+            .content(&request.namespace, &request.artifact_id)
+            .await
+            .map(crate::artifacts::download_budget::BudgetedContent::into_response)
     }
 
     async fn get_design_graph_detail(
@@ -12015,6 +12184,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::DeleteBranchRequest>,
     ) -> Result<Response<pb::DeleteBranchResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
         validate_branch_name(&req.name)?;

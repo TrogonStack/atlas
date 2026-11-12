@@ -100,6 +100,122 @@ rebinding; gRPC is unaffected by this guard. The chart allows loopback and
 every name of this release's Service; add the hostname of any Ingress or
 Gateway that routes to the server to `mcp.allowedHosts`.
 
+## Artifacts
+
+The artifact service is disabled by default. Configure its backend in the
+deployment; CLI and MCP clients discover the active backend and upload limits
+with `artifacts info` and `get_artifact_storage_info`.
+
+`artifacts.backend.kind` selects where file bytes are stored. Its
+`artifacts.backend.spec` contains only that provider's settings. Metadata
+and upload sessions use `artifacts.catalog.natsKvBucket` with either enabled
+backend, through the server's existing NATS connection.
+
+| Setting | Applies when | Meaning |
+| --- | --- | --- |
+| `artifacts.backend.kind` | Always | `disabled`, `nats` or `s3`; defaults to `disabled`. |
+| `artifacts.backend.spec` | `kind: disabled` | Must be an empty object. |
+| `artifacts.backend.spec.bucket` | `kind: nats` | Required NATS Object Store bucket for file bytes. |
+| `artifacts.backend.spec.bucket` | `kind: s3` | Required existing S3-compatible bucket for file bytes. |
+| `artifacts.backend.spec.region` | `kind: s3` | Signing region; defaults to `us-east-1`. |
+| `artifacts.backend.spec.endpoint` | `kind: s3` | Optional S3-compatible endpoint; otherwise provider defaults apply. |
+| `artifacts.backend.spec.forcePathStyle` | `kind: s3` | Path-style requests; defaults to `false`. |
+| `artifacts.backend.spec.allowHttp` | `kind: s3` | HTTP for isolated development; defaults to `false`. |
+| `artifacts.catalog.natsKvBucket` | `kind: nats` or `kind: s3` | NATS KV bucket for metadata and upload sessions; defaults to `atlas_artifact_catalog`. |
+| `artifacts.maxBytes`, `artifacts.uploadTtlSecs` | Either enabled backend | File-size limit and upload lifetime. |
+
+For NATS Object Store, select `kind: nats` and supply its object bucket:
+
+```yaml
+config:
+  maxMessageBytes: 37748736
+artifacts:
+  backend:
+    kind: nats
+    spec:
+      bucket: atlas_artifacts
+  catalog:
+    natsKvBucket: atlas_artifact_catalog
+  maxBytes: 16777216
+  uploadTtlSecs: 900
+```
+
+The server creates missing Object Store and catalog KV buckets at startup
+when its NATS credentials permit it, and reuses existing compatible buckets.
+Pre-provisioning is optional; use it to control file storage, replication,
+capacity and backups alongside the model store. The chart does not install
+NATS.
+
+For S3, create the private bucket first, then select `kind: s3`. The catalog
+remains a NATS KV bucket; an artifact NATS Object Store bucket is not needed:
+
+```yaml
+config:
+  maxMessageBytes: 37748736
+artifacts:
+  backend:
+    kind: s3
+    spec:
+      bucket: product-artifacts
+      region: us-east-1
+  catalog:
+    natsKvBucket: atlas_artifact_catalog
+  maxBytes: 16777216
+  uploadTtlSecs: 900
+extraEnv:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: artifact-storage-credentials
+        key: access-key-id
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: artifact-storage-credentials
+        key: secret-access-key
+```
+
+Use supported workload identity or an existing Secret for provider
+credentials. Temporary credentials also need `AWS_SESSION_TOKEN`. No
+credential values belong in `artifacts` or client configuration. S3 uploads
+go directly to a bounded presigned PUT URL; completion verifies the staging
+bytes and writes a separate immutable final object. Artifact metadata still
+uses the configured NATS catalog KV bucket.
+
+With `kind: s3`, put `endpoint`, `forcePathStyle` and `allowHttp` inside
+`artifacts.backend.spec` for compatible providers such as MinIO. The
+endpoint must be reachable by the server and upload clients because it
+appears in signed URLs. Keep `allowHttp: false` outside isolated development.
+
+The values schema rejects unknown kinds, fields belonging to a different
+provider, missing or empty selected buckets, and a nonempty `spec` for
+`kind: disabled`. The previous flat `backend`, `natsBucket`, `catalogBucket`
+and sibling `s3` forms, as well as the old `backend.value` wrapper, are
+rejected. Select `backend.kind` and put the selected provider's fields in
+`backend.spec`. Use `catalog.natsKvBucket` for shared metadata.
+
+File limits must be within 1 byte through 32 MiB, and upload lifetimes must
+be within 1 through 3,600 seconds.
+The chart also requires
+`config.maxMessageBytes >= artifacts.maxBytes + 65536`; the default 4 MiB
+transport limit must be increased when enabling the default 16 MiB artifact
+limit.
+
+The chart maps `backend.kind` to `TROGON_ATLAS_ARTIFACT_BACKEND`.
+`backend.spec.bucket` maps to `TROGON_ATLAS_ARTIFACT_NATS_BUCKET` for
+`kind: nats` or `TROGON_ATLAS_ARTIFACT_S3_BUCKET` for `kind: s3`; only the
+selected provider's variables are emitted. `catalog.natsKvBucket` maps to
+`TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET` with either enabled backend.
+
+Atlas artifact control and byte-retrieval operations use gRPC. NATS uploads
+and downloads also use gRPC, so an enabled backend needs no public URL or
+additional Atlas HTTP routes. The obsolete `artifacts.publicUrl` setting is
+rejected by the schema. S3 grant creation is an RPC; only direct transfer
+of the bytes uses presigned HTTP PUT or GET requests. Signed S3 URLs remain
+capabilities until their expiry. See
+[Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
+for CLI/MCP usage and retention requirements.
+
 ## Port
 
 The server listens on one port, named `private` on the container and the Service: its callers (studio, agents, the CLI) reach it from inside the cluster, and the chart creates no Ingress for it. `service.port` (default `50069`) sets it. Without TLS the Service port declares `appProtocol: kubernetes.io/h2c`, so meshes and gateways speak HTTP/2 cleartext to it rather than guess; with `tls.existingSecret` set it declares none.
