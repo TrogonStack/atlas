@@ -4543,6 +4543,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let id = NamespaceId::parse(req.into_inner().id.trim())
             .map_err(|e| Status::invalid_argument(format!("invalid namespace id: {e}")))?;
+        let not_registered = || Status::not_found(format!("namespace {id} is not registered"));
         // Reads the registry, not the cached directory view, because this
         // decides what to delete.
         let record = self
@@ -4550,14 +4551,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .get_namespace(&id)
             .await
             .map_err(store_err)?
-            .ok_or_else(|| Status::not_found(format!("namespace {id} is not registered")))?;
+            .ok_or_else(not_registered)?;
         // A caller bound to an owner may only delete inside its own subtree.
         // Answers like a missing row, so the id of another tenant's
         // namespace is not confirmed.
         if !self.lens(&vis).await?.admits(id.as_str()) {
-            return Err(Status::not_found(format!(
-                "namespace {id} is not registered"
-            )));
+            return Err(not_registered());
         }
         if record.id == NamespaceId::adopt_legacy(&record.name) {
             return Err(Status::failed_precondition(format!(
