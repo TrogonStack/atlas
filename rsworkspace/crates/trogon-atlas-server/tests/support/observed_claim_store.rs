@@ -52,6 +52,12 @@ impl Store for ObservedClaimStore {
     ) -> trogon_atlas_store::StoreResult<()> {
         self.inner.release_namespace(id).await
     }
+    async fn delete_namespace(
+        &self,
+        id: &trogon_atlas_core::NamespaceId,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::NamespaceRecord> {
+        self.inner.delete_namespace(id).await
+    }
 
     async fn promote_namespace(
         &self,

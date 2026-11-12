@@ -52,6 +52,12 @@ impl Store for SweepStore {
     ) -> trogon_atlas_store::StoreResult<()> {
         panic!("unexpected unrelated Store API")
     }
+    async fn delete_namespace(
+        &self,
+        id: &trogon_atlas_core::NamespaceId,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::NamespaceRecord> {
+        panic!("unexpected unrelated Store API")
+    }
     async fn promote_namespace(
         &self,
         id: &trogon_atlas_core::NamespaceId,

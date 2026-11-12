@@ -1213,6 +1213,14 @@ pub trait Store: Send + Sync {
     /// releasing a row that is already gone succeeds.
     async fn release_namespace(&self, id: &NamespaceId) -> StoreResult<()>;
 
+    /// Drop a row of any tenure and its name index.
+    ///
+    /// Returns the removed record so the caller can retire its authorization
+    /// edges. Store-level only: the caller must first prove the namespace
+    /// holds nothing. Fails with `NotFound` when no such row exists, and with
+    /// a backend error when the row changed after it was read.
+    async fn delete_namespace(&self, id: &NamespaceId) -> StoreResult<NamespaceRecord>;
+
     /// Make a provisional row permanent, because its branch merged.
     ///
     /// `None` when no such row exists. A row that is already permanent is

@@ -559,3 +559,63 @@ async fn provisional_release_removes_its_record_and_index_and_is_idempotent() {
     );
     fixture.store.release_namespace(&record.id).await.unwrap();
 }
+
+#[tokio::test]
+async fn delete_removes_a_permanent_namespace_record_and_index() {
+    let fixture = Fixture::new().await;
+    let record = fixture.provisional().await;
+    let permanent = fixture
+        .store
+        .promote_namespace(&record.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let removed = fixture.store.delete_namespace(&record.id).await.unwrap();
+    assert_eq!(removed, permanent);
+    assert!(fixture
+        .store
+        .get_namespace(&record.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(fixture
+        .store
+        .resolve_namespace(&fixture.owner, &fixture.name)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn delete_of_a_missing_namespace_is_not_found() {
+    let fixture = Fixture::new().await;
+    let record = fixture.provisional().await;
+    fixture.store.release_namespace(&record.id).await.unwrap();
+    assert!(matches!(
+        fixture.store.delete_namespace(&record.id).await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn delete_loses_to_a_concurrent_record_update_and_keeps_the_index() {
+    let fixture = Fixture::new().await;
+    let record = fixture.provisional().await;
+    let mut pause = fixture.proxy.pause_delete(None);
+    let store = fixture.store.clone();
+    let id = record.id.clone();
+    let delete = tokio::spawn(async move { store.delete_namespace(&id).await });
+    pause.reached().await;
+    let permanent = fixture
+        .store
+        .promote_namespace(&record.id)
+        .await
+        .unwrap()
+        .unwrap();
+    pause.resume();
+    assert!(
+        delete.await.unwrap().is_err(),
+        "a lost CAS must fail closed"
+    );
+    fixture.assert_retained(&permanent).await;
+}
