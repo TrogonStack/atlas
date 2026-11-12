@@ -655,10 +655,7 @@ impl Drop for StreamChangesGuard {
 fn entity_lifecycle_status(entity: &pb::Entity) -> Option<String> {
     let metadata = crate::validation::entity_metadata(entity);
     for any in metadata {
-        if !any
-            .type_url
-            .ends_with("trogonatlas.annotation.v1alpha1.LifecycleAnnotation")
-        {
+        if !crate::annotation_type::BuiltinAnnotation::LIFECYCLE.matches(any) {
             continue;
         }
         if let Ok(ann) = <pb::LifecycleAnnotation as prost::Message>::decode(any.value.as_slice()) {
@@ -3942,6 +3939,27 @@ struct OpMetaLike {
     id: pb::Id,
     is_put: bool,
     entity: Option<pb::Entity>,
+}
+
+fn library_changes(metas: &[OpMetaLike]) -> Vec<crate::type_libraries::LibraryChange<'_>> {
+    metas
+        .iter()
+        .filter_map(|meta| {
+            if meta.kind != pb::EntityKind::TypeLibrary {
+                return None;
+            }
+            if meta.is_put {
+                match meta.entity.as_ref()?.kind.as_ref()? {
+                    pb::entity::Kind::TypeLibrary(library) => {
+                        Some(crate::type_libraries::LibraryChange::Put(library))
+                    }
+                    _ => None,
+                }
+            } else {
+                Some(crate::type_libraries::LibraryChange::Remove(&meta.id))
+            }
+        })
+        .collect()
 }
 
 // `PAGE_TOKEN_PREFIX` keeps clients out of the encoding's internals: a bare
@@ -7395,6 +7413,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .type_libraries
             .check_schema(&*self.store, &entity, &[], branch.as_deref())
             .await?;
+        let annotation_issues = validation::unknown_annotation_type_issues(
+            &pb::EntityRef {
+                kind: kind as i32,
+                id: Some(id.clone()),
+            },
+            &self
+                .type_libraries
+                .unknown_annotation_types(&*self.store, &entity, &[], branch.as_deref())
+                .await?,
+        );
 
         let ran_scenarios = runs_scenarios(kind);
         let ran_strategic = is_strategic_kind(kind);
@@ -7416,6 +7444,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &scenario_issues,
             )));
         }
+        scenario_issues.extend(annotation_issues);
         // Strategic findings never block: sequential puts of one problem
         // space are order dependent, so a context put before its subdomains
         // is transiently dangling and rejecting it would make the model
@@ -8436,18 +8465,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 _ => None,
             })
             .collect();
-        for m in metas.iter().filter(|m| m.is_put) {
-            if let Some(entity) = m.entity.as_ref() {
-                if let Some(admission) = self
-                    .type_libraries
-                    .check_schema(&*self.store, entity, &pending_libraries, branch.as_deref())
-                    .await?
-                {
-                    if !type_library_admissions.contains(&admission) {
-                        type_library_admissions.push(admission);
-                    }
+        let library_changes = library_changes(&metas);
+        let mut annotation_issues: Vec<Vec<pb::ValidationIssue>> =
+            std::iter::repeat_with(Vec::new).take(metas.len()).collect();
+        let mut annotation_types = self
+            .type_libraries
+            .annotation_lookup(&library_changes, branch.as_deref());
+        for (m, issues) in metas.iter().zip(&mut annotation_issues) {
+            let Some(entity) = m.entity.as_ref().filter(|_| m.is_put) else {
+                continue;
+            };
+            if let Some(admission) = self
+                .type_libraries
+                .check_schema(&*self.store, entity, &pending_libraries, branch.as_deref())
+                .await?
+            {
+                if !type_library_admissions.contains(&admission) {
+                    type_library_admissions.push(admission);
                 }
             }
+            *issues = validation::unknown_annotation_type_issues(
+                &pb::EntityRef {
+                    kind: m.kind as i32,
+                    id: Some(m.id.clone()),
+                },
+                &annotation_types.unknown(&*self.store, entity).await?,
+            );
         }
 
         let invariant_changes: Vec<invariant_admission::Change> = metas
@@ -8607,8 +8650,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // replacement semantics, so the order of ops inside a batch never
         // matters. Each finding rides the op whose entity it is about, or
         // the op that caused it when that entity is not in the batch.
-        let mut per_op_validation: Vec<Vec<pb::ValidationIssue>> =
-            std::iter::repeat_with(Vec::new).take(metas.len()).collect();
+        let mut per_op_validation = annotation_issues;
         let has_strategic_ops = has_strategic_puts || has_strategic_deletes;
         let architecture_subjects = metas
             .iter()
@@ -8651,7 +8693,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &changes, &base, &world,
                     ))
             {
-                per_op_validation[*op_index] = issues;
+                per_op_validation[*op_index].extend(issues);
             }
             let delete_ops: Vec<usize> = metas
                 .iter()
@@ -8674,7 +8716,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             &deletions, &before, &world, &reported,
                         ))
                 {
-                    per_op_validation[*op_index] = issues;
+                    per_op_validation[*op_index].extend(issues);
                 }
             }
         }
@@ -8710,7 +8752,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .into_iter()
                     .partition(|iss| iss.severity == pb::validation_issue::Severity::Error as i32);
                 if errors.is_empty() {
-                    per_op_validation[i] = non_errors;
+                    per_op_validation[i].extend(non_errors);
                 } else {
                     if first_error_index.is_none() {
                         first_error_index = Some(i);
