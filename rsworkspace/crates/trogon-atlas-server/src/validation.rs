@@ -70,8 +70,7 @@ const DRAFT_LIFECYCLE_STATUSES: &[&str] = &["draft", "proposed"];
 // matches what `validate_model` / `validate_scenarios` push into
 // `ValidationIssue.code`; `default_severity` is the canonical severity
 // at the rule's primary emission site (rules whose severity is
-// conditional (e.g. READ_MODEL_SHARED_CONSUMERS downgrades to Info
-// when SharedConsumersAnnotation is present), record the base case.
+// conditional, record the base case.
 //
 // A unit test below diffs the catalog against the literal codes
 // referenced in this file so the two cannot drift.
@@ -3624,8 +3623,9 @@ pub fn validate_model_content(
             let mut list: Vec<&str> = slices.iter().map(String::as_str).collect();
             list.sort_unstable();
             // Decision #34: a SharedConsumersAnnotation on the RM declares
-            // that the multi-consumer arrangement is intentional, and the
-            // finding downgrades from Error to Info. An empty doc on the
+            // that the multi-consumer arrangement is intentional. The
+            // finding is Info either way, and a declared one is marked
+            // acknowledged so clients offer no fix. An empty doc on the
             // annotation triggers the doc-empty companion below.
             let (shared_declared, shared_doc_ok) = all
                 .iter()
@@ -3692,6 +3692,7 @@ pub fn validate_model_content(
                     id: Some(key.id()),
                 }),
                 subject_field: "source_read_models".into(),
+                acknowledged: shared_declared,
                 ..Default::default()
             });
             if shared_declared && !shared_doc_ok {
@@ -15845,6 +15846,7 @@ mod read_model_shape_tests {
             found[0].severity,
             pb::validation_issue::Severity::Info as i32
         );
+        assert!(!found[0].acknowledged);
     }
 
     #[test]
@@ -15866,6 +15868,7 @@ mod read_model_shape_tests {
             found[0].severity,
             pb::validation_issue::Severity::Info as i32
         );
+        assert!(found[0].acknowledged);
         assert_eq!(
             issues_with(&issues, "READ_MODEL_MULTIPLE_AUTOMATIONS").len(),
             0

@@ -41,6 +41,10 @@ message ValidationIssue {
   // evidence). Empty for rules that still explain their causes only in
   // `message`; ValidationRule.evidence_roles says which rules carry it.
   repeated ValidationEvidence evidence = 9;
+
+  // True when the author declared the finding intentional, so there is
+  // nothing to repair. Clients show it without a fix action.
+  bool acknowledged = 10;
 }
 
 // One cause of a finding, typed so clients never parse `message`. Every
