@@ -174,14 +174,12 @@ pub async fn plan(
             let current = found.then_some(entity);
             if let Some(current) = &current {
                 // A manifest authored without connection IDs adopts the stored
-                // ones. A stored entity the helper rejects is left for the
-                // server to report.
-                let mut adopted = manifest.entity.clone();
-                if trogon_atlas_core::connections::adopt_connection_ids(current, &mut adopted)
-                    .is_ok()
-                {
-                    manifest.entity = adopted;
-                }
+                // ones. A rejected entity is left untouched for the server to
+                // report.
+                let _ = trogon_atlas_core::connections::adopt_connection_ids(
+                    current,
+                    &mut manifest.entity,
+                );
             }
             let action = classify(&manifest.entity, current.as_ref());
             Ok(PlannedChange {

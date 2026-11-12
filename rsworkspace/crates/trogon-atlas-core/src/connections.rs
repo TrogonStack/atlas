@@ -726,6 +726,25 @@ pub fn validate_stored_connection_ids(entity: &Entity) -> Result<(), ConnectionE
     Ok(())
 }
 
+fn set_connection_id(
+    message: &mut DynamicMessage,
+    id: ConnectionId,
+) -> Result<(), ConnectionError> {
+    let field = message
+        .descriptor()
+        .get_field_by_name(identity_field(message))
+        .ok_or_else(|| ConnectionError::Encoding("connection ID descriptor missing".into()))?;
+    let prost_reflect::Kind::Message(descriptor) = field.kind() else {
+        return Err(ConnectionError::Encoding(
+            "connection ID is not a message".into(),
+        ));
+    };
+    let mut value = DynamicMessage::new(descriptor);
+    value.set_field_by_name("value", Value::String(id.to_string()));
+    message.set_field(&field, Value::Message(value));
+    Ok(())
+}
+
 /// Assign identities to freshly authored occurrences without changing existing IDs.
 pub fn assign_connection_ids(entity: &mut Entity) -> Result<usize, ConnectionError> {
     validate_connection_ids(entity)?;
@@ -733,20 +752,7 @@ pub fn assign_connection_ids(entity: &mut Entity) -> Result<usize, ConnectionErr
     let mut assigned = 0;
     visit(&mut normalized, "", "", &[], &mut |message, occurrence| {
         if occurrence.id.is_none() {
-            let field = message
-                .descriptor()
-                .get_field_by_name(identity_field(message))
-                .ok_or_else(|| {
-                    ConnectionError::Encoding("connection ID descriptor missing".into())
-                })?;
-            let prost_reflect::Kind::Message(descriptor) = field.kind() else {
-                return Err(ConnectionError::Encoding(
-                    "connection ID is not a message".into(),
-                ));
-            };
-            let mut id = DynamicMessage::new(descriptor);
-            id.set_field_by_name("value", Value::String(ConnectionId::new().to_string()));
-            message.set_field(&field, Value::Message(id));
+            set_connection_id(message, ConnectionId::new())?;
             assigned += 1;
         }
         Ok(())
@@ -790,18 +796,7 @@ pub fn adopt_connection_ids(
         else {
             return Ok(());
         };
-        let field = message
-            .descriptor()
-            .get_field_by_name(identity_field(message))
-            .ok_or_else(|| ConnectionError::Encoding("connection ID descriptor missing".into()))?;
-        let prost_reflect::Kind::Message(descriptor) = field.kind() else {
-            return Err(ConnectionError::Encoding(
-                "connection ID is not a message".into(),
-            ));
-        };
-        let mut value = DynamicMessage::new(descriptor);
-        value.set_field_by_name("value", Value::String(id.to_string()));
-        message.set_field(&field, Value::Message(value));
+        set_connection_id(message, id)?;
         adopted += 1;
         Ok(())
     })?;
