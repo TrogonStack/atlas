@@ -1050,15 +1050,18 @@ fn unresolved_type_url(pool: &DescriptorPool, any: &DynamicMessage) -> Option<St
 }
 
 fn annotation_type_is_known(pool: &DescriptorPool, url: &TypeUrl) -> bool {
-    if crate::annotation_type::BuiltinAnnotation::is_annotation(url.full_name()) {
-        return true;
-    }
     let Some(message) = pool.get_message_by_name(url.full_name()) else {
         return false;
     };
     let parent = message.parent_file();
     let file = parent.name();
-    !file.starts_with("google/protobuf/") && !file.starts_with("trogonatlas/")
+    if file.starts_with("google/protobuf/") {
+        return false;
+    }
+    if file.starts_with("trogonatlas/") {
+        return message.name().ends_with("Annotation");
+    }
+    true
 }
 
 fn any_payload(pool: &DescriptorPool, any: &mut DynamicMessage) -> Option<DynamicMessage> {

@@ -12,6 +12,7 @@ const BUILT_IN: &str = "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Orph
 const TENANT: &str = "type.googleapis.com/acme.notes.v1.ReviewNote";
 const MISSPELLED: &str = "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.OrphanAnotation";
 const TIMESTAMP: &str = "type.googleapis.com/google.protobuf.Timestamp";
+const NOTE: &str = "type.googleapis.com/trogonatlas.annotation.v1alpha1.NoteAnnotation";
 
 async fn service() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
@@ -162,6 +163,16 @@ async fn put_warns_about_a_well_known_type_used_as_an_annotation() {
             false,
         )]
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_accepts_a_built_in_annotation_outside_the_validation_list() {
+    let service = service().await;
+    let ns = "uat-note";
+
+    let response = put(&service, annotated_event(ns, &[NOTE]), false).await;
+
+    assert_eq!(unknown_annotations(&response.validation), Vec::new());
 }
 
 #[tokio::test(flavor = "multi_thread")]

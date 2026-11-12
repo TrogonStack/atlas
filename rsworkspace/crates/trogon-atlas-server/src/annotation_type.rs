@@ -28,23 +28,6 @@ impl BuiltinAnnotation {
     pub(crate) fn matches(self, any: &prost_types::Any) -> bool {
         TypeUrl::parse(&any.type_url).is_ok_and(|url| url.full_name() == self.0)
     }
-
-    pub(crate) fn is_annotation(full_name: &str) -> bool {
-        const ALL: &[BuiltinAnnotation] = &[
-            BuiltinAnnotation::ASSUMPTION,
-            BuiltinAnnotation::CODE_REF,
-            BuiltinAnnotation::DERIVED_FIELD,
-            BuiltinAnnotation::LIFECYCLE,
-            BuiltinAnnotation::MIXED_SURFACE,
-            BuiltinAnnotation::OPEN_QUESTION,
-            BuiltinAnnotation::ORPHAN,
-            BuiltinAnnotation::PERSONAL_DATA,
-            BuiltinAnnotation::PINNED_REF,
-            BuiltinAnnotation::SHARED_CONSUMERS,
-            BuiltinAnnotation::UUIDV5_IDENTITY,
-        ];
-        ALL.iter().any(|annotation| annotation.0 == full_name)
-    }
 }
 
 #[cfg(test)]
