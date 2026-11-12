@@ -1,0 +1,99 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: place-order
+  namespace: acme-order-workflow
+spec:
+  doc: The shopper places the order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Place order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: calculate-tax
+  namespace: acme-order-workflow
+spec:
+  doc: Records the tax for an order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Calculate tax
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: capture-payment
+  namespace: acme-order-workflow
+spec:
+  doc: Captures the payment. The payment gateway decides whether it succeeds.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Capture payment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: ship-order
+  namespace: acme-order-workflow
+spec:
+  doc: Hands a paid order to the carrier.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Ship order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: cancel-order
+  namespace: acme-order-workflow
+spec:
+  doc: 'Compensation: cancels an order whose payment failed.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Cancel order

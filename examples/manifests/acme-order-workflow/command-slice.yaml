@@ -1,0 +1,222 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: place-order-slice
+  namespace: acme-order-workflow
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: place-order
+        version: '1'
+  doc: The shopper places the order.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.placed
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-order-workflow
+        slug: shopper
+        version: '1'
+  scenarios:
+  - doc: The shopper placed the order.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: order.placed
+            version: '1'
+    id: order-placed
+    title: Order placed
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: place-order
+          version: '1'
+  title: Place order
+  ui:
+    ui:
+      id:
+        namespace: acme-order-workflow
+        slug: checkout-page
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: calculate-tax-slice
+  namespace: acme-order-workflow
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: calculate-tax
+        version: '1'
+  doc: Records the tax for an order.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: tax.calculated
+        version: '1'
+  scenarios:
+  - doc: Tax for the order was calculated.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: tax.calculated
+            version: '1'
+    id: tax-calculated
+    title: Tax calculated
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: calculate-tax
+          version: '1'
+  title: Calculate tax
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: capture-payment-slice
+  namespace: acme-order-workflow
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: capture-payment
+        version: '1'
+  doc: Captures the payment. The payment gateway decides whether it succeeds.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.captured
+        version: '1'
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.failed
+        version: '1'
+  scenarios:
+  - doc: The payment for the order was captured.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: payment.captured
+            version: '1'
+    id: payment-captured
+    title: Payment captured
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: capture-payment
+          version: '1'
+  - doc: The payment for the order was declined.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: payment.failed
+            version: '1'
+    id: payment-failed
+    title: Payment failed
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: capture-payment
+          version: '1'
+  title: Capture payment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: ship-order-slice
+  namespace: acme-order-workflow
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: ship-order
+        version: '1'
+  doc: Hands a paid order to the carrier.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.shipped
+        version: '1'
+  scenarios:
+  - doc: The order was handed to the carrier.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: order.shipped
+            version: '1'
+    id: order-shipped
+    title: Order shipped
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: ship-order
+          version: '1'
+  title: Ship order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: cancel-order-slice
+  namespace: acme-order-workflow
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: cancel-order
+        version: '1'
+  doc: 'Compensation: cancels an order whose payment failed.'
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.cancelled
+        version: '1'
+  scenarios:
+  - doc: The order was cancelled after a failed step.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-order-workflow
+            slug: order.cancelled
+            version: '1'
+    id: order-cancelled
+    title: Order cancelled
+    when:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: cancel-order
+          version: '1'
+  title: Cancel order
