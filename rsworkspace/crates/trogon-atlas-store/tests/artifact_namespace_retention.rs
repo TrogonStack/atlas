@@ -236,6 +236,12 @@ impl Fixture {
         tokio::spawn(async move { store.release_namespace(&id).await })
     }
 
+    fn delete(&self, record: &NamespaceRecord) -> JoinHandle<Result<NamespaceRecord, StoreError>> {
+        let store = self.store.clone();
+        let id = record.id.clone();
+        tokio::spawn(async move { store.delete_namespace(&id).await })
+    }
+
     async fn assert_retained(&self, record: &NamespaceRecord) {
         assert_eq!(
             self.store.get_namespace(&record.id).await.unwrap(),
@@ -602,9 +608,7 @@ async fn delete_loses_to_a_concurrent_record_update_and_keeps_the_index() {
     let fixture = Fixture::new().await;
     let record = fixture.provisional().await;
     let mut pause = fixture.proxy.pause_delete(None);
-    let store = fixture.store.clone();
-    let id = record.id.clone();
-    let delete = tokio::spawn(async move { store.delete_namespace(&id).await });
+    let delete = fixture.delete(&record);
     pause.reached().await;
     let permanent = fixture
         .store
