@@ -584,24 +584,25 @@ impl TypeLibraryGate {
     ) -> Result<UnknownAnnotationTypes, Status> {
         let builtins = self.pools.builtins();
         let unknown = annotations_outside(builtins, entity);
-        let Some(id) = trogon_atlas_core::refs::entity_id(entity).filter(|_| !unknown.is_empty())
+        let Some(id) =
+            trogon_atlas_core::refs::entity_id(entity).filter(|_| unknown.needs_libraries())
         else {
             return Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::Checked,
             });
         };
         match self.live_pool(store, &id.namespace, pending, branch).await {
             Ok(live) => Ok(UnknownAnnotationTypes {
-                annotations: annotations_outside(&live.pool, entity),
+                annotations: annotations_outside(&live.pool, entity).annotations,
                 libraries: LibraryConsultation::Checked,
             }),
             Err(PoolLookup::DidNotCompile(_)) => Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::DidNotCompile,
             }),
             Err(PoolLookup::CompilerUnavailable(_)) => Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::CompilerUnavailable,
             }),
             Err(PoolLookup::Propagate(status)) => Err(status),
@@ -871,10 +872,11 @@ impl AnnotationTypeLookup<'_> {
     ) -> Result<UnknownAnnotationTypes, Status> {
         let builtins = self.gate.pools.builtins();
         let unknown = annotations_outside(builtins, entity);
-        let Some(id) = trogon_atlas_core::refs::entity_id(entity).filter(|_| !unknown.is_empty())
+        let Some(id) =
+            trogon_atlas_core::refs::entity_id(entity).filter(|_| unknown.needs_libraries())
         else {
             return Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::Checked,
             });
         };
@@ -893,15 +895,15 @@ impl AnnotationTypeLookup<'_> {
         }
         match self.pools.get(&id.namespace) {
             Some(CachedPool::Ready(pool)) => Ok(UnknownAnnotationTypes {
-                annotations: annotations_outside(pool, entity),
+                annotations: annotations_outside(pool, entity).annotations,
                 libraries: LibraryConsultation::Checked,
             }),
             Some(CachedPool::DidNotCompile) => Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::DidNotCompile,
             }),
             Some(CachedPool::CompilerUnavailable) => Ok(UnknownAnnotationTypes {
-                annotations: unknown,
+                annotations: unknown.annotations,
                 libraries: LibraryConsultation::CompilerUnavailable,
             }),
             None => Err(Status::internal("annotation type pool was not recorded")),
@@ -912,27 +914,49 @@ impl AnnotationTypeLookup<'_> {
 const ANY_MESSAGE: &str = "google.protobuf.Any";
 const ENTITY_MESSAGE: &str = "trogonatlas.eventmodel.v1alpha1.Entity";
 
+struct AnnotationScan {
+    annotations: Vec<UnknownAnnotation>,
+    /// An `Any` named a message this pool does not have, so its contents
+    /// were not walked. A later pool may be able to.
+    opaque_payload: bool,
+}
+
+impl AnnotationScan {
+    fn empty() -> Self {
+        Self {
+            annotations: Vec::new(),
+            opaque_payload: false,
+        }
+    }
+
+    fn needs_libraries(&self) -> bool {
+        !self.annotations.is_empty() || self.opaque_payload
+    }
+}
+
 /// Every `metadata` annotation in `entity` whose type url `pool` cannot
 /// resolve, walking into nested messages and resolvable Any payloads.
-fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> Vec<UnknownAnnotation> {
+fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> AnnotationScan {
     let Some(descriptor) = pool.get_message_by_name(ENTITY_MESSAGE) else {
-        return Vec::new();
+        return AnnotationScan::empty();
     };
     let Ok(mut message) = DynamicMessage::decode(descriptor, entity.encode_to_vec().as_slice())
     else {
-        return Vec::new();
+        return AnnotationScan::empty();
     };
     let mut pending: Vec<(Value, String)> = message
         .take_fields()
         .map(|(_, value)| (value, String::new()))
         .collect();
-    let mut out = Vec::new();
+    let mut out = AnnotationScan::empty();
     while let Some((value, path)) = pending.pop() {
         match value {
             Value::Message(mut message) => {
                 if message.descriptor().full_name() == ANY_MESSAGE {
                     if let Some(payload) = any_payload(pool, &mut message) {
                         pending.push((Value::Message(payload), path));
+                    } else if names_unknown_message(pool, &message) {
+                        out.opaque_payload = true;
                     }
                     continue;
                 }
@@ -947,7 +971,7 @@ fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> Vec<Unknow
                             for (i, entry) in values.iter().enumerate() {
                                 if let Value::Message(any) = entry {
                                     if let Some(type_url) = unresolved_type_url(pool, any) {
-                                        out.push(UnknownAnnotation {
+                                        out.annotations.push(UnknownAnnotation {
                                             type_url,
                                             path: format!("{child}[{i}]"),
                                         });
@@ -975,8 +999,15 @@ fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> Vec<Unknow
             _ => {}
         }
     }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.annotations.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+fn names_unknown_message(pool: &DescriptorPool, any: &DynamicMessage) -> bool {
+    let Some(raw) = any_type_url(any) else {
+        return false;
+    };
+    TypeUrl::parse(&raw).is_ok_and(|url| pool.get_message_by_name(url.full_name()).is_none())
 }
 
 fn map_key(key: &prost_reflect::MapKey) -> String {

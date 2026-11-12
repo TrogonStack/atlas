@@ -238,3 +238,74 @@ async fn batch_mutate_warns_about_misspelled_annotations_nested_in_a_schema() {
         misspelled_at(ns, "schema.fields[0].metadata[0]")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_checks_annotations_inside_a_tenant_typed_payload() {
+    let service = service().await;
+    let ns = "uat-opaque";
+    put(&service, envelope_library(ns), false).await;
+
+    let mut event = annotated_event(ns, &[]);
+    if let Some(pb::entity::Kind::Event(event)) = event.kind.as_mut() {
+        event.schema = Some(prost_types::Any {
+            type_url: "type.googleapis.com/acme.notes.v1.Envelope".into(),
+            value: proto_message(&[(1, proto_any(MISSPELLED))]),
+        });
+    }
+
+    let response = put(&service, event, false).await;
+
+    assert_eq!(
+        unknown_annotations(&response.validation),
+        misspelled_at(ns, "schema.metadata[0]")
+    );
+}
+
+fn envelope_library(namespace: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id(namespace, "acme.notes")),
+            title: "Notes".into(),
+            files: vec![pb::ProtoSourceFile {
+                path: "acme/notes/v1/notes.proto".into(),
+                content: "syntax = \"proto3\";\npackage acme.notes.v1;\nimport \"google/protobuf/any.proto\";\nmessage Envelope { repeated google.protobuf.Any metadata = 1; }\n".into(),
+            }],
+            provenance: Some(pb::TypeLibraryProvenance {
+                source: Some(pb::type_library_provenance::Source::Git(
+                    pb::type_library_provenance::GitSnapshot {
+                        repository_url: "https://example.com/acme/notes.git".into(),
+                        r#ref: "main".into(),
+                        commit: "0123456789abcdef".into(),
+                        subdirectory: "proto".into(),
+                    },
+                )),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn proto_any(type_url: &str) -> Vec<u8> {
+    proto_message(&[
+        (1, type_url.as_bytes().to_vec()),
+        (
+            2,
+            pb::OrphanAnnotation {
+                doc: "kept for replaying v1 streams".into(),
+            }
+            .encode_to_vec(),
+        ),
+    ])
+}
+
+fn proto_message(fields: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (field, value) in fields {
+        out.push(u8::try_from((field << 3) | 2).unwrap());
+        let len = u8::try_from(value.len()).unwrap();
+        out.push(len);
+        out.extend(value);
+    }
+    out
+}
