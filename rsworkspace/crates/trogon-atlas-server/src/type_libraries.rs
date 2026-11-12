@@ -588,17 +588,21 @@ impl TypeLibraryGate {
         else {
             return Ok(UnknownAnnotationTypes {
                 annotations: unknown,
-                libraries_unresolved: false,
+                libraries: LibraryConsultation::Checked,
             });
         };
         match self.live_pool(store, &id.namespace, pending, branch).await {
             Ok(live) => Ok(UnknownAnnotationTypes {
                 annotations: annotations_outside(&live.pool, entity),
-                libraries_unresolved: false,
+                libraries: LibraryConsultation::Checked,
             }),
-            Err(PoolLookup::Advisory(_)) => Ok(UnknownAnnotationTypes {
+            Err(PoolLookup::DidNotCompile(_)) => Ok(UnknownAnnotationTypes {
                 annotations: unknown,
-                libraries_unresolved: true,
+                libraries: LibraryConsultation::DidNotCompile,
+            }),
+            Err(PoolLookup::CompilerUnavailable(_)) => Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries: LibraryConsultation::CompilerUnavailable,
             }),
             Err(PoolLookup::Propagate(status)) => Err(status),
         }
@@ -676,7 +680,8 @@ impl TypeLibraryGate {
                 .source_of(&entry.library)
                 .map_err(PoolLookup::Propagate)?;
             owners.push((source.prefix().clone(), id.clone()));
-            let dependencies = dependency_keys(id, &entry.library).map_err(PoolLookup::Propagate)?
+            let dependencies = dependency_keys(id, &entry.library)
+                .map_err(PoolLookup::Propagate)?
                 .into_iter()
                 .map(|dependency| {
                     live.get(dependency.slug.as_str())
@@ -830,14 +835,25 @@ pub struct UnknownAnnotation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownAnnotationTypes {
     pub annotations: Vec<UnknownAnnotation>,
-    /// The namespace's live type libraries did not compile together, so
-    /// tenant types could not be consulted.
-    pub libraries_unresolved: bool,
+    /// Whether the namespace's type libraries were consulted.
+    pub libraries: LibraryConsultation,
+}
+
+/// Why tenant types were or were not part of an annotation check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryConsultation {
+    /// The live libraries compiled and were consulted.
+    Checked,
+    /// The libraries were loaded and do not compile together.
+    DidNotCompile,
+    /// The compiler timed out or was unavailable, so it never judged the libraries.
+    CompilerUnavailable,
 }
 
 enum CachedPool {
     Ready(Arc<DescriptorPool>),
-    Unresolved,
+    DidNotCompile,
+    CompilerUnavailable,
 }
 
 pub(crate) struct AnnotationTypeLookup<'a> {
@@ -859,7 +875,7 @@ impl AnnotationTypeLookup<'_> {
         else {
             return Ok(UnknownAnnotationTypes {
                 annotations: unknown,
-                libraries_unresolved: false,
+                libraries: LibraryConsultation::Checked,
             });
         };
         if !self.pools.contains_key(&id.namespace) {
@@ -869,7 +885,8 @@ impl AnnotationTypeLookup<'_> {
                 .await
             {
                 Ok(live) => CachedPool::Ready(live.pool),
-                Err(PoolLookup::Advisory(_)) => CachedPool::Unresolved,
+                Err(PoolLookup::DidNotCompile(_)) => CachedPool::DidNotCompile,
+                Err(PoolLookup::CompilerUnavailable(_)) => CachedPool::CompilerUnavailable,
                 Err(PoolLookup::Propagate(status)) => return Err(status),
             };
             self.pools.insert(id.namespace.clone(), cached);
@@ -877,11 +894,15 @@ impl AnnotationTypeLookup<'_> {
         match self.pools.get(&id.namespace) {
             Some(CachedPool::Ready(pool)) => Ok(UnknownAnnotationTypes {
                 annotations: annotations_outside(pool, entity),
-                libraries_unresolved: false,
+                libraries: LibraryConsultation::Checked,
             }),
-            Some(CachedPool::Unresolved) => Ok(UnknownAnnotationTypes {
+            Some(CachedPool::DidNotCompile) => Ok(UnknownAnnotationTypes {
                 annotations: unknown,
-                libraries_unresolved: true,
+                libraries: LibraryConsultation::DidNotCompile,
+            }),
+            Some(CachedPool::CompilerUnavailable) => Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries: LibraryConsultation::CompilerUnavailable,
             }),
             None => Err(Status::internal("annotation type pool was not recorded")),
         }
@@ -1007,9 +1028,10 @@ fn unknown_type(namespace: &str, type_url: &TypeUrl) -> Status {
 }
 
 enum PoolLookup {
-    /// The libraries could not be compiled. An annotation check reports that
-    /// instead of refusing the write.
-    Advisory(Status),
+    /// The libraries were loaded and do not compile together.
+    DidNotCompile(Status),
+    /// The compiler timed out or was unavailable, so it never judged them.
+    CompilerUnavailable(Status),
     /// The libraries could not be loaded, or one of them is not a valid
     /// library. The write cannot proceed.
     Propagate(Status),
@@ -1018,7 +1040,9 @@ enum PoolLookup {
 impl PoolLookup {
     fn status(self) -> Status {
         match self {
-            Self::Advisory(status) | Self::Propagate(status) => status,
+            Self::DidNotCompile(status)
+            | Self::CompilerUnavailable(status)
+            | Self::Propagate(status) => status,
         }
     }
 }
@@ -1028,8 +1052,8 @@ fn pool_lookup(namespace: &str, error: PoolError<LibraryVersion>) -> PoolLookup 
         PoolError::Compile {
             error: error @ (CompileError::TimedOut(_) | CompileError::Unavailable),
             ..
-        } => PoolLookup::Advisory(compile_err(error)),
-        other => PoolLookup::Advisory(Status::failed_precondition(format!(
+        } => PoolLookup::CompilerUnavailable(compile_err(error)),
+        other => PoolLookup::DidNotCompile(Status::failed_precondition(format!(
             "the live type libraries in namespace {namespace} do not compile together: {other}"
         ))),
     }

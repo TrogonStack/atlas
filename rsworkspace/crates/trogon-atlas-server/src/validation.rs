@@ -1182,10 +1182,16 @@ pub fn unknown_annotation_type_issues(
     subject: &pb::EntityRef,
     found: &crate::type_libraries::UnknownAnnotationTypes,
 ) -> Vec<pb::ValidationIssue> {
-    let cause = if found.libraries_unresolved {
-        "no built-in annotation declares it, and the namespace's type libraries do not compile together so tenant types could not be checked"
-    } else {
-        "neither a built-in annotation nor any live type library in the namespace declares it"
+    let cause = match found.libraries {
+        crate::type_libraries::LibraryConsultation::Checked => {
+            "neither a built-in annotation nor any live type library in the namespace declares it"
+        }
+        crate::type_libraries::LibraryConsultation::DidNotCompile => {
+            "no built-in annotation declares it, and the namespace's type libraries do not compile together so tenant types could not be checked"
+        }
+        crate::type_libraries::LibraryConsultation::CompilerUnavailable => {
+            "no built-in annotation declares it, and the type compiler was unavailable so tenant types could not be checked"
+        }
     };
     let mut issues: Vec<pb::ValidationIssue> = found
         .annotations
@@ -1204,6 +1210,36 @@ pub fn unknown_annotation_type_issues(
         .collect();
     enrich_issues_with_catalog(&mut issues);
     issues
+}
+
+#[cfg(test)]
+mod unknown_annotation_messages {
+    use super::{pb, unknown_annotation_type_issues};
+    use crate::type_libraries::{LibraryConsultation, UnknownAnnotation, UnknownAnnotationTypes};
+
+    fn found(libraries: LibraryConsultation) -> UnknownAnnotationTypes {
+        UnknownAnnotationTypes {
+            annotations: vec![UnknownAnnotation {
+                type_url: "type.googleapis.com/acme.notes.v1.ReviewNote".into(),
+                path: "metadata[0]".into(),
+            }],
+            libraries,
+        }
+    }
+
+    #[test]
+    fn a_compiler_outage_is_not_described_as_a_compile_failure() {
+        let subject = pb::EntityRef::default();
+        let outage = unknown_annotation_type_issues(
+            &subject,
+            &found(LibraryConsultation::CompilerUnavailable),
+        );
+        let broken =
+            unknown_annotation_type_issues(&subject, &found(LibraryConsultation::DidNotCompile));
+        assert!(outage[0].message.contains("type compiler was unavailable"));
+        assert!(!outage[0].message.contains("do not compile together"));
+        assert!(broken[0].message.contains("do not compile together"));
+    }
 }
 
 /// Decodes a `metadata` entry as PersonalDataAnnotation. Returns `None`
