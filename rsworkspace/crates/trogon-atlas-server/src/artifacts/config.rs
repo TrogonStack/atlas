@@ -160,6 +160,12 @@ impl ArtifactConfig {
             .await
             .map_err(|_| anyhow::anyhow!("artifact catalog status unavailable"))?;
         let stream_config = &stream.cached_info().config;
+        if stream_config.discard_new_per_subject {
+            bail!("artifact catalog must allow updates to retained records");
+        }
+        if stream_config.subject_transform.is_some() {
+            bail!("artifact catalog cannot transform record subjects");
+        }
         if stream_config.max_messages_per_subject != 1
             || !stream_config.max_age.is_zero()
             || stream_config.retention != RetentionPolicy::Limits

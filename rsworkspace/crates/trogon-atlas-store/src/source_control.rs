@@ -199,7 +199,7 @@ impl NatsStore {
         }
         if let Some(previous) = &mut previous {
             self.lease
-                .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+                .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
                 .await?;
             // Advancing the root fences earlier uncertain CAS attempts before reclaiming their chunks.
             previous.revision = tokio::time::timeout(
@@ -241,7 +241,7 @@ impl NatsStore {
             }
         }
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         let revision = if let Some(expected) = expected {
             tokio::time::timeout(
@@ -346,7 +346,7 @@ impl NatsStore {
             if name.starts_with(&prefix) && !retained.contains(&name) {
                 self.require_writer()?;
                 self.lease
-                    .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+                    .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
                     .await?;
                 tokio::time::timeout(KV_OP_TIMEOUT, self.source_kv.purge(&name))
                     .await

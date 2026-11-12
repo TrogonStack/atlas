@@ -241,6 +241,7 @@ impl ArtifactService {
                 upload.phase = Phase::Ready;
                 self.update(&upload, revision).await?;
             }
+            self.cleanup_staging(&upload).await;
             return Ok(Self::artifact(&upload));
         }
         Self::require_session(&upload, principal)?;
@@ -311,10 +312,14 @@ impl ArtifactService {
         }
         upload.phase = Phase::Ready;
         self.update(&upload, revision).await?;
-        if !self.info().direct_upload {
-            let _ = self.blobs.delete(&upload.staging_key).await;
-        }
+        self.cleanup_staging(&upload).await;
         Ok(Self::artifact(&upload))
+    }
+
+    async fn cleanup_staging(&self, upload: &Upload) {
+        if !self.info().direct_upload {
+            let _ = self.blobs.delete(&format!("staging/{}", upload.id)).await;
+        }
     }
 
     fn artifact(upload: &Upload) -> pb::Artifact {

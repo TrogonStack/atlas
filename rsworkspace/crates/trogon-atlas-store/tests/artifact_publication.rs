@@ -3,7 +3,7 @@
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -255,6 +255,12 @@ struct PublishGate {
     release: Arc<Notify>,
     direct_reads: Arc<AtomicUsize>,
     drop_ack: Arc<AtomicBool>,
+    shifted_server_times: Arc<AtomicUsize>,
+    shifted_message_times: Arc<AtomicUsize>,
+    corrupt_clock: Arc<AtomicBool>,
+    clock_stream: Arc<Mutex<String>>,
+    clock_failures: Arc<AtomicUsize>,
+    clock_failed: Arc<Notify>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -266,6 +272,10 @@ impl Drop for PublishGate {
 
 impl PublishGate {
     async fn start(upstream: &str) -> Self {
+        Self::with_clock_offset(upstream, 0).await
+    }
+
+    async fn with_clock_offset(upstream: &str, offset_seconds: i64) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("nats://{}", listener.local_addr().unwrap());
         let upstream = upstream.strip_prefix("nats://").unwrap().to_owned();
@@ -274,6 +284,12 @@ impl PublishGate {
         let release = Arc::new(Notify::new());
         let direct_reads = Arc::new(AtomicUsize::new(0));
         let drop_ack = Arc::new(AtomicBool::new(false));
+        let shifted_server_times = Arc::new(AtomicUsize::new(0));
+        let shifted_message_times = Arc::new(AtomicUsize::new(0));
+        let corrupt_clock = Arc::new(AtomicBool::new(false));
+        let clock_stream = Arc::new(Mutex::new(String::new()));
+        let clock_failures = Arc::new(AtomicUsize::new(0));
+        let clock_failed = Arc::new(Notify::new());
         let (task_armed, task_entered, task_release, task_reads) = (
             armed.clone(),
             entered.clone(),
@@ -281,6 +297,12 @@ impl PublishGate {
             direct_reads.clone(),
         );
         let task_drop_ack = drop_ack.clone();
+        let task_server_times = shifted_server_times.clone();
+        let task_message_times = shifted_message_times.clone();
+        let task_corrupt_clock = corrupt_clock.clone();
+        let task_clock_stream = clock_stream.clone();
+        let task_clock_failures = clock_failures.clone();
+        let task_clock_failed = clock_failed.clone();
         let task = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
             let server = TcpStream::connect(upstream).await.unwrap();
@@ -325,11 +347,12 @@ impl PublishGate {
                     let text = String::from_utf8_lossy(&line);
                     let tokens: Vec<_> = text.split_whitespace().collect();
                     let mut body = Vec::new();
+                    let mut clock_failed = false;
                     if matches!(tokens.first(), Some(&"MSG" | &"HMSG")) {
                         let length: usize = tokens.last().unwrap().parse().unwrap();
                         body.resize(length + 2, 0);
                         input.read_exact(&mut body).await.unwrap();
-                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) {
+                        if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) {
                             if value["stream"]
                                 .as_str()
                                 .is_some_and(|name| name.starts_with("KV_"))
@@ -338,10 +361,49 @@ impl PublishGate {
                             {
                                 continue;
                             }
+                            if tokens.first() == Some(&"MSG") {
+                                let mut changed = false;
+                                if offset_seconds != 0 {
+                                    let server_time = value
+                                        .get_mut("ts")
+                                        .is_some_and(|time| shift_timestamp(time, offset_seconds));
+                                    let message_time = value
+                                        .pointer_mut("/message/time")
+                                        .is_some_and(|time| shift_timestamp(time, offset_seconds));
+                                    if server_time {
+                                        task_server_times.fetch_add(1, Ordering::SeqCst);
+                                    }
+                                    if message_time {
+                                        task_message_times.fetch_add(1, Ordering::SeqCst);
+                                    }
+                                    changed = server_time || message_time;
+                                }
+                                if task_corrupt_clock.load(Ordering::SeqCst)
+                                    && value.get("ts").is_some()
+                                    && value["config"]["name"].as_str().is_some_and(|name| {
+                                        name == task_clock_stream.lock().unwrap().as_str()
+                                    })
+                                {
+                                    value["ts"] = serde_json::Value::String("invalid-clock".into());
+                                    clock_failed = true;
+                                    changed = true;
+                                }
+                                if changed {
+                                    let payload = serde_json::to_vec(&value).unwrap();
+                                    let header = tokens[..tokens.len() - 1].join(" ");
+                                    line = format!("{header} {}\r\n", payload.len()).into_bytes();
+                                    body = payload;
+                                    body.extend_from_slice(b"\r\n");
+                                }
+                            }
                         }
                     }
                     client_write.write_all(&line).await.unwrap();
                     client_write.write_all(&body).await.unwrap();
+                    if clock_failed {
+                        task_clock_failures.fetch_add(1, Ordering::SeqCst);
+                        task_clock_failed.notify_one();
+                    }
                 }
             };
             tokio::select! { () = toward_server => {}, () = toward_client => {} }
@@ -353,9 +415,157 @@ impl PublishGate {
             release,
             direct_reads,
             drop_ack,
+            shifted_server_times,
+            shifted_message_times,
+            corrupt_clock,
+            clock_stream,
+            clock_failures,
+            clock_failed,
             task,
         }
     }
+}
+
+async fn wait_for_clock_failures(gate: &PublishGate, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let failed = gate.clock_failed.notified();
+            if gate.clock_failures.load(Ordering::SeqCst) >= count {
+                break;
+            }
+            failed.await;
+        }
+    })
+    .await
+    .expect("the lease clock fault must reach the client");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clock_failure_does_not_hide_an_observed_lease_takeover() {
+    let nats = NatsFixture::start().await;
+    let gate = PublishGate::start(&nats.url).await;
+    let mut config = nats.store_config();
+    config.url = gate.url.clone();
+    config.lease_duration = Duration::from_secs(120);
+    config.lease_renew_interval = Duration::from_millis(100);
+    let owner = NatsStore::connect_with(config.clone()).await.unwrap();
+    assert!(owner.is_writer());
+    *gate.clock_stream.lock().unwrap() = format!("KV_{}", config.lease_bucket);
+    gate.corrupt_clock.store(true, Ordering::SeqCst);
+    wait_for_clock_failures(&gate, 1).await;
+
+    let context = jetstream::new(async_nats::connect(&nats.url).await.unwrap());
+    let lease = context.get_key_value(&config.lease_bucket).await.unwrap();
+    let entry = lease.entry("writer-lease").await.unwrap().unwrap();
+    let mut row = LeaseRecord::decode(entry.value).unwrap();
+    row.holder = "foreign-writer".into();
+    row.epoch += 1;
+    lease
+        .update("writer-lease", row.encode_to_vec().into(), entry.revision)
+        .await
+        .unwrap();
+    let failures = gate.clock_failures.load(Ordering::SeqCst);
+    wait_for_clock_failures(&gate, failures + 2).await;
+    assert!(
+        !owner.is_writer(),
+        "a clock failure must not hide a fetched foreign-holder lease"
+    );
+    assert_eq!(owner.writer_status().epoch.get(), row.epoch);
+    assert_eq!(owner.writer_status().lease_holder, row.holder);
+}
+
+fn shift_timestamp(value: &mut serde_json::Value, offset_seconds: i64) -> bool {
+    let Some(timestamp) = value.as_str() else {
+        return false;
+    };
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .unwrap()
+        .checked_add_signed(chrono::Duration::seconds(offset_seconds))
+        .unwrap();
+    *value =
+        serde_json::Value::String(timestamp.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    true
+}
+
+async fn publish_with_server_clock_offset(offset_seconds: i64) {
+    let nats = NatsFixture::start().await;
+    let gate = PublishGate::with_clock_offset(&nats.url, offset_seconds).await;
+    let mut config = nats.store_config();
+    config.url = gate.url.clone();
+    config.lease_duration = Duration::from_secs(120);
+    config.lease_renew_interval = Duration::from_secs(60);
+    let store = NatsStore::connect_with(config).await.unwrap();
+    let authority = store.artifact_publication_authority().unwrap();
+    let permit = authority.capture_permit().await.unwrap();
+    let id = ArtifactReceiptId::generate();
+    let published = authority.publish(&permit, &sample(), &id).await;
+    assert!(gate.shifted_server_times.load(Ordering::SeqCst) > 0);
+    assert!(gate.shifted_message_times.load(Ordering::SeqCst) > 0);
+    let receipt = published.expect("clock skew must not reject a valid writer publication");
+    assert_eq!(
+        authority.verify(&sample(), &id).await.unwrap(),
+        ArtifactPublicationState::Accepted(receipt)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_clock_ahead_allows_valid_publication() {
+    publish_with_server_clock_offset(300).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_clock_behind_allows_valid_publication() {
+    publish_with_server_clock_offset(-300).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_clock_behind_still_rejects_publication_after_lease_expiry() {
+    let nats = NatsFixture::start().await;
+    let gate = PublishGate::with_clock_offset(&nats.url, -300).await;
+    let mut config = nats.store_config();
+    config.url = gate.url.clone();
+    config.lease_duration = Duration::from_secs(2);
+    config.lease_renew_interval = Duration::from_secs(1);
+    let store = NatsStore::connect_with(config.clone()).await.unwrap();
+    let authority = store.artifact_publication_authority().unwrap();
+    let permit = authority.capture_permit().await.unwrap();
+    drop(store);
+    let context = jetstream::new(async_nats::connect(&nats.url).await.unwrap());
+    let lease = context.get_key_value(&config.lease_bucket).await.unwrap();
+    let before = lease.entry("writer-lease").await.unwrap().unwrap();
+    let id = ArtifactReceiptId::generate();
+    gate.armed.store(true, Ordering::SeqCst);
+    let publishing = {
+        let authority = authority.clone();
+        let id = id.clone();
+        tokio::spawn(async move { authority.publish(&permit, &sample(), &id).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .unwrap();
+    tokio::time::sleep(config.lease_duration + Duration::from_millis(100)).await;
+    gate.release.notify_one();
+    let published = publishing.await.unwrap();
+    assert!(gate.shifted_server_times.load(Ordering::SeqCst) > 0);
+    assert!(gate.shifted_message_times.load(Ordering::SeqCst) > 0);
+    let receipt = lease
+        .entry(format!("artifact-receipt.{}", id.as_str()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        receipt.revision,
+        before.revision + 1,
+        "the delayed publication must reach storage without an intervening lease write"
+    );
+    assert!(
+        published.is_err(),
+        "clock skew must not extend a writer lease"
+    );
+    assert_eq!(
+        authority.verify(&sample(), &id).await.unwrap(),
+        ArtifactPublicationState::Rejected
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -722,6 +722,7 @@ impl NatsStore {
         ));
         let lease_ready = Arc::new(Notify::new());
         let lease_task = tokio::spawn(writer_lease::run_writer_lease(
+            js.clone(),
             lease_kv.clone(),
             lease.clone(),
             lease_ready.clone(),

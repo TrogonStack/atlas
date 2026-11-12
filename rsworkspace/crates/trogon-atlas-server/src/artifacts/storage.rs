@@ -95,6 +95,11 @@ impl NatsBlobStorage {
             .await
             .map_err(|_| unavailable())?;
         let stream_config = &stream.cached_info().config;
+        if stream_config.subject_transform.is_some() {
+            return Err(Status::failed_precondition(
+                "artifact object storage cannot transform record subjects",
+            ));
+        }
         if !stream_config.max_age.is_zero() {
             return Err(Status::failed_precondition(
                 "artifact object storage cannot expire accepted content",

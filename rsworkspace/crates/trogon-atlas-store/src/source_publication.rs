@@ -163,7 +163,7 @@ impl NatsStore {
     ) -> StoreResult<u64> {
         self.require_writer()?;
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -390,7 +390,7 @@ impl NatsStore {
             ));
         }
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         let revision = tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -559,6 +559,7 @@ impl NatsStore {
                 self.require_writer()?;
                 self.lease
                     .verify_epoch(
+                        &self.js,
                         &self.lease_kv,
                         trogon_atlas_core::Epoch::new(transaction.writer_epoch),
                     )
@@ -626,6 +627,7 @@ impl NatsStore {
             self.source_point(SourcePublicationPoint::BeforeCommitDecision)?;
             self.lease
                 .verify_epoch(
+                    &self.js,
                     &self.lease_kv,
                     trogon_atlas_core::Epoch::new(transaction.writer_epoch),
                 )
@@ -707,7 +709,7 @@ impl NatsStore {
         for prior in priors.rows {
             self.require_writer()?;
             self.lease
-                .verify_epoch(&self.lease_kv, recovery_epoch)
+                .verify_epoch(&self.js, &self.lease_kv, recovery_epoch)
                 .await?;
             let current = live_entry(kv_entry_timeout(kv, prior.key.clone()).await?);
             match (prior.raw, current) {
@@ -863,7 +865,7 @@ impl NatsStore {
             return Err(blocked());
         }
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         // A crash may leave a staged chunk without a durable reference in the transaction.
         let prefix = format!("x.{key}.");
@@ -873,7 +875,7 @@ impl NatsStore {
             }
             self.require_writer()?;
             self.lease
-                .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+                .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
                 .await?;
             tokio::time::timeout(KV_OP_TIMEOUT, self.source_kv.purge(&chunk))
                 .await

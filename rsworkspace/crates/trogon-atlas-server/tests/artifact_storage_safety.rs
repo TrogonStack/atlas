@@ -138,6 +138,52 @@ async fn catalog_refuses_consumption_based_retention() {
 }
 
 #[tokio::test]
+async fn catalog_refuses_discard_new_per_subject() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = Arc::new(nats.store().await);
+    let context = context().await;
+    let config = configuration();
+    let mut stream = catalog_stream(&context, &config.artifact_catalog_bucket).await;
+    stream.discard = DiscardPolicy::New;
+    stream.discard_new_per_subject = true;
+    context.update_stream(stream).await.unwrap();
+    let effective = context
+        .get_stream(format!("KV_{}", config.artifact_catalog_bucket))
+        .await
+        .unwrap();
+    assert!(effective.cached_info().config.discard_new_per_subject);
+    let error = config
+        .open(&nats.url, 2 * 1024 * 1024, store)
+        .await
+        .err()
+        .expect("catalog that refuses updates to existing records must be refused");
+    assert!(error.to_string().contains("artifact catalog"));
+}
+
+#[tokio::test]
+async fn catalog_refuses_subject_transforms() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = Arc::new(nats.store().await);
+    let context = context().await;
+    let config = configuration();
+    let bucket = &config.artifact_catalog_bucket;
+    let mut stream = catalog_stream(&context, bucket).await;
+    stream.subject_transform = Some(jetstream::stream::SubjectTransform {
+        source: format!("$KV.{bucket}.>"),
+        destination: "redirect.>".into(),
+    });
+    context.update_stream(stream).await.unwrap();
+    let effective = context.get_stream(format!("KV_{bucket}")).await.unwrap();
+    assert!(effective.cached_info().config.subject_transform.is_some());
+    let error = config
+        .open(&nats.url, 2 * 1024 * 1024, store)
+        .await
+        .err()
+        .expect("catalog that redirects records away from their read subjects must be refused");
+    assert!(error.to_string().contains("artifact catalog"));
+}
+
+#[tokio::test]
 async fn catalog_allows_capacity_refusal_and_normal_per_key_history() {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = Arc::new(nats.store().await);
@@ -249,6 +295,25 @@ async fn object_store_refuses_consumption_based_retention() {
             .expect("object stream whose consumers can remove bytes must be refused");
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     }
+}
+
+#[tokio::test]
+async fn object_store_refuses_subject_transforms() {
+    let context = context().await;
+    let bucket = configuration().artifact_nats_bucket;
+    let mut stream = object_stream(&context, &bucket).await;
+    stream.subject_transform = Some(jetstream::stream::SubjectTransform {
+        source: format!("$O.{bucket}.>"),
+        destination: "redirect.>".into(),
+    });
+    context.update_stream(stream).await.unwrap();
+    let effective = context.get_stream(format!("OBJ_{bucket}")).await.unwrap();
+    assert!(effective.cached_info().config.subject_transform.is_some());
+    let error = open_object(&context, &bucket)
+        .await
+        .err()
+        .expect("object stream that redirects bytes away from their read subjects must be refused");
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 }
 
 #[tokio::test]

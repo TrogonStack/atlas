@@ -1831,17 +1831,22 @@ impl EventModelServiceImpl {
                     "artifact upload requires the active writer",
                 ));
             }
-            let principal = Self::principal_from_metadata(request);
-            if principal
-                .as_ref()
-                .is_some_and(|principal| principal.role < crate::auth::Role::Writer)
-            {
+            let principal =
+                Self::principal_from_metadata(request).unwrap_or_else(|| crate::auth::Principal {
+                    name: Arc::from(UNAUTHENTICATED_PRINCIPAL),
+                    role: crate::auth::Role::Admin,
+                    kind: crate::auth::PrincipalKind::User,
+                    is_anonymous: true,
+                    namespaces: crate::scope::NamespaceScope::unrestricted(),
+                    parent: None,
+                });
+            if principal.role < crate::auth::Role::Writer {
                 return Err(Status::permission_denied(
                     "artifact upload requires writer role",
                 ));
             }
             self.require_namespace_scope_as(
-                principal.as_ref(),
+                Some(&principal),
                 &WriteTargets::of(namespace),
                 &NamespaceTenure::Permanent,
                 WriteEffect::Persist,
@@ -4409,6 +4414,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::RegisterNamespaceRequest>,
     ) -> Result<Response<pb::RegisterNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         let vis = Self::visibility_of(&req);
         let principal = Self::principal_from_metadata(&req);
         let msg = req.into_inner();
@@ -4444,6 +4450,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::MoveNamespaceRequest>,
     ) -> Result<Response<pb::MoveNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         // Deliberately no `visibility_of` gate on the source: a move is the
         // one operation that crosses an ownership boundary, so a caller who
         // could only act inside their own could never complete one. It is
@@ -12177,6 +12184,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::DeleteBranchRequest>,
     ) -> Result<Response<pb::DeleteBranchResponse>, Status> {
+        let _guard = self.lock_mutations().await;
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
         validate_branch_name(&req.name)?;

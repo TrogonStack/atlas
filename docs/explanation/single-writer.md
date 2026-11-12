@@ -37,10 +37,17 @@ processes run a background loop that tries, once every few seconds, to
 create the row (if absent), renew it (if they hold it), or take it over (if
 it expired). `Reader` processes only read the row to report status.
 
+Lease creation, renewal, takeover and expiry checks use the lease stream
+leader's `STREAM.INFO` timestamp. Receipt timestamps come from the same NATS
+clock, so Atlas hosts do not need to share its wall clock. NATS nodes still
+need synchronized clocks across leader changes. Missing or invalid server time
+refuses a lease decision; Atlas does not substitute its local wall clock.
+
 A process believes it holds the lease only while both are true: no attempt
 since its last successful renewal proved the lease lost, and that success
 happened recently enough that the lease could not have expired out from
-under it. Only a lost compare-and-swap proves the loss. A renewal that times
+under it. The local monotonic freshness interval starts before requesting
+server time and writing the lease, so network latency cannot extend that belief. Only a lost compare-and-swap proves the loss. A renewal that times
 out or loses its connection might still have landed, so it leaves the
 belief to the second check instead of refusing writes until the next
 attempt. That second check is a
@@ -94,9 +101,14 @@ catalog update. It cannot turn a missing or rejected receipt into acceptance
 without a new authorized publication.
 
 The lease bucket (`trogon-atlas-writer-lease` by default) now also retains
-artifact receipts. Back it up with the
-artifact catalog and object storage. Do not purge it as disposable lease state,
-expire its messages or configure eviction of old records. Capacity refusal is
+artifact receipts. To take a consistent backup, quiesce upload transfers and
+completion/publication on every writer, then wait for in-flight provider writes
+and receipt acceptance to settle. Keep publication paused while snapshotting
+object storage, the artifact catalog and the lease/receipt bucket together.
+Restore that coordinated set; independently timed snapshots can retain a receipt
+without its final bytes or lose acceptance for a retained object. Do not purge
+the bucket as disposable lease state, expire its messages or configure eviction
+of old records. Capacity refusal is
 safe for retained receipts, but operators must leave headroom for further
 publications. Artifact storage refuses a store without this publication
 authority.
@@ -117,6 +129,15 @@ balance writes across them. Exactly one process (the current lease holder)
 accepts mutations at any moment, by design. Backends without a writer lease
 (anything that does not implement one) report every process as the sole
 writer, the behavior every caller saw before this fencing existed.
+
+Namespace registry mutations and their authorization callbacks are serialized
+within one server. The writer lease does not fence an already queued external
+SpiceDB callback across processes. A delayed release from a former writer can
+remove a grant recreated by its successor for the same namespace and owner.
+An idempotent `RegisterNamespace` retry or authorization reconciliation repairs
+that missing grant. Preventing it across takeover requires conditional external
+updates tied to a namespace incarnation; local locking alone does not provide
+that guarantee.
 
 ## Deployment
 

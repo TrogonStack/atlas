@@ -158,6 +158,7 @@ impl ArtifactPublicationAuthority for NatsArtifactPublicationAuthority {
         let stream = self.stream().await?;
         self.lease
             .publication_snapshot(
+                &self.context,
                 &stream,
                 &format!("$KV.{}.writer-lease", self.bucket),
                 &holder,
@@ -193,6 +194,7 @@ impl ArtifactPublicationAuthority for NatsArtifactPublicationAuthority {
             let lease = self
                 .lease
                 .publication_snapshot(
+                    &self.context,
                     &stream,
                     &format!("$KV.{}.writer-lease", self.bucket),
                     &permit.holder,

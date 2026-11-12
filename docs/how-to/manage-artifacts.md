@@ -135,6 +135,9 @@ not independently in each client.
 When storage is enabled, response encoding retains capacity for the supported
 32 MiB artifact size plus metadata. Lowering upload admission and request
 decoding limits therefore does not make previously confirmed files unreadable.
+Direct RPC clients must also configure their response decoder for at least
+32 MiB plus 65,536 bytes of metadata. Tonic's default 4 MiB decoding limit is too
+small; the Atlas Rust artifact helpers configure this limit for downloads.
 
 Concurrent RPC downloads share a 256 MiB payload budget. Each reserves six
 times the stored file size plus 128 KiB for buffering and encoding, including
@@ -170,7 +173,8 @@ change or attach the file to an entity.
 If the completion reply is lost, SDK errors and CLI failure output preserve
 the namespace and upload ID. Retry `CompleteArtifactUpload` with those values
 to recover the accepted artifact. An identical NATS content-transfer retry is
-also accepted after its size and digest are verified.
+also accepted for an unexpired session in `Uploaded`, after its size and digest
+are verified. An interrupted transfer left in `Receiving` requires a new upload.
 
 Treat media type as declared presentation metadata. Successful completion
 establishes byte integrity; it does not certify screenshot contents, image
@@ -268,8 +272,10 @@ Retain cleanup evidence and revisit temporary objects after uncertain writes.
 
 Completion records its final candidate key before writing bytes. After a
 provider error, a retry verifies and reuses that candidate rather than creating
-another final object. This records named candidates; it does not recover NATS
-chunks left by a crash before object metadata was published.
+another final object only if the session phase was successfully reset for retry.
+If that reset fails, the session can remain in `Verifying` without an acceptance
+receipt and requires a new upload. This records named candidates; it does not
+recover NATS chunks left by a crash before object metadata was published.
 
 An interrupted request can leave its session in `Receiving` or `Verifying`.
 Completion recovers an existing valid acceptance receipt even if the catalog
