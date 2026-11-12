@@ -11416,11 +11416,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             });
             let unbridged_incomplete =
                 unbridged.incomplete || snapshot_truncated || !vis.is_unrestricted();
-            let mut validation_issues = validation::validate_store_hygiene(&post_world);
-            let has_error = crate::invariants::downgrade_preexisting_errors(
-                &validation::validate_store_hygiene(&pre_all),
-                &mut validation_issues,
-            );
+            let (mut validation_issues, has_error) =
+                crate::invariants::merge_hygiene(&pre_all, &post_world);
             drop(guard);
             let consequence_delta = self
                 .consequence_delta(&pre_all, &post_world, snapshot_truncated, None, &vis)
@@ -11531,11 +11528,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let mut validation_issues = validation::validate_store_hygiene(&projected);
-            let has_error = crate::invariants::downgrade_preexisting_errors(
-                &validation::validate_store_hygiene(&pre_all),
-                &mut validation_issues,
-            );
+            let (mut validation_issues, has_error) =
+                crate::invariants::merge_hygiene(&pre_all, &projected);
             if has_error {
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,

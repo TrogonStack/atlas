@@ -158,7 +158,7 @@ fn forbids(annotation: &pb::InvariantAnnotation, issue: &pb::ValidationIssue) ->
 /// finding on a successor version, or against a newer target, counts as
 /// already present.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Lineage {
+struct Lineage {
     code: String,
     subject: Option<(i32, String, String)>,
     field: String,
@@ -166,7 +166,7 @@ pub(crate) struct Lineage {
 }
 
 impl Lineage {
-    pub(crate) fn of(issue: &pb::ValidationIssue) -> Self {
+    fn of(issue: &pb::ValidationIssue) -> Self {
         let mut structure = issue.clone();
         structure.severity = 0;
         structure.code.clear();
@@ -348,11 +348,19 @@ fn latest_by_lineage(world: &[StoredEntity]) -> HashMap<(String, String), &Store
 
 /// Counts of findings already present, spent one at a time as the same
 /// findings are seen again.
-pub(crate) struct LineageBudget(HashMap<Lineage, usize>);
+struct LineageBudget(HashMap<Lineage, usize>);
 
 impl LineageBudget {
+    fn new<'a>(before: impl IntoIterator<Item = &'a pb::ValidationIssue>) -> Self {
+        let mut counts: HashMap<Lineage, usize> = HashMap::new();
+        for issue in before {
+            *counts.entry(Lineage::of(issue)).or_default() += 1;
+        }
+        Self(counts)
+    }
+
     /// True when the finding was already present and uses up one earlier copy.
-    pub(crate) fn take(&mut self, issue: &pb::ValidationIssue) -> bool {
+    fn take(&mut self, issue: &pb::ValidationIssue) -> bool {
         match self.0.get_mut(&Lineage::of(issue)) {
             Some(count) if *count > 0 => {
                 *count -= 1;
@@ -363,30 +371,24 @@ impl LineageBudget {
     }
 }
 
-impl Lineage {
-    pub(crate) fn budget<'a>(
-        before: impl IntoIterator<Item = &'a pb::ValidationIssue>,
-    ) -> LineageBudget {
-        let mut counts: HashMap<Lineage, usize> = HashMap::new();
-        for issue in before {
-            *counts.entry(Lineage::of(issue)).or_default() += 1;
-        }
-        LineageBudget(counts)
-    }
-}
-
-/// Marks which errors a merge leaves behind that were not already in the
-/// store. Errors that were already there are downgraded to information, in
-/// place, so the wire shape stays the same. Returns whether any new error
-/// remains.
-pub(crate) fn downgrade_preexisting_errors(
-    before: &[pb::ValidationIssue],
-    after: &mut [pb::ValidationIssue],
-) -> bool {
+/// Store hygiene for a merge: findings on the post-merge world, with errors
+/// that the baseline already had downgraded to information, in place, so the
+/// wire shape stays the same. Returns the findings and whether any new error
+/// remains. The baseline is only checked when the post-merge world has an
+/// error.
+pub(crate) fn merge_hygiene(
+    pre: &[StoredEntity],
+    post: &[StoredEntity],
+) -> (Vec<pb::ValidationIssue>, bool) {
     let error = pb::validation_issue::Severity::Error as i32;
-    let mut budget = Lineage::budget(before.iter().filter(|i| i.severity == error));
+    let mut issues = validation::validate_store_hygiene(post);
+    if !issues.iter().any(|i| i.severity == error) {
+        return (issues, false);
+    }
+    let baseline = validation::validate_store_hygiene(pre);
+    let mut budget = LineageBudget::new(baseline.iter().filter(|i| i.severity == error));
     let mut new_error = false;
-    for issue in after.iter_mut().filter(|i| i.severity == error) {
+    for issue in issues.iter_mut().filter(|i| i.severity == error) {
         if budget.take(issue) {
             issue.severity = pb::validation_issue::Severity::Info as i32;
             issue
@@ -396,7 +398,7 @@ pub(crate) fn downgrade_preexisting_errors(
             new_error = true;
         }
     }
-    new_error
+    (issues, new_error)
 }
 
 fn classify(
@@ -405,7 +407,7 @@ fn classify(
     before: &[pb::ValidationIssue],
     after: &[pb::ValidationIssue],
 ) {
-    let mut budget = Lineage::budget(before.iter().filter(|i| forbids(annotation, i)));
+    let mut budget = LineageBudget::new(before.iter().filter(|i| forbids(annotation, i)));
     for issue in after {
         if !forbids(annotation, issue) {
             continue;

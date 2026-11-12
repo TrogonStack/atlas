@@ -1907,26 +1907,23 @@ async fn merge_branch_dry_run_validates_a_pending_delete() {
     assert_eq!(branch.delta_count, 1);
 }
 
+fn dangling_term(ns: &str, slug: &str) -> pb::Entity {
+    term(
+        ns,
+        slug,
+        vec![pb::EntityRef {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id(ns, "missing", 1)),
+        }],
+    )
+}
+
 async fn seed_old_dangling_term(c: &mut EventModelServiceClient<Channel>) {
     // Written straight to the baseline with `force`, so the store already has
     // one hygiene Error in `acme-legacy` before any branch exists.
-    c.put_entity(pb::PutEntityRequest {
-        operation_id: String::new(),
-        entity: Some(term(
-            "acme-legacy",
-            "old-ghost",
-            vec![pb::EntityRef {
-                kind: pb::EntityKind::Event as i32,
-                id: Some(id("acme-legacy", "missing", 1)),
-            }],
-        )),
-        create_only: false,
-        if_match: String::new(),
-        validate_only: false,
-        force: true,
-    })
-    .await
-    .unwrap();
+    c.put_entity(put_req(dangling_term("acme-legacy", "old-ghost"), true))
+        .await
+        .unwrap();
 }
 
 async fn branch_with_event(c: &mut EventModelServiceClient<Channel>, name: &str) {
@@ -1998,21 +1995,7 @@ async fn merge_branch_refuses_new_errors_when_old_errors_exist() {
     seed_old_dangling_term(&mut c).await;
     branch_with_event(&mut c, "orders-change").await;
     c.put_entity(with_branch(
-        pb::PutEntityRequest {
-            operation_id: String::new(),
-            entity: Some(term(
-                "acme-orders",
-                "new-ghost",
-                vec![pb::EntityRef {
-                    kind: pb::EntityKind::Event as i32,
-                    id: Some(id("acme-orders", "missing", 1)),
-                }],
-            )),
-            create_only: false,
-            if_match: String::new(),
-            validate_only: false,
-            force: true,
-        },
+        put_req(dangling_term("acme-orders", "new-ghost"), true),
         "orders-change",
     ))
     .await
@@ -2029,37 +2012,24 @@ async fn merge_branch_refuses_new_errors_when_old_errors_exist() {
             pb::merge_branch_response::Status::Invalid as i32,
             "dry_run={dry_run}"
         );
-        let mut severities: Vec<(String, i32)> = resp
-            .validation
-            .iter()
-            .filter(|i| i.code == "TERM_DANGLING_ENTITY")
-            .map(|i| {
-                (
-                    i.subject
-                        .as_ref()
-                        .unwrap()
-                        .id
-                        .as_ref()
-                        .unwrap()
-                        .namespace
-                        .clone(),
-                    i.severity,
-                )
-            })
-            .collect();
-        severities.sort();
+        let severity_in = |ns: &str| {
+            resp.validation
+                .iter()
+                .find(|i| {
+                    i.code == "TERM_DANGLING_ENTITY"
+                        && i.subject.as_ref().unwrap().id.as_ref().unwrap().namespace == ns
+                })
+                .unwrap_or_else(|| panic!("no finding in {ns}, dry_run={dry_run}"))
+                .severity
+        };
         assert_eq!(
-            severities,
-            vec![
-                (
-                    "acme-legacy".to_string(),
-                    pb::validation_issue::Severity::Info as i32
-                ),
-                (
-                    "acme-orders".to_string(),
-                    pb::validation_issue::Severity::Error as i32
-                ),
-            ],
+            severity_in("acme-legacy"),
+            pb::validation_issue::Severity::Info as i32,
+            "dry_run={dry_run}"
+        );
+        assert_eq!(
+            severity_in("acme-orders"),
+            pb::validation_issue::Severity::Error as i32,
             "dry_run={dry_run}"
         );
     }

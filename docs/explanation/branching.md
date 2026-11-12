@@ -147,9 +147,8 @@ Detection alone is half a design; this section is the other half.
    errors that the merge adds. An error that was already in the baseline,
    in any namespace, stays in `validation[]` with severity `INFO` and a
    note that it predates the merge. The gate then reports advisory
-   strategic findings. Conflicts or those earlier
-   check failures stop the merge as an RPC error before any hygiene
-   `validation[]` is produced. The gate is **not** a full-model validate:
+   strategic findings. Conflicts or those earlier check failures stop the
+   merge as an RPC error before any hygiene `validation[]` is produced. The gate is **not** a full-model validate:
    EventModel-wide rules, scenarios, and most dangling-reference passes
    still require `ValidateEventModel` / `ValidateProject` (or a future,
    deliberate expansion of the merge gate). See
