@@ -1405,3 +1405,30 @@ async fn a_writer_may_not_delete_a_namespace() {
     let err = delete_namespace(&mut c, &id, ACME_TOKEN).await.unwrap_err();
     assert_eq!(err.code(), Code::PermissionDenied);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-source").await;
+    c.create_source_registration(authed(
+        pb::CreateSourceRegistrationRequest {
+            registration: Some(pb::SourceRegistration {
+                id: "acme-delete-ns-source".into(),
+                administration_namespace: id.clone(),
+                destination_namespaces: vec![id.clone()],
+                profile_revision: 1,
+                ownership_policy_revision: "policy-v1".into(),
+                deletion_policy: pb::SourceDeletionPolicy::RetainNative as i32,
+                ..Default::default()
+            }),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(err.message().contains("acme-delete-ns-source"), "{err}");
+}

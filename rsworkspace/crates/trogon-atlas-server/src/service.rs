@@ -4574,6 +4574,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let view = graph::load_all(&self.store, Some(&branch.name)).await?;
             Self::refuse_unless_empty(&id, &view.entities, view.truncated, &branch.name)?;
         }
+        if let Some(registration) =
+            source_integration::registration_naming(self, id.as_str()).await?
+        {
+            return Err(Status::failed_precondition(format!(
+                "source registration {registration} names namespace {id}: delete the \
+                 registration first, or a later source run could recreate the namespace",
+            )));
+        }
         let record = self.store.delete_namespace(&id).await.map_err(store_err)?;
         self.invalidate_directory().await;
         self.authorizer.on_released(&record).await?;
