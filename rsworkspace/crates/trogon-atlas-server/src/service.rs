@@ -4581,9 +4581,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                  registration first, or a later source run could recreate the namespace",
             )));
         }
+        // Revoked before the row goes, because the row is what a retry finds:
+        // a failed revoke keeps it, and the retry revokes again. A failed
+        // delete after it leaves a row nobody holds a grant for, which fails
+        // closed.
+        self.authorizer.on_released(&record).await?;
         let record = self.store.delete_namespace(&id).await.map_err(store_err)?;
         self.invalidate_directory().await;
-        self.authorizer.on_released(&record).await?;
         Ok(Response::new(pb::DeleteNamespaceResponse {
             namespace: Some(namespace_record_to_proto(&record)),
         }))

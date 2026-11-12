@@ -21,12 +21,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 
+use async_trait::async_trait;
 use tokio::net::TcpListener;
 use tonic::{
     metadata::MetadataValue, service::interceptor::InterceptedService, transport::Channel, Code,
+    Status,
 };
+use trogon_atlas_core::{NamespaceId, OwnerId};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
@@ -35,8 +41,10 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
     metrics::ServerMetrics,
+    ownership::{Lens, NamespaceAuthorizer, RegistryAuthorizer, Visibility, WriteVerdict},
     service::EventModelServiceImpl,
 };
+use trogon_atlas_store::{NamespaceRecord, Store};
 
 /// Writer bound to owner `acme`.
 const ACME_TOKEN: &str = "own-acme-token";
@@ -88,11 +96,14 @@ namespaces = ["alice-*"]
 /// One server per test. Ownership state is global to a store, so tests that
 /// claim the same namespace name under different owners must not share one.
 async fn client() -> EventModelServiceClient<Channel> {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    serve(EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()).await
+}
+
+async fn serve(svc: EventModelServiceImpl) -> EventModelServiceClient<Channel> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
 
     let auth = BearerAuth::new(Arc::new(make_registry()));
@@ -1431,4 +1442,86 @@ async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
         .unwrap_err();
     assert_eq!(err.code(), Code::FailedPrecondition);
     assert!(err.message().contains("acme-delete-ns-source"), "{err}");
+}
+
+/// The registry's answers, with a release that fails until it is told not
+/// to: the shape of a relationship store that is down when the row goes.
+#[derive(Debug)]
+struct FailingReleaseAuthorizer {
+    registry: RegistryAuthorizer,
+    release_fails: AtomicBool,
+    releases: AtomicUsize,
+}
+
+#[async_trait]
+impl NamespaceAuthorizer for FailingReleaseAuthorizer {
+    async fn admits(
+        &self,
+        visibility: &Visibility,
+        namespace: &NamespaceId,
+    ) -> Result<bool, Status> {
+        self.registry.admits(visibility, namespace).await
+    }
+
+    async fn lens(&self, visibility: &Visibility) -> Result<Lens, Status> {
+        self.registry.lens(visibility).await
+    }
+
+    async fn may_write(
+        &self,
+        visibility: &Visibility,
+        namespace: &NamespaceId,
+    ) -> Result<WriteVerdict, Status> {
+        self.registry.may_write(visibility, namespace).await
+    }
+
+    async fn on_registered(&self, record: &NamespaceRecord) -> Result<(), Status> {
+        self.registry.on_registered(record).await
+    }
+
+    async fn on_moved(&self, record: &NamespaceRecord, from: &OwnerId) -> Result<(), Status> {
+        self.registry.on_moved(record, from).await
+    }
+
+    async fn on_released(&self, _record: &NamespaceRecord) -> Result<(), Status> {
+        if self.release_fails.load(Ordering::SeqCst) {
+            return Err(Status::unavailable("relationship store is down"));
+        }
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A delete whose grant could not be revoked keeps its row, so a retry can
+/// find the namespace and revoke the grant. Dropping the row first would
+/// leave a grant that no later call can reach.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_whose_release_fails_can_be_retried() {
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(FailingReleaseAuthorizer {
+        registry: RegistryAuthorizer::new(svc.directory(), store),
+        release_fails: AtomicBool::new(true),
+        releases: AtomicUsize::new(0),
+    });
+    let mut c = serve(svc.with_authorizer(authorizer.clone())).await;
+    let id = register(&mut c, "acme-probe-release-retry").await;
+
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::Unavailable, "{err}");
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(
+        seen.iter().any(|(seen_id, _)| seen_id == &id),
+        "the row must outlive a failed release",
+    );
+
+    authorizer.release_fails.store(false, Ordering::SeqCst);
+    delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .expect("the retry must find the row and finish the delete");
+    assert_eq!(authorizer.releases.load(Ordering::SeqCst), 1);
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(!seen.iter().any(|(seen_id, _)| seen_id == &id));
 }
