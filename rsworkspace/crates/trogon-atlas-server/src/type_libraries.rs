@@ -895,7 +895,13 @@ impl AnnotationTypeLookup<'_> {
         if !self.pools.contains_key(&id.namespace) {
             let cached = match self
                 .gate
-                .live_pool(store, &id.namespace, self.pending, self.removed, self.branch)
+                .live_pool(
+                    store,
+                    &id.namespace,
+                    self.pending,
+                    self.removed,
+                    self.branch,
+                )
                 .await
             {
                 Ok(live) => CachedPool::Ready(live.pool),
