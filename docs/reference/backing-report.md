@@ -61,7 +61,7 @@ owns it: only an exact entity selection counts.
 | `totals` | `total`, `backed`, `unbacked` and `unknown` subjects, the present, absent and unknown count per category, and `unbacked_rate`. |
 | `kinds` | The same totals for each subject kind that has at least one subject. |
 | `unresolved_declarations` | Subject selections on accepted Decisions and on Documents whose exact target is not in the visible snapshot but whose namespace is in scope and visible to the caller. A target in a namespace the caller cannot see is not counted, even when `namespaces` is empty. |
-| `incomplete_reasons` | Why some subjects could not be settled. A reason is reported only for subjects left unknown, so a backed subject never adds one. |
+| `incomplete_reasons` | Why some subjects could not be settled. A reason is reported only for subjects left unknown, so a backed subject never adds one. `SNAPSHOT_TRUNCATED` is the exception: a truncated snapshot always reports it, even when every visible subject is backed. |
 | `findings` | `ENTITY_UNBACKED` findings, sorted by subject, when requested. |
 
 Category counts overlap: a subject with both a Decision and a Document adds

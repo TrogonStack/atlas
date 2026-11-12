@@ -12,7 +12,6 @@ use trogon_atlas_store::StoredEntity;
 use crate::decision_document_resources as resources;
 
 pub(crate) const ENTITY_UNBACKED: &str = "ENTITY_UNBACKED";
-const CODE_REF_TYPE: &str = "trogonatlas.annotation.v1alpha1.CodeRefAnnotation";
 
 /// Namespaces whose entities count as subjects. Empty admits every namespace.
 #[derive(Debug, Clone, Default)]
@@ -255,7 +254,7 @@ fn declarations(
 fn code_ref_evidence(entity: &pb::Entity) -> Evidence {
     let mut evidence = Evidence::Absent;
     for any in crate::validation::entity_metadata(entity) {
-        if !any.type_url.ends_with(CODE_REF_TYPE) {
+        if !crate::annotation_type::BuiltinAnnotation::CODE_REF.matches(any) {
             continue;
         }
         match <pb::CodeRefAnnotation as prost::Message>::decode(any.value.as_slice()) {
@@ -446,7 +445,8 @@ mod tests {
 
     fn code_ref(repo: &str, path: &str) -> prost_types::Any {
         prost_types::Any {
-            type_url: format!("type.googleapis.com/{CODE_REF_TYPE}"),
+            type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.CodeRefAnnotation"
+                .into(),
             value: prost::Message::encode_to_vec(&pb::CodeRefAnnotation {
                 repo: repo.into(),
                 path: path.into(),

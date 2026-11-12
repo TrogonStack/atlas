@@ -988,10 +988,16 @@ fn print_backing_report(report: &trogon_atlas_client::backing::BackingReport) {
         || "not established".to_owned(),
         |rate| format!("{:.1}%", rate * 100.0),
     );
+    let scope = if response.namespaces.is_empty() {
+        "all visible namespaces".to_owned()
+    } else {
+        response.namespaces.join(", ")
+    };
     println!(
         "snapshot {}: {} subjects, {} backed, {} unbacked, {} unknown, unbacked rate {rate}",
         response.snapshot_id, totals.total, totals.backed, totals.unbacked, totals.unknown
     );
+    println!("subjects: {scope}");
     for kind in &response.kinds {
         let name = pb::EntityKind::try_from(kind.kind)
             .map_or("unknown", |kind| kind.as_str_name())
@@ -2726,7 +2732,7 @@ async fn run(
             let code = if report.is_complete() {
                 ExitCode::SUCCESS
             } else {
-                ExitCode::from(EXIT_VALIDATION_INCOMPLETE)
+                ExitCode::from(EXIT_INCOMPLETE)
             };
             Ok((code, Some(report.to_json()?)))
         }

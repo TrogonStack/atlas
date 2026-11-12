@@ -10,8 +10,13 @@ impl EventModelServiceImpl {
         branch: Option<String>,
         vis: &Visibility,
     ) -> Result<pb::GetBackingReportResponse, Status> {
-        for namespace in &req.namespaces {
-            self.require_visible(vis, namespace).await?;
+        let selection = trogon_atlas_core::NamespaceSelection::from_requested(&req.namespaces)
+            .map_err(|error| Status::invalid_argument(format!("namespaces: {error}")))?;
+        for namespace in selection.names() {
+            self.require_visible(vis, &namespace).await?;
+        }
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
         }
         let (rows, truncated) = self
             .snapshot_with_truncation(branch.as_deref(), vis)
@@ -27,7 +32,7 @@ impl EventModelServiceImpl {
             VisibleNamespaces::All => Vec::new(),
             VisibleNamespaces::Only(namespaces) => namespaces.iter().cloned().collect(),
         };
-        let scope = SubjectScope::new(req.namespaces);
+        let scope = SubjectScope::new(selection.names());
         let report = backing::report(
             &rows,
             &scope,
