@@ -1907,6 +1907,164 @@ async fn merge_branch_dry_run_validates_a_pending_delete() {
     assert_eq!(branch.delta_count, 1);
 }
 
+async fn seed_old_dangling_term(c: &mut EventModelServiceClient<Channel>) {
+    // Written straight to the baseline with `force`, so the store already has
+    // one hygiene Error in `acme-legacy` before any branch exists.
+    c.put_entity(pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(term(
+            "acme-legacy",
+            "old-ghost",
+            vec![pb::EntityRef {
+                kind: pb::EntityKind::Event as i32,
+                id: Some(id("acme-legacy", "missing", 1)),
+            }],
+        )),
+        create_only: false,
+        if_match: String::new(),
+        validate_only: false,
+        force: true,
+    })
+    .await
+    .unwrap();
+}
+
+async fn branch_with_event(c: &mut EventModelServiceClient<Channel>, name: &str) {
+    c.create_branch(pb::CreateBranchRequest {
+        name: name.into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(event("acme-orders", "order-placed", 1, "Placed"), false),
+        name,
+    ))
+    .await
+    .unwrap();
+}
+
+fn merge_req(name: &str, dry_run: bool) -> pb::MergeBranchRequest {
+    pb::MergeBranchRequest {
+        operation_id: String::new(),
+        name: name.into(),
+        dry_run,
+        keep_branch: true,
+        auto_merge: false,
+    }
+}
+
+/// An error that was in the store before the merge, in a namespace the
+/// branch did not touch, is shown as Info and does not refuse the merge.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_ignores_preexisting_errors_in_other_namespaces() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    branch_with_event(&mut c, "orders-change").await;
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("orders-change", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        let expected = if dry_run {
+            pb::merge_branch_response::Status::Validated
+        } else {
+            pb::merge_branch_response::Status::Applied
+        };
+        assert_eq!(resp.status, expected as i32, "dry_run={dry_run}");
+        let old = resp
+            .validation
+            .iter()
+            .find(|i| i.code == "TERM_DANGLING_ENTITY")
+            .expect("the old finding stays visible");
+        assert_eq!(
+            old.severity,
+            pb::validation_issue::Severity::Info as i32,
+            "dry_run={dry_run}"
+        );
+        assert!(old.message.contains("predates the merge"));
+    }
+}
+
+/// A new error from the branch still refuses, and the old error is shown as
+/// Info beside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_refuses_new_errors_when_old_errors_exist() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    branch_with_event(&mut c, "orders-change").await;
+    c.put_entity(with_branch(
+        pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(term(
+                "acme-orders",
+                "new-ghost",
+                vec![pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(id("acme-orders", "missing", 1)),
+                }],
+            )),
+            create_only: false,
+            if_match: String::new(),
+            validate_only: false,
+            force: true,
+        },
+        "orders-change",
+    ))
+    .await
+    .unwrap();
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("orders-change", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            resp.status,
+            pb::merge_branch_response::Status::Invalid as i32,
+            "dry_run={dry_run}"
+        );
+        let mut severities: Vec<(String, i32)> = resp
+            .validation
+            .iter()
+            .filter(|i| i.code == "TERM_DANGLING_ENTITY")
+            .map(|i| {
+                (
+                    i.subject
+                        .as_ref()
+                        .unwrap()
+                        .id
+                        .as_ref()
+                        .unwrap()
+                        .namespace
+                        .clone(),
+                    i.severity,
+                )
+            })
+            .collect();
+        severities.sort();
+        assert_eq!(
+            severities,
+            vec![
+                (
+                    "acme-legacy".to_string(),
+                    pb::validation_issue::Severity::Info as i32
+                ),
+                (
+                    "acme-orders".to_string(),
+                    pb::validation_issue::Severity::Error as i32
+                ),
+            ],
+            "dry_run={dry_run}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_branch_invalid_via_dangling_reference() {
     let endpoint = start_server().await;

@@ -158,7 +158,7 @@ fn forbids(annotation: &pb::InvariantAnnotation, issue: &pb::ValidationIssue) ->
 /// finding on a successor version, or against a newer target, counts as
 /// already present.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Lineage {
+pub(crate) struct Lineage {
     code: String,
     subject: Option<(i32, String, String)>,
     field: String,
@@ -166,7 +166,7 @@ struct Lineage {
 }
 
 impl Lineage {
-    fn of(issue: &pb::ValidationIssue) -> Self {
+    pub(crate) fn of(issue: &pb::ValidationIssue) -> Self {
         let mut structure = issue.clone();
         structure.severity = 0;
         structure.code.clear();
@@ -346,26 +346,74 @@ fn latest_by_lineage(world: &[StoredEntity]) -> HashMap<(String, String), &Store
     latest
 }
 
+/// Counts of findings already present, spent one at a time as the same
+/// findings are seen again.
+pub(crate) struct LineageBudget(HashMap<Lineage, usize>);
+
+impl LineageBudget {
+    /// True when the finding was already present and uses up one earlier copy.
+    pub(crate) fn take(&mut self, issue: &pb::ValidationIssue) -> bool {
+        match self.0.get_mut(&Lineage::of(issue)) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Lineage {
+    pub(crate) fn budget<'a>(
+        before: impl IntoIterator<Item = &'a pb::ValidationIssue>,
+    ) -> LineageBudget {
+        let mut counts: HashMap<Lineage, usize> = HashMap::new();
+        for issue in before {
+            *counts.entry(Lineage::of(issue)).or_default() += 1;
+        }
+        LineageBudget(counts)
+    }
+}
+
+/// Marks which errors a merge leaves behind that were not already in the
+/// store. Errors that were already there are downgraded to information, in
+/// place, so the wire shape stays the same. Returns whether any new error
+/// remains.
+pub(crate) fn downgrade_preexisting_errors(
+    before: &[pb::ValidationIssue],
+    after: &mut [pb::ValidationIssue],
+) -> bool {
+    let error = pb::validation_issue::Severity::Error as i32;
+    let mut budget = Lineage::budget(before.iter().filter(|i| i.severity == error));
+    let mut new_error = false;
+    for issue in after.iter_mut().filter(|i| i.severity == error) {
+        if budget.take(issue) {
+            issue.severity = pb::validation_issue::Severity::Info as i32;
+            issue
+                .message
+                .push_str(" (This finding predates the merge.)");
+        } else {
+            new_error = true;
+        }
+    }
+    new_error
+}
+
 fn classify(
     outcome: &mut pb::InvariantOutcome,
     annotation: &pb::InvariantAnnotation,
     before: &[pb::ValidationIssue],
     after: &[pb::ValidationIssue],
 ) {
-    let mut remaining: HashMap<Lineage, usize> = HashMap::new();
-    for issue in before.iter().filter(|i| forbids(annotation, i)) {
-        *remaining.entry(Lineage::of(issue)).or_default() += 1;
-    }
+    let mut budget = Lineage::budget(before.iter().filter(|i| forbids(annotation, i)));
     for issue in after {
         if !forbids(annotation, issue) {
             continue;
         }
-        match remaining.get_mut(&Lineage::of(issue)) {
-            Some(count) if *count > 0 => {
-                *count -= 1;
-                outcome.preexisting.push(issue.clone());
-            }
-            _ => outcome.violations.push(issue.clone()),
+        if budget.take(issue) {
+            outcome.preexisting.push(issue.clone());
+        } else {
+            outcome.violations.push(issue.clone());
         }
     }
     outcome.set_status(if !outcome.violations.is_empty() {
