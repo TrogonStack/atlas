@@ -105,6 +105,8 @@ Understand how Atlas works and why:
 - [Where tenant types live](explanation/tenant-types.md)
 - [Validation coverage](explanation/validation-coverage.md)
 - [Validation repair patterns](explanation/validation-repair-patterns.md)
+- [Visual product Atlas (proposed)](explanation/visual-product-atlas.md)
+- [Visual product Atlas delivery roadmap (proposed)](explanation/visual-product-atlas-roadmap.md)
 - [Wire compatibility and mixed-version operation](explanation/wire-compatibility.md)
 
 Mapping existing code into an Event Model:
