@@ -6048,7 +6048,10 @@ pub fn validate_model_content(
                         .filter(|(_, s)| event_lane.get(&pb::IdKey::new(s)) == Some(lane))
                         .copied()
                         .collect();
-                    if merged.len() < 2 || merged[0].0 != *n {
+                    if merged.len() < 2
+                        || merged[0].0 != *n
+                        || merged.iter().all(|(_, source)| *source == merged[0].1)
+                    {
                         continue;
                     }
                     let group = (
@@ -14383,6 +14386,12 @@ mod projection_ordering_tests {
     #[test]
     fn single_branch_does_not_warn() {
         let issues = merge_findings(FORK, &["review.approved"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn repeated_single_branch_does_not_warn() {
+        let issues = merge_findings(FORK, &["review.approved", "review.approved"], ALL_EVENTS);
         assert!(issues.is_empty(), "{issues:?}");
     }
 
