@@ -281,6 +281,7 @@ pub fn issue_to_json(issue: &pb::ValidationIssue) -> Value {
         "message": issue.message,
         "subject": ref_string(issue.subject.as_ref()),
         "evidence": issue.evidence.iter().map(evidence_to_json).collect::<Vec<_>>(),
+        "acknowledged": issue.acknowledged,
     })
 }
 
@@ -954,6 +955,15 @@ mod tests {
             json!([]),
             "a finding without evidence still names the key"
         );
+    }
+
+    #[test]
+    fn issue_json_carries_acknowledged_state() {
+        let mut issue = finding("DECLARED");
+        issue.acknowledged = true;
+        assert_eq!(issue_to_json(&issue)["acknowledged"], json!(true));
+        issue.acknowledged = false;
+        assert_eq!(issue_to_json(&issue)["acknowledged"], json!(false));
     }
 
     #[test]
