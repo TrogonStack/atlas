@@ -379,3 +379,41 @@ fn source_ownership_cannot_supply_or_clear_native_glossary_fields() {
         .is_err());
     }
 }
+
+#[test]
+fn malformed_quoted_exclusion_does_not_hide_unchecked_policy_usage() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    let text = "An unmatched quote starts here: \" Purchase must still be inspected.";
+    assert!(glossary::check_usage(
+        &[candidate],
+        "customer",
+        &date("2026-11-12"),
+        text,
+        &[],
+        true,
+    )
+    .is_err());
+}
+
+#[test]
+fn comparison_and_usage_bound_the_total_retained_candidate_bytes() {
+    let terms = (0..600)
+        .map(|index| {
+            let mut candidate = term();
+            candidate.id.as_mut().unwrap().slug = format!("purchase-{index}");
+            candidate.doc = "a".repeat(16_384);
+            candidate
+        })
+        .collect::<Vec<_>>();
+    assert!(glossary::compare_glossaries(&terms, &[]).is_err());
+    assert!(glossary::check_usage(
+        &terms,
+        "customer",
+        &date("2026-11-12"),
+        "",
+        &[],
+        false,
+    )
+    .is_err());
+}
