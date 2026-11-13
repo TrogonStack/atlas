@@ -17,13 +17,30 @@ export interface GlossaryDocumentRef {
   id?: EntityId;
 }
 
+export type GlossaryEntryState =
+  | 'GLOSSARY_ENTRY_STATE_UNSPECIFIED'
+  | 'GLOSSARY_ENTRY_STATE_DRAFT'
+  | 'GLOSSARY_ENTRY_STATE_REVIEWED'
+  | 'GLOSSARY_ENTRY_STATE_REJECTED'
+  | 'GLOSSARY_ENTRY_STATE_NEEDS_CHANGES'
+  | 'GLOSSARY_ENTRY_STATE_STALE_REVIEW'
+  | 'GLOSSARY_ENTRY_STATE_SOURCE_CHANGED'
+  | 'GLOSSARY_ENTRY_STATE_SOURCE_UNAVAILABLE'
+  | 'GLOSSARY_ENTRY_STATE_REVIEW_DUE';
+
+export type GlossaryEvidenceState =
+  | 'GLOSSARY_EVIDENCE_STATE_UNSPECIFIED'
+  | 'GLOSSARY_EVIDENCE_STATE_CURRENT'
+  | 'GLOSSARY_EVIDENCE_STATE_CHANGED'
+  | 'GLOSSARY_EVIDENCE_STATE_UNAVAILABLE';
+
 export interface GlossaryIndexEntry {
   term?: GlossaryTermRef;
   ownerUid?: string;
   etag?: string;
   title?: string;
   audience?: string;
-  state?: string;
+  state?: GlossaryEntryState;
   published?: boolean;
   reason?: string;
   nextReviewOn?: { value?: string };
@@ -38,7 +55,7 @@ export interface GlossaryIndex {
 
 export interface GlossaryEvidenceResolution {
   evidenceIndex?: number;
-  state?: string;
+  state?: GlossaryEvidenceState;
   reason?: string;
 }
 
@@ -56,7 +73,7 @@ export interface GlossarySourceMaterial {
   etag?: string;
   contentDigest?: { sha256?: string };
   text?: string;
-  state?: string;
+  state?: GlossaryEvidenceState;
 }
 
 export interface GlossarySources {
@@ -100,6 +117,15 @@ const STATE_LABELS: Record<string, string> = {
 };
 export function glossaryStateLabel(state: string | undefined): string {
   return state ? (STATE_LABELS[state] ?? 'State unavailable') : 'State unavailable';
+}
+export function glossaryEvidenceLabel(state: string | undefined): string {
+  if (!state) return 'Not checked';
+  const labels: Record<string, string> = {
+    GLOSSARY_EVIDENCE_STATE_CURRENT: 'Current',
+    GLOSSARY_EVIDENCE_STATE_CHANGED: 'Changed',
+    GLOSSARY_EVIDENCE_STATE_UNAVAILABLE: 'Unavailable',
+  };
+  return labels[state] ?? 'Source state unavailable';
 }
 export function glossaryRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};

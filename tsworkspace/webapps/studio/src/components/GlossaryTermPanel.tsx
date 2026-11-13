@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { inspectGlossarySources } from '@/lib/api';
 import {
   exactGlossaryId,
+  glossaryEvidenceLabel,
   glossaryIdLabel,
   glossaryRecord,
   glossaryStateLabel,
@@ -50,7 +51,7 @@ function EvidenceSource({
     <div className="flex flex-col gap-3 rounded-md border border-border p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="break-all font-mono text-xs">{id ? glossaryIdLabel(id) : 'Source identity unavailable'}</span>
-        <Badge variant="outline">{state ? glossaryStateLabel(state) : 'Not checked'}</Badge>
+        <Badge variant="outline">{glossaryEvidenceLabel(state)}</Badge>
       </div>
       {reason ? <p className="text-xs text-muted-foreground">{reason}</p> : null}
       <blockquote className="whitespace-pre-wrap border-l-2 border-lime-300 pl-3">
@@ -82,12 +83,8 @@ function EvidenceSource({
       {source.state.status === 'ready' ? (
         <div className="flex flex-col gap-2 rounded-md bg-muted/50 p-3">
           <p className="text-xs font-semibold">Current source inspection</p>
-          {source.state.value.incomplete ? (
-            <output className="text-xs">
-              Source inspection is incomplete.
-            </output>
-          ) : null}
-          <p className="text-xs">{glossaryStateLabel(current?.state)}</p>
+          {source.state.value.incomplete ? <output className="text-xs">Source inspection is incomplete.</output> : null}
+          <p className="text-xs">{glossaryEvidenceLabel(current?.state)}</p>
           {current?.text ? (
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{current.text}</pre>
           ) : (
@@ -155,9 +152,7 @@ export function GlossaryTermPanel({
         </div>
         {detail.entry?.reason ? <p className="text-xs text-muted-foreground">{detail.entry.reason}</p> : null}
         {detail.incomplete ? (
-          <output className="text-xs">
-            Entry inspection is incomplete. Some dependencies may be unavailable.
-          </output>
+          <output className="text-xs">Entry inspection is incomplete. Some dependencies may be unavailable.</output>
         ) : null}
       </div>
       <p className="whitespace-pre-wrap text-sm leading-relaxed">

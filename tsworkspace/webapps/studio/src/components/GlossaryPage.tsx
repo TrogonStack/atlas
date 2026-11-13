@@ -177,11 +177,7 @@ export function GlossaryPage() {
                         Reload
                       </Button>
                     </div>
-                    {catalog.state.status === 'loading' ? (
-                      <output className="text-xs">
-                        Loading glossary…
-                      </output>
-                    ) : null}
+                    {catalog.state.status === 'loading' ? <output className="text-xs">Loading glossary…</output> : null}
                     {catalog.state.status === 'failed' ? (
                       <GlossaryFailure message={catalog.state.error} retry={catalog.retry} />
                     ) : null}
@@ -270,11 +266,7 @@ export function GlossaryPage() {
                   />
                 </div>
                 <div className="flex min-w-0 flex-col gap-4">
-                  {detail.state.status === 'loading' ? (
-                    <output className="text-sm">
-                      Loading exact term…
-                    </output>
-                  ) : null}
+                  {detail.state.status === 'loading' ? <output className="text-sm">Loading exact term…</output> : null}
                   {detail.state.status === 'failed' ? (
                     <GlossaryFailure message={detail.state.error} retry={detail.retry} />
                   ) : null}

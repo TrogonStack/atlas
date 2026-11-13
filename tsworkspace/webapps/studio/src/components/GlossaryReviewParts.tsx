@@ -163,11 +163,7 @@ export function GlossaryComparisonPanel({
           Compare contexts
         </Button>
       </div>
-      {comparison.state.status === 'loading' ? (
-        <output className="text-xs">
-          Comparing vocabulary…
-        </output>
-      ) : null}
+      {comparison.state.status === 'loading' ? <output className="text-xs">Comparing vocabulary…</output> : null}
       {comparison.state.status === 'failed' ? (
         <GlossaryFailure message={comparison.state.error} retry={comparison.retry} />
       ) : null}
