@@ -203,6 +203,12 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDecisionDetail"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDocumentDetail"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListGlossaryEntries"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetGlossaryTerm"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectGlossarySources"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompareGlossaries"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CheckGlossaryUsage"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectGlossaryRefresh"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDecisionDeclarations"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDocumentDeclarations"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDesignGraphDetail"
@@ -253,6 +259,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
 
         // Mutation
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PutEntity" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ReviewGlossaryTerm" => Role::Writer,
         // DeleteEntity is a single-entity targeted delete and requires Writer
         // (not Admin), matching its scope. Only the bulk/destructive
         // DeleteByQuery path requires Admin. This keeps the common "delete one
