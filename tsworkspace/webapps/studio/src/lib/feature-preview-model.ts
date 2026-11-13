@@ -72,3 +72,47 @@ export function buildFeaturePreviewModel() {
   ];
   return buildModel(entities);
 }
+
+/** A fictional order lifecycle for the State machine preview: forks, a final state and a return. */
+export function buildStateMachinePreviewModel() {
+  const lane = ref('order-lifecycle');
+  const event = (slug: string, title: string) => ({ event: { id: id(slug), title, swimlane: lane } });
+  const next = (slug: string, doc: string) => ({ event: ref(slug), doc });
+  const entities: Parameters<typeof buildModel>[0] = [
+    {
+      swimlane: {
+        id: id('order-lifecycle'),
+        title: 'Order',
+        order: 1,
+        streamId: 'order-{order_id}',
+        transitions: [
+          {
+            after: ref('order.placed'),
+            next: [
+              next('payment.authorized', 'The card authorizes before the hold expires.'),
+              next('order.cancelled', 'The buyer cancels, or the hold expires first.'),
+            ],
+          },
+          {
+            after: ref('payment.authorized'),
+            next: [
+              next('order.shipped', 'The warehouse ships before the authorization lapses.'),
+              next('payment.voided', 'The authorization lapses before shipping.'),
+            ],
+          },
+          { after: ref('payment.voided'), next: [next('payment.authorized', 'The card authorizes again.')] },
+          { after: ref('order.shipped'), next: [next('order.delivered', 'The carrier confirms delivery.')] },
+          { after: ref('order.delivered') },
+          { after: ref('order.cancelled') },
+        ],
+      },
+    },
+    event('order.placed', 'Order placed'),
+    event('payment.authorized', 'Payment authorized'),
+    event('payment.voided', 'Payment voided'),
+    event('order.shipped', 'Order shipped'),
+    event('order.delivered', 'Order delivered'),
+    event('order.cancelled', 'Order cancelled'),
+  ];
+  return buildModel(entities);
+}

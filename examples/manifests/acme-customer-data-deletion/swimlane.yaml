@@ -16,3 +16,64 @@ spec:
         - completed
   streamId: customer-{customer_id}
   title: Deletion
+  transitions:
+  - after:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.requested
+        version: '1'
+    next:
+    - doc: The analytics deletion starts before the CRM deletion.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: analytics-deletion.started
+          version: '1'
+    - doc: The CRM deletion starts before the analytics deletion.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: crm-deletion.started
+          version: '1'
+  - after:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion.started
+        version: '1'
+    next:
+    - doc: The CRM deletion has not started yet.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: crm-deletion.started
+          version: '1'
+    - doc: The CRM deletion already started, and both vendors confirm.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: customer-data-deletion.completed
+          version: '1'
+  - after:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion.started
+        version: '1'
+    next:
+    - doc: The analytics deletion has not started yet.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: analytics-deletion.started
+          version: '1'
+    - doc: The analytics deletion already started, and both vendors confirm.
+      event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: customer-data-deletion.completed
+          version: '1'
+  - after:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.completed
+        version: '1'
+    next: []
