@@ -1899,15 +1899,12 @@ async fn concurrent_glossary_read(branch: Option<&str>, recreate: bool) {
     });
     let progressed = tokio::time::timeout(std::time::Duration::from_secs(5), &mut write).await;
     store.release.notify_one();
-    let write_completed = match progressed {
-        Ok(result) => {
-            result.unwrap();
-            true
-        }
-        Err(_) => {
-            write.await.unwrap();
-            false
-        }
+    let write_completed = if let Ok(result) = progressed {
+        result.unwrap();
+        true
+    } else {
+        write.await.unwrap();
+        false
     };
     let result = read.await.unwrap();
     assert!(
@@ -2235,15 +2232,12 @@ async fn glossary_read_refuses_changed_namespace_authority() {
     });
     let progressed = tokio::time::timeout(std::time::Duration::from_secs(5), &mut write).await;
     store.release.notify_one();
-    let write_completed = match progressed {
-        Ok(result) => {
-            result.unwrap();
-            true
-        }
-        Err(_) => {
-            write.await.unwrap();
-            false
-        }
+    let write_completed = if let Ok(result) = progressed {
+        result.unwrap();
+        true
+    } else {
+        write.await.unwrap();
+        false
     };
     let result = read.await.unwrap();
     assert!(
