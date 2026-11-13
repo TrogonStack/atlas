@@ -350,7 +350,7 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
                 && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Specification")
                 || (name == "resource_associations"
                     && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.DataProduct")
-                || (name == "owning_domain"
+                || (matches!(name.as_str(), "owning_domain" | "glossary")
                     && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term")
                 || name == "communications"
                     && matches!(

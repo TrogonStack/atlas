@@ -210,9 +210,9 @@ fn unit_fields(
     }
     if unit == OwnershipUnit::WholeOwner
         && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Term"
-        && value.get_field_by_name("owning_domain").is_some_and(|_| {
+        && ["owning_domain", "glossary"].iter().any(|name| {
             descriptor
-                .get_field_by_name("owning_domain")
+                .get_field_by_name(name)
                 .is_some_and(|field| value.has_field(&field))
         })
     {
@@ -348,6 +348,10 @@ pub fn validate_create_ownership(
     entity: &Entity,
     ownership: &SourceFieldOwnership,
 ) -> Result<(), SourceError> {
+    if matches!(&entity.kind, Some(trogon_atlas_proto::entity::Kind::Term(value)) if value.glossary.is_some())
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if let Some(trogon_atlas_proto::entity::Kind::Decision(value)) = &entity.kind {
         if value.authored_on.is_some()
             || value.decided_on.is_some()
