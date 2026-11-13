@@ -803,6 +803,43 @@ impl NatsStore {
         Ok(Some((decode_namespace_record(&entry.value)?, revision)))
     }
 
+    /// Deletes a namespace row and its name index, each with a revision CAS
+    /// against the `revision` the caller read the record at.
+    async fn remove_namespace_row(
+        &self,
+        id: &NamespaceId,
+        record: &NamespaceRecord,
+        revision: u64,
+    ) -> StoreResult<()> {
+        let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
+        // Recovery can recreate the same ID with a newer index incarnation.
+        let index_revision = self
+            .read_name_index(&index_key)
+            .await?
+            .filter(|(indexed_id, _)| indexed_id == id)
+            .map(|(_, revision)| revision);
+        let record_key = namespace_record_key(id.as_str());
+        tokio::time::timeout(
+            KV_OP_TIMEOUT,
+            self.namespaces_kv
+                .delete_expect_revision(&record_key, Some(revision)),
+        )
+        .await
+        .map_err(|_| StoreError::Backend(format!("namespace kv.delete {record_key}: timeout")))?
+        .map_err(|e| StoreError::Backend(format!("namespace kv.delete {record_key}: {e}")))?;
+        if let Some(revision) = index_revision {
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.namespaces_kv
+                    .delete_expect_revision(&index_key, Some(revision)),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("namespace kv.delete {index_key}: timeout")))?
+            .map_err(|e| StoreError::Backend(format!("namespace kv.delete {index_key}: {e}")))?;
+        }
+        Ok(())
+    }
+
     /// Read a name-index row: the id it points at, plus its revision.
     async fn read_name_index(&self, index_key: &str) -> StoreResult<Option<(NamespaceId, u64)>> {
         let Some(entry) =
@@ -4668,37 +4705,20 @@ impl Store for NatsStore {
                     "cannot release a permanent namespace".into(),
                 ));
             }
-            let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
-            // Recovery can recreate the same ID with a newer index incarnation.
-            let index_revision = self
-                .read_name_index(&index_key)
+            self.remove_namespace_row(id, &record, revision).await
+        })
+        .await
+    }
+
+    async fn delete_namespace(&self, id: &NamespaceId) -> StoreResult<NamespaceRecord> {
+        self.source_guarded(async {
+            self.require_writer()?;
+            let (record, revision) = self
+                .read_namespace_row(id)
                 .await?
-                .filter(|(indexed_id, _)| indexed_id == id)
-                .map(|(_, revision)| revision);
-            let record_key = namespace_record_key(id.as_str());
-            tokio::time::timeout(
-                KV_OP_TIMEOUT,
-                self.namespaces_kv
-                    .delete_expect_revision(&record_key, Some(revision)),
-            )
-            .await
-            .map_err(|_| StoreError::Backend(format!("namespace kv.delete {record_key}: timeout")))?
-            .map_err(|e| StoreError::Backend(format!("namespace kv.delete {record_key}: {e}")))?;
-            if let Some(revision) = index_revision {
-                tokio::time::timeout(
-                    KV_OP_TIMEOUT,
-                    self.namespaces_kv
-                        .delete_expect_revision(&index_key, Some(revision)),
-                )
-                .await
-                .map_err(|_| {
-                    StoreError::Backend(format!("namespace kv.delete {index_key}: timeout"))
-                })?
-                .map_err(|e| {
-                    StoreError::Backend(format!("namespace kv.delete {index_key}: {e}"))
-                })?;
-            }
-            Ok(())
+                .ok_or(StoreError::NotFound)?;
+            self.remove_namespace_row(id, &record, revision).await?;
+            Ok(record)
         })
         .await
     }
