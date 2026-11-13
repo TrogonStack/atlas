@@ -26,7 +26,7 @@ use trogon_atlas_server::{
     scope::NamespaceScope,
     service::EventModelServiceImpl,
 };
-use trogon_atlas_store::{NamespaceRecord, Store};
+use trogon_atlas_store::{NamespaceRecord, Store, StoreError};
 
 /// The registry authorizer, with one write check that pauses after it
 /// answers, so the test can remove the row before the write goes on.
@@ -192,6 +192,143 @@ fn event_id(namespace: &str, slug: &str) -> pb::Id {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn an_event_resolution_rechecks_ownership_after_waiting_for_the_lock() {
+    let race = race("acme-resolve").await;
+    let resolver = race.service.clone();
+    let request = pb::ResolveBranchEntryRequest {
+        name: race.branch.clone(),
+        r#ref: Some(pb::EntityRef {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(event_id(&race.namespace, "order-drafted")),
+        }),
+        resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+        ..Default::default()
+    };
+    let before = race
+        .store
+        .get(
+            pb::EntityKind::Event,
+            &event_id(&race.namespace, "order-drafted"),
+            Some(&race.branch),
+        )
+        .await
+        .unwrap();
+    race.authorizer.armed.store(true, Ordering::SeqCst);
+    let mut resolving =
+        tokio::spawn(async move { resolver.resolve_branch_entry(writer(request, None)).await });
+    tokio::select! {
+        result = &mut resolving => panic!(
+            "an Event resolution must authorize its target namespace before landing: {result:?}"
+        ),
+        () = race.authorizer.authorized.notified() => {}
+    }
+
+    race.service
+        .move_namespace(writer_of(
+            None,
+            pb::MoveNamespaceRequest {
+                id: race.namespace.clone(),
+                parent: "beta".into(),
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    race.authorizer.resume.notify_one();
+    let status = resolving
+        .await
+        .unwrap()
+        .expect_err("a resolution authorized for acme must not land in beta's namespace");
+    assert_eq!(status.code(), Code::FailedPrecondition, "{status:?}");
+    let after = race
+        .store
+        .get(
+            pb::EntityKind::Event,
+            &event_id(&race.namespace, "order-drafted"),
+            Some(&race.branch),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        after.etag, before.etag,
+        "the rejected resolution wrote no delta"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_event_resolution_refuses_a_namespace_owned_by_another_owner() {
+    let race = race("acme-foreign-resolve").await;
+    race.service
+        .move_namespace(writer_of(
+            None,
+            pb::MoveNamespaceRequest {
+                id: race.namespace.clone(),
+                parent: "beta".into(),
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    for resolution in [
+        pb::resolve_branch_entry_request::Resolution::KeepOurs,
+        pb::resolve_branch_entry_request::Resolution::TakeTheirs,
+    ] {
+        let status = race
+            .service
+            .resolve_branch_entry(writer(
+                pb::ResolveBranchEntryRequest {
+                    name: race.branch.clone(),
+                    r#ref: Some(pb::EntityRef {
+                        kind: pb::EntityKind::Event as i32,
+                        id: Some(event_id(&race.namespace, "order-drafted")),
+                    }),
+                    resolution: resolution as i32,
+                    ..Default::default()
+                },
+                None,
+            ))
+            .await
+            .expect_err("branch ownership does not grant writes into another owner's namespace");
+        assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_authorized_event_resolution_can_take_theirs() {
+    let race = race("acme-take-theirs").await;
+    race.service
+        .resolve_branch_entry(writer(
+            pb::ResolveBranchEntryRequest {
+                name: race.branch.clone(),
+                r#ref: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(event_id(&race.namespace, "order-drafted")),
+                }),
+                resolution: pb::resolve_branch_entry_request::Resolution::TakeTheirs as i32,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    let stored = race
+        .store
+        .get(
+            pb::EntityKind::Event,
+            &event_id(&race.namespace, "order-drafted"),
+            Some(&race.branch),
+        )
+        .await;
+    assert!(matches!(stored, Err(StoreError::NotFound)), "{stored:?}");
+    assert!(race
+        .store
+        .get_namespace(&NamespaceId::parse(&race.namespace).unwrap())
+        .await
+        .unwrap()
+        .is_some());
+}
+
 /// The refusal asks for a retry, so it must not leave the retry's
 /// `operation_id` claimed by an attempt that wrote nothing.
 #[tokio::test(flavor = "multi_thread")]
@@ -300,7 +437,7 @@ async fn a_write_that_waited_while_another_owner_adopted_its_namespace_is_refuse
             None,
         )
         .await;
-    assert!(stored.is_err(), "nothing landed in beta's namespace");
+    assert!(matches!(stored, Err(StoreError::NotFound)), "{stored:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -365,18 +502,12 @@ async fn a_write_that_waited_while_its_namespace_was_released_is_refused() {
         .expect_err("a write into a namespace released while it waited must not land");
     assert_eq!(status.code(), Code::FailedPrecondition, "{status:?}");
 
-    let stored = service
-        .get_entity(writer(
-            pb::GetEntityRequest {
-                kind: pb::EntityKind::Event as i32,
-                id: Some(pb::Id {
-                    namespace: namespace.clone(),
-                    slug: "order-placed".into(),
-                    version: 0,
-                }),
-            },
+    let stored = store
+        .get(
+            pb::EntityKind::Event,
+            &event_id(&namespace, "order-placed"),
             None,
-        ))
+        )
         .await;
-    assert!(stored.is_err(), "nothing landed: {stored:?}");
+    assert!(matches!(stored, Err(StoreError::NotFound)), "{stored:?}");
 }

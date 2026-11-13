@@ -11968,28 +11968,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
-        let authorized = matches!(
-            kind,
-            pb::EntityKind::SystemGroup
-                | pb::EntityKind::Channel
-                | pb::EntityKind::DataStore
-                | pb::EntityKind::Specification
-                | pb::EntityKind::DataProduct
-                | pb::EntityKind::Team
-                | pb::EntityKind::Person
-                | pb::EntityKind::Decision
-                | pb::EntityKind::Term
-                | pb::EntityKind::Document
-                | pb::EntityKind::DesignGraph
-        );
-        if authorized {
-            self.authorize_write(
-                principal.as_ref(),
-                Some(&req.name),
-                &WriteTargets::of(&id.namespace),
-            )
-            .await?;
-        }
+        self.authorize_write(
+            principal.as_ref(),
+            Some(&req.name),
+            &WriteTargets::of(&id.namespace),
+        )
+        .await?;
         let resolution = pb::resolve_branch_entry_request::Resolution::try_from(req.resolution)
             .map_err(|_| Status::invalid_argument("unknown resolution"))?;
         if matches!(
@@ -12006,14 +11990,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
 
         let _guard = self.lock_mutations().await;
-        if authorized {
-            self.require_targets_still_registered(
-                principal.as_ref(),
-                &WriteTargets::of(&id.namespace),
-                WriteEffect::Persist,
-            )
-            .await?;
-        }
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &WriteTargets::of(&id.namespace),
+            WriteEffect::Persist,
+        )
+        .await?;
         if !take_theirs {
             self.refuse_protected([(kind, &id)]).await?;
         }
