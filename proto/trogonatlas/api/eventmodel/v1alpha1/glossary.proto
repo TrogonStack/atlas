@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/calendar_date.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/glossary.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+
+message GlossarySelection {
+  repeated string namespaces = 1;
+  string audience = 2;
+  bool include_unreviewed = 3;
+}
+
+enum GlossaryEntryState {
+  GLOSSARY_ENTRY_STATE_UNSPECIFIED = 0;
+  GLOSSARY_ENTRY_STATE_DRAFT = 1;
+  GLOSSARY_ENTRY_STATE_REVIEWED = 2;
+  GLOSSARY_ENTRY_STATE_REJECTED = 3;
+  GLOSSARY_ENTRY_STATE_NEEDS_CHANGES = 4;
+  GLOSSARY_ENTRY_STATE_STALE_REVIEW = 5;
+  GLOSSARY_ENTRY_STATE_SOURCE_CHANGED = 6;
+  GLOSSARY_ENTRY_STATE_SOURCE_UNAVAILABLE = 7;
+  GLOSSARY_ENTRY_STATE_REVIEW_DUE = 8;
+}
+
+message GlossaryIndexEntry {
+  trogonatlas.eventmodel.v1alpha1.TermRef term = 1;
+  string owner_uid = 2;
+  string etag = 3;
+  string title = 4;
+  string audience = 5;
+  GlossaryEntryState state = 6;
+  bool published = 7;
+  string reason = 8;
+  trogonatlas.type.v1alpha1.CalendarDate next_review_on = 9;
+}
+
+message ListGlossaryEntriesRequest {
+  GlossarySelection selection = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListGlossaryEntriesResponse {
+  repeated GlossaryIndexEntry entries = 1;
+  string next_page_token = 2;
+  bool incomplete = 3;
+  string snapshot_revision = 4;
+}
+
+message GlossaryEvidenceResolution {
+  uint32 evidence_index = 1;
+  GlossaryEntryState state = 2;
+  string reason = 3;
+}
+
+message GetGlossaryTermRequest {
+  trogonatlas.eventmodel.v1alpha1.TermRef term = 1;
+}
+
+message GetGlossaryTermResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  string etag = 2;
+  GlossaryIndexEntry entry = 3;
+  repeated GlossaryEvidenceResolution evidence = 4;
+  bool incomplete = 5;
+}
+
+message InspectGlossarySourcesRequest {
+  repeated trogonatlas.eventmodel.v1alpha1.DocumentRef documents = 1;
+}
+
+message GlossarySourceMaterial {
+  trogonatlas.eventmodel.v1alpha1.DocumentRef document = 1;
+  string owner_uid = 2;
+  string etag = 3;
+  trogonatlas.eventmodel.v1alpha1.ContentDigest content_digest = 4;
+  string text = 5;
+  GlossaryEntryState state = 6;
+}
+
+message InspectGlossarySourcesResponse {
+  repeated GlossarySourceMaterial sources = 1;
+  bool incomplete = 2;
+  string snapshot_revision = 3;
+}
+
+message ReviewGlossaryTermRequest {
+  trogonatlas.eventmodel.v1alpha1.TermRef term = 1;
+  string if_match = 2;
+  trogonatlas.eventmodel.v1alpha1.GlossaryReviewDisposition disposition = 3;
+  string reason = 4;
+  bool validate_only = 5;
+}
+
+message CompareGlossariesRequest {
+  GlossarySelection left = 1;
+  GlossarySelection right = 2;
+}
+
+enum GlossaryDifferenceKind {
+  GLOSSARY_DIFFERENCE_KIND_UNSPECIFIED = 0;
+  GLOSSARY_DIFFERENCE_KIND_DIFFERENT_MEANING = 1;
+  GLOSSARY_DIFFERENCE_KIND_SAME_MEANING = 2;
+  GLOSSARY_DIFFERENCE_KIND_MISSING_COUNTERPART = 3;
+}
+
+message GlossaryComparisonItem {
+  GlossaryDifferenceKind kind = 1;
+  trogonatlas.eventmodel.v1alpha1.TermRef left = 2;
+  trogonatlas.eventmodel.v1alpha1.TermRef right = 3;
+  string title = 4;
+  string explanation = 5;
+}
+
+message CompareGlossariesResponse {
+  repeated GlossaryComparisonItem differences = 1;
+  bool incomplete = 2;
+  string snapshot_revision = 3;
+}
+
+message GlossaryTextRange {
+  uint32 start = 1;
+  uint32 end = 2;
+}
+
+message CheckGlossaryUsageRequest {
+  GlossarySelection selection = 1;
+  string text = 2;
+  string text_revision = 3;
+  trogonatlas.type.v1alpha1.CalendarDate on = 4;
+  repeated GlossaryTextRange exclusions = 5;
+  bool skip_quoted = 6;
+}
+
+message GlossaryUsageFinding {
+  trogonatlas.eventmodel.v1alpha1.TermRef term = 1;
+  GlossaryTextRange range = 2;
+  string matched = 3;
+  trogonatlas.eventmodel.v1alpha1.GlossaryUsage usage = 4;
+  trogonatlas.eventmodel.v1alpha1.TermRef preferred_term = 5;
+  string rationale = 6;
+}
+
+message CheckGlossaryUsageResponse {
+  repeated GlossaryUsageFinding findings = 1;
+  string text_revision = 2;
+  string snapshot_revision = 3;
+  bool incomplete = 4;
+}
+
+message InspectGlossaryRefreshRequest {
+  GlossarySelection selection = 1;
+  repeated trogonatlas.eventmodel.v1alpha1.DocumentRef documents = 2;
+  string generation_revision = 3;
+}
+
+message GlossaryRefreshObservation {
+  GlossaryIndexEntry entry = 1;
+  repeated GlossaryEvidenceResolution evidence = 2;
+  bool generation_changed = 3;
+}
+
+message InspectGlossaryRefreshResponse {
+  repeated GlossaryRefreshObservation observations = 1;
+  repeated GlossarySourceMaterial sources = 2;
+  bool incomplete = 3;
+  string snapshot_revision = 4;
+}

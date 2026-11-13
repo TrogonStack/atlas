@@ -1243,6 +1243,310 @@ pub struct EntityKindInfo {
     #[prost(string, tag="6")]
     pub doc: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossarySelection {
+    #[prost(string, repeated, tag="1")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="2")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub include_unreviewed: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryIndexEntry {
+    #[prost(message, optional, tag="1")]
+    pub term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(enumeration="GlossaryEntryState", tag="6")]
+    pub state: i32,
+    #[prost(bool, tag="7")]
+    pub published: bool,
+    #[prost(string, tag="8")]
+    pub reason: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="9")]
+    pub next_review_on: ::core::option::Option<super::super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListGlossaryEntriesRequest {
+    #[prost(message, optional, tag="1")]
+    pub selection: ::core::option::Option<GlossarySelection>,
+    #[prost(uint32, tag="2")]
+    pub page_size: u32,
+    #[prost(string, tag="3")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListGlossaryEntriesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub entries: ::prost::alloc::vec::Vec<GlossaryIndexEntry>,
+    #[prost(string, tag="2")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(string, tag="4")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryEvidenceResolution {
+    #[prost(uint32, tag="1")]
+    pub evidence_index: u32,
+    #[prost(enumeration="GlossaryEntryState", tag="2")]
+    pub state: i32,
+    #[prost(string, tag="3")]
+    pub reason: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetGlossaryTermRequest {
+    #[prost(message, optional, tag="1")]
+    pub term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetGlossaryTermResponse {
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Entity>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub entry: ::core::option::Option<GlossaryIndexEntry>,
+    #[prost(message, repeated, tag="4")]
+    pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidenceResolution>,
+    #[prost(bool, tag="5")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectGlossarySourcesRequest {
+    #[prost(message, repeated, tag="1")]
+    pub documents: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::DocumentRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossarySourceMaterial {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub content_digest: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContentDigest>,
+    #[prost(string, tag="5")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(enumeration="GlossaryEntryState", tag="6")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectGlossarySourcesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub sources: ::prost::alloc::vec::Vec<GlossarySourceMaterial>,
+    #[prost(bool, tag="2")]
+    pub incomplete: bool,
+    #[prost(string, tag="3")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReviewGlossaryTermRequest {
+    #[prost(message, optional, tag="1")]
+    pub term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(string, tag="2")]
+    pub if_match: ::prost::alloc::string::String,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::GlossaryReviewDisposition", tag="3")]
+    pub disposition: i32,
+    #[prost(string, tag="4")]
+    pub reason: ::prost::alloc::string::String,
+    #[prost(bool, tag="5")]
+    pub validate_only: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CompareGlossariesRequest {
+    #[prost(message, optional, tag="1")]
+    pub left: ::core::option::Option<GlossarySelection>,
+    #[prost(message, optional, tag="2")]
+    pub right: ::core::option::Option<GlossarySelection>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryComparisonItem {
+    #[prost(enumeration="GlossaryDifferenceKind", tag="1")]
+    pub kind: i32,
+    #[prost(message, optional, tag="2")]
+    pub left: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(message, optional, tag="3")]
+    pub right: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(string, tag="4")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub explanation: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompareGlossariesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub differences: ::prost::alloc::vec::Vec<GlossaryComparisonItem>,
+    #[prost(bool, tag="2")]
+    pub incomplete: bool,
+    #[prost(string, tag="3")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryTextRange {
+    #[prost(uint32, tag="1")]
+    pub start: u32,
+    #[prost(uint32, tag="2")]
+    pub end: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CheckGlossaryUsageRequest {
+    #[prost(message, optional, tag="1")]
+    pub selection: ::core::option::Option<GlossarySelection>,
+    #[prost(string, tag="2")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub text_revision: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub on: ::core::option::Option<super::super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, repeated, tag="5")]
+    pub exclusions: ::prost::alloc::vec::Vec<GlossaryTextRange>,
+    #[prost(bool, tag="6")]
+    pub skip_quoted: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsageFinding {
+    #[prost(message, optional, tag="1")]
+    pub term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(message, optional, tag="2")]
+    pub range: ::core::option::Option<GlossaryTextRange>,
+    #[prost(string, tag="3")]
+    pub matched: ::prost::alloc::string::String,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::GlossaryUsage", tag="4")]
+    pub usage: i32,
+    #[prost(message, optional, tag="5")]
+    pub preferred_term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(string, tag="6")]
+    pub rationale: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CheckGlossaryUsageResponse {
+    #[prost(message, repeated, tag="1")]
+    pub findings: ::prost::alloc::vec::Vec<GlossaryUsageFinding>,
+    #[prost(string, tag="2")]
+    pub text_revision: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+    #[prost(bool, tag="4")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectGlossaryRefreshRequest {
+    #[prost(message, optional, tag="1")]
+    pub selection: ::core::option::Option<GlossarySelection>,
+    #[prost(message, repeated, tag="2")]
+    pub documents: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::DocumentRef>,
+    #[prost(string, tag="3")]
+    pub generation_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GlossaryRefreshObservation {
+    #[prost(message, optional, tag="1")]
+    pub entry: ::core::option::Option<GlossaryIndexEntry>,
+    #[prost(message, repeated, tag="2")]
+    pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidenceResolution>,
+    #[prost(bool, tag="3")]
+    pub generation_changed: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectGlossaryRefreshResponse {
+    #[prost(message, repeated, tag="1")]
+    pub observations: ::prost::alloc::vec::Vec<GlossaryRefreshObservation>,
+    #[prost(message, repeated, tag="2")]
+    pub sources: ::prost::alloc::vec::Vec<GlossarySourceMaterial>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(string, tag="4")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryEntryState {
+    Unspecified = 0,
+    Draft = 1,
+    Reviewed = 2,
+    Rejected = 3,
+    NeedsChanges = 4,
+    StaleReview = 5,
+    SourceChanged = 6,
+    SourceUnavailable = 7,
+    ReviewDue = 8,
+}
+impl GlossaryEntryState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_ENTRY_STATE_UNSPECIFIED",
+            Self::Draft => "GLOSSARY_ENTRY_STATE_DRAFT",
+            Self::Reviewed => "GLOSSARY_ENTRY_STATE_REVIEWED",
+            Self::Rejected => "GLOSSARY_ENTRY_STATE_REJECTED",
+            Self::NeedsChanges => "GLOSSARY_ENTRY_STATE_NEEDS_CHANGES",
+            Self::StaleReview => "GLOSSARY_ENTRY_STATE_STALE_REVIEW",
+            Self::SourceChanged => "GLOSSARY_ENTRY_STATE_SOURCE_CHANGED",
+            Self::SourceUnavailable => "GLOSSARY_ENTRY_STATE_SOURCE_UNAVAILABLE",
+            Self::ReviewDue => "GLOSSARY_ENTRY_STATE_REVIEW_DUE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_ENTRY_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_ENTRY_STATE_DRAFT" => Some(Self::Draft),
+            "GLOSSARY_ENTRY_STATE_REVIEWED" => Some(Self::Reviewed),
+            "GLOSSARY_ENTRY_STATE_REJECTED" => Some(Self::Rejected),
+            "GLOSSARY_ENTRY_STATE_NEEDS_CHANGES" => Some(Self::NeedsChanges),
+            "GLOSSARY_ENTRY_STATE_STALE_REVIEW" => Some(Self::StaleReview),
+            "GLOSSARY_ENTRY_STATE_SOURCE_CHANGED" => Some(Self::SourceChanged),
+            "GLOSSARY_ENTRY_STATE_SOURCE_UNAVAILABLE" => Some(Self::SourceUnavailable),
+            "GLOSSARY_ENTRY_STATE_REVIEW_DUE" => Some(Self::ReviewDue),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryDifferenceKind {
+    Unspecified = 0,
+    DifferentMeaning = 1,
+    SameMeaning = 2,
+    MissingCounterpart = 3,
+}
+impl GlossaryDifferenceKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_DIFFERENCE_KIND_UNSPECIFIED",
+            Self::DifferentMeaning => "GLOSSARY_DIFFERENCE_KIND_DIFFERENT_MEANING",
+            Self::SameMeaning => "GLOSSARY_DIFFERENCE_KIND_SAME_MEANING",
+            Self::MissingCounterpart => "GLOSSARY_DIFFERENCE_KIND_MISSING_COUNTERPART",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_DIFFERENCE_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_DIFFERENCE_KIND_DIFFERENT_MEANING" => Some(Self::DifferentMeaning),
+            "GLOSSARY_DIFFERENCE_KIND_SAME_MEANING" => Some(Self::SameMeaning),
+            "GLOSSARY_DIFFERENCE_KIND_MISSING_COUNTERPART" => Some(Self::MissingCounterpart),
+            _ => None,
+        }
+    }
+}
 /// A typed pointer hit. `from` is the entity that holds the pointer (e.g. a
 /// slice), `from_field` is the structural path inside that entity to the
 /// reference site (e.g. "emitted_events\[2\].event"). `to` is the target.

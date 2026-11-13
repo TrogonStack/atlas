@@ -4880,6 +4880,56 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map(Response::new)
     }
 
+    async fn list_glossary_entries(
+        &self,
+        _req: Request<pb::ListGlossaryEntriesRequest>,
+    ) -> Result<Response<pb::ListGlossaryEntriesResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn get_glossary_term(
+        &self,
+        _req: Request<pb::GetGlossaryTermRequest>,
+    ) -> Result<Response<pb::GetGlossaryTermResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn inspect_glossary_sources(
+        &self,
+        _req: Request<pb::InspectGlossarySourcesRequest>,
+    ) -> Result<Response<pb::InspectGlossarySourcesResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn review_glossary_term(
+        &self,
+        _req: Request<pb::ReviewGlossaryTermRequest>,
+    ) -> Result<Response<pb::GetGlossaryTermResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn compare_glossaries(
+        &self,
+        _req: Request<pb::CompareGlossariesRequest>,
+    ) -> Result<Response<pb::CompareGlossariesResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn check_glossary_usage(
+        &self,
+        _req: Request<pb::CheckGlossaryUsageRequest>,
+    ) -> Result<Response<pb::CheckGlossaryUsageResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+    async fn inspect_glossary_refresh(
+        &self,
+        _req: Request<pb::InspectGlossaryRefreshRequest>,
+    ) -> Result<Response<pb::InspectGlossaryRefreshResponse>, Status> {
+        Err(Status::unimplemented("glossary workflow"))
+    }
+
+
     async fn list_incoming_decision_declarations(
         &self,
         req: Request<pb::ListIncomingDecisionDeclarationsRequest>,

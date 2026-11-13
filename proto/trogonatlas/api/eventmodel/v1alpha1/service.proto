@@ -26,6 +26,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/glossary.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
@@ -1383,6 +1384,13 @@ service EventModelService {
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
+  rpc ListGlossaryEntries(ListGlossaryEntriesRequest) returns (ListGlossaryEntriesResponse);
+  rpc GetGlossaryTerm(GetGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc InspectGlossarySources(InspectGlossarySourcesRequest) returns (InspectGlossarySourcesResponse);
+  rpc ReviewGlossaryTerm(ReviewGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc CompareGlossaries(CompareGlossariesRequest) returns (CompareGlossariesResponse);
+  rpc CheckGlossaryUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc InspectGlossaryRefresh(InspectGlossaryRefreshRequest) returns (InspectGlossaryRefreshResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
 
