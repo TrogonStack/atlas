@@ -600,3 +600,89 @@ async fn source_projection_refuses_oversized_json_instead_of_breaking_connected_
         Ok(_) => panic!("oversized JSON source projection must refuse before transport"),
     }
 }
+
+#[tokio::test]
+async fn oversized_review_is_refused_before_any_publication_is_applied() {
+    let mut client = client().await;
+    let draft = candidate(&mut client, 1).await;
+    let source = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("source", 1)),
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let content = "\0".repeat(60_000);
+    let mut source_entity = source.entity.unwrap();
+    source_entity.system = None;
+    if let Some(pb::entity::Kind::Document(document)) = &mut source_entity.kind {
+        document.id = Some(id("large-source", 1));
+        for subject in &mut document.subjects {
+            subject.connection_id = None;
+        }
+        document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+            digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+            content: content.clone(),
+            media_type: Some(pb::MediaType {
+                value: "text/plain".into(),
+            }),
+        }));
+    }
+    let retained = put(&mut client, source_entity, "").await.entity.unwrap();
+    let mut entity = draft.entity.unwrap();
+    entity.system = None;
+    if let Some(pb::entity::Kind::Term(term)) = &mut entity.kind {
+        term.id = Some(id("oversized-review", 1));
+        let glossary = term.glossary.as_mut().unwrap();
+        glossary.evidence = (0..32)
+            .map(|index| pb::GlossaryEvidence {
+                document: Some(pb::DocumentRef {
+                    id: Some(id("large-source", 1)),
+                }),
+                owner_uid: retained.system.as_ref().unwrap().uid.clone(),
+                content_digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+                locator: format!("declared-passage:{index}"),
+                quote: "\0".repeat(16_000),
+            })
+            .collect();
+    }
+    let candidate = put(&mut client, entity, "").await;
+    let result = client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("oversized-review", 1)),
+                }),
+                if_match: candidate.etag.clone(),
+                disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+                reason: "Must not persist an uninspectable publication.".into(),
+                ..Default::default()
+            },
+            "glossary-fixture-expert",
+        ))
+        .await;
+    match result {
+        Err(error) => assert_eq!(error.code(), Code::ResourceExhausted),
+        Ok(_) => panic!("an oversized review response must be refused before mutation"),
+    }
+    let after = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Term as i32,
+                id: Some(id("oversized-review", 1)),
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(after.etag, candidate.etag);
+    let Some(pb::entity::Kind::Term(term)) = after.entity.unwrap().kind else {
+        panic!("term")
+    };
+    assert!(term.glossary.unwrap().review.is_none());
+}
