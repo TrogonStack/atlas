@@ -177,6 +177,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         // bound inside one may perform it.
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RegisterNamespace" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSnapshotId" => Role::Reader,
         // Protection outranks every writer, so only an admin sets or lifts
         // it; who protected what is readable by anyone who can read.
@@ -1324,6 +1325,8 @@ namespaces = ["orders/*"]
         for path in [
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace",
         ] {
             assert_eq!(required_role(path), Some(Role::Admin), "{path}");
         }

@@ -883,6 +883,15 @@ pub struct MoveNamespaceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DeleteNamespaceParams {
+    #[schemars(
+        description = "Namespace id, not name; list_namespaces reports the id. The namespace must hold no entity on baseline or on any branch."
+    )]
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetSnapshotIdParams {
     #[schemars(
         description = "Restrict the snapshot to these namespaces. Omit for every namespace. Two snapshot ids are comparable only when taken over the same scope."

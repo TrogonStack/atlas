@@ -2518,6 +2518,11 @@ impl EventModelServiceImpl {
                 }
                 WriteVerdict::Unclaimed => {}
             }
+            if id.is_minted() {
+                return Err(Status::failed_precondition(format!(
+                    "namespace {namespace:?} is not registered; register a namespace to get a fresh id",
+                )));
+            }
             let name = NamespaceName::parse(namespace).map_err(|e| {
                 Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
             })?;
@@ -2587,6 +2592,31 @@ impl EventModelServiceImpl {
             self.authorizer.on_released(&record).await?;
         }
         self.invalidate_directory().await;
+        Ok(())
+    }
+
+    /// Refuses unless `entities` holds nothing in `id`. A truncated view
+    /// cannot prove emptiness, so it refuses too.
+    fn refuse_unless_empty(
+        id: &NamespaceId,
+        entities: &[StoredEntity],
+        truncated: bool,
+        view: &str,
+    ) -> Result<(), Status> {
+        if truncated {
+            return Err(Status::failed_precondition(format!(
+                "cannot prove namespace {id} is empty: the {view} view was truncated",
+            )));
+        }
+        if entities
+            .iter()
+            .filter_map(|se| trogon_atlas_store::refs::entity_id(&se.entity))
+            .any(|e| e.namespace == id.as_str())
+        {
+            return Err(Status::failed_precondition(format!(
+                "namespace {id} still holds entities on {view}",
+            )));
+        }
         Ok(())
     }
 
@@ -4560,6 +4590,84 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.authorizer.on_moved(&record, &previous).await?;
         }
         Ok(Response::new(pb::MoveNamespaceResponse {
+            namespace: Some(namespace_record_to_proto(&record)),
+        }))
+    }
+
+    async fn delete_namespace(
+        &self,
+        req: Request<pb::DeleteNamespaceRequest>,
+    ) -> Result<Response<pb::DeleteNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
+        if !self.store.is_writer() {
+            let writer = self.store.writer_status();
+            return Err(store_err(trogon_atlas_store::StoreError::NotWriter {
+                role: writer.role,
+                epoch: writer.epoch,
+            }));
+        }
+        let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
+        let id = NamespaceId::parse(req.into_inner().id.trim())
+            .map_err(|e| Status::invalid_argument(format!("invalid namespace id: {e}")))?;
+        let not_registered = || Status::not_found(format!("namespace {id} is not registered"));
+        // Reads the registry, not the cached directory view, because this
+        // decides what to delete.
+        let record = self
+            .store
+            .get_namespace(&id)
+            .await
+            .map_err(store_err)?
+            .ok_or_else(not_registered)?;
+        // A caller bound to an owner may only delete inside its own subtree.
+        // Answers like a missing row, so the id of another tenant's
+        // namespace is not confirmed.
+        if vis.owner().is_some_and(|owner| owner != &record.parent)
+            || !self.lens(&vis).await?.admits(id.as_str())
+        {
+            return Err(not_registered());
+        }
+        if let Some(principal) =
+            principal.filter(|principal| !principal.namespaces.admits(id.as_str()))
+        {
+            return Err(Status::permission_denied(format!(
+                "principal {} may not write namespace {:?}; its scope is {}",
+                principal.name,
+                id.as_str(),
+                principal.namespaces,
+            )));
+        }
+        if record.id == NamespaceId::adopt_legacy(&record.name) {
+            return Err(Status::failed_precondition(format!(
+                "namespace {id} is a legacy namespace whose id is its name: entity history \
+                 is keyed by that name, so a later write under it would re-adopt the history \
+                 under another owner",
+            )));
+        }
+        // The caller's view is deliberately not used below: a namespace
+        // another owner filled is not empty because this caller cannot see it.
+        let baseline = self.attestation_baseline().await?;
+        Self::refuse_unless_empty(&id, &baseline.entities, baseline.truncated, "baseline")?;
+        for branch in self.store.list_branches().await.map_err(store_err)? {
+            let view = graph::load_all(&self.store, Some(&branch.name)).await?;
+            Self::refuse_unless_empty(&id, &view.entities, view.truncated, &branch.name)?;
+        }
+        if let Some(registration) =
+            source_integration::registration_naming(self, id.as_str()).await?
+        {
+            return Err(Status::failed_precondition(format!(
+                "source registration {registration} names namespace {id}: delete the \
+                 registration first, or a later source run could recreate the namespace",
+            )));
+        }
+        // Revoked before the row goes, because the row is what a retry finds:
+        // a failed revoke keeps it, and the retry revokes again. A failed
+        // delete after it leaves a row nobody holds a grant for, which fails
+        // closed.
+        self.authorizer.on_released(&record).await?;
+        let record = self.store.delete_namespace(&id).await.map_err(store_err)?;
+        self.invalidate_directory().await;
+        Ok(Response::new(pb::DeleteNamespaceResponse {
             namespace: Some(namespace_record_to_proto(&record)),
         }))
     }
