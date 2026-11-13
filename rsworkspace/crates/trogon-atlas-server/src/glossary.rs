@@ -594,6 +594,17 @@ impl EventModelServiceImpl {
             owner_uid,
             reason: input.reason,
         });
+        let representation =
+            trogon_atlas_core::transcode::entity_json_value(&entity).map_err(|_| {
+                Status::invalid_argument("glossary review requires canonical native content")
+            })?;
+        let bytes = serde_json::to_vec(&representation)
+            .map_err(|_| Status::invalid_argument("glossary review cannot be encoded"))?;
+        if bytes.len() > 2 * 1024 * 1024 {
+            return Err(Status::resource_exhausted(
+                "reviewed glossary content exceeds its 2 MiB JSON budget",
+            ));
+        }
         let permit = entity.clone();
         let put = Request::from_parts(
             metadata,
@@ -624,13 +635,17 @@ impl EventModelServiceImpl {
             index.published = false;
             index.reason = "Review preview was not persisted".into();
         }
-        Ok(Response::new(pb::GetGlossaryTermResponse {
-            entity: Some(entry.stored.entity),
-            etag: entry.stored.etag,
-            entry: Some(index),
-            evidence: entry.evidence,
-            incomplete: entry.incomplete,
-        }))
+        bounded_output(
+            "GetGlossaryTermResponse",
+            pb::GetGlossaryTermResponse {
+                entity: Some(entry.stored.entity),
+                etag: entry.stored.etag,
+                entry: Some(index),
+                evidence: entry.evidence,
+                incomplete: entry.incomplete,
+            },
+        )
+        .map(Response::new)
     }
 
     pub(super) async fn glossary_compare(

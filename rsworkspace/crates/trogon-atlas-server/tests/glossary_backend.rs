@@ -164,6 +164,10 @@ async fn candidate(client: &mut Client, version: u64) -> pb::PutEntityResponse {
             id: Some(id("purchase", version)),
             title: "Purchase".into(),
             doc: "A customer request accepted by the store.".into(),
+            embodied_by: vec![pb::EntityRef {
+                kind: pb::EntityKind::Event as i32,
+                id: Some(id("purchase-recorded", 1)),
+            }],
             glossary: Some(pb::GlossaryEntry {
                 generation_revision: "fixture/prompt-v1".into(),
                 audience: "customer".into(),
