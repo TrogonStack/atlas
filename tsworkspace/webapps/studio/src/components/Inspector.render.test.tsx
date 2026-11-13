@@ -213,8 +213,17 @@ describe('Inspector', () => {
     expect(screen.getByText('nothing')).toBeDefined();
   });
 
+  it('shows the Scenarios tab with an empty state when a slice has no scenarios', () => {
+    const model = buildModel(commandSliceFixture(false));
+    const entity = mustFind(model.slices[0]?.entity);
+    render(<Inspector model={model} entity={entity} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Details', 'Scenarios (0)', 'History']);
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (0)' }));
+    expect(screen.getByText('This slice has no scenarios.')).toBeDefined();
+  });
+
   it.each(['controlled', 'uncontrolled'] as const)(
-    'keeps Details selected when scenarios disappear and return in %s usage',
+    'keeps Scenarios selected when scenarios disappear and return in %s usage',
     (mode) => {
       const model = baseModel();
       const emptyModel = buildModel(commandSliceFixture(false));
@@ -224,14 +233,12 @@ describe('Inspector', () => {
       expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
 
       rerender(<ManagedInspector {...props} model={emptyModel} entity={mustFind(emptyModel.slices[0]?.entity)} />);
-      expect(screen.queryByRole('tab', { name: /Scenarios/ })).toBeNull();
-      expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+      expect(screen.getByRole('tab', { name: 'Scenarios (0)', selected: true })).toBeDefined();
+      expect(screen.getByText('This slice has no scenarios.')).toBeDefined();
 
       rerender(<ManagedInspector {...props} />);
-      expect(screen.queryByRole('tab', { name: 'Details', selected: true })).not.toBeNull();
-      expect(screen.queryByText('Order placed successfully')).toBeNull();
-      fireEvent.click(screen.getByRole('tab', { name: 'Scenarios (1)' }));
       expect(screen.getByRole('tab', { name: 'Scenarios (1)', selected: true })).toBeDefined();
+      expect(screen.getByText('Order placed successfully')).toBeDefined();
     },
   );
 
