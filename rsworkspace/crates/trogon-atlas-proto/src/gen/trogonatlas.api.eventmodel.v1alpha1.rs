@@ -1297,7 +1297,7 @@ pub struct ListGlossaryEntriesResponse {
 pub struct GlossaryEvidenceResolution {
     #[prost(uint32, tag="1")]
     pub evidence_index: u32,
-    #[prost(enumeration="GlossaryEntryState", tag="2")]
+    #[prost(enumeration="GlossaryEvidenceState", tag="2")]
     pub state: i32,
     #[prost(string, tag="3")]
     pub reason: ::prost::alloc::string::String,
@@ -1337,7 +1337,7 @@ pub struct GlossarySourceMaterial {
     pub content_digest: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContentDigest>,
     #[prost(string, tag="5")]
     pub text: ::prost::alloc::string::String,
-    #[prost(enumeration="GlossaryEntryState", tag="6")]
+    #[prost(enumeration="GlossaryEvidenceState", tag="6")]
     pub state: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1511,6 +1511,38 @@ impl GlossaryEntryState {
             "GLOSSARY_ENTRY_STATE_SOURCE_CHANGED" => Some(Self::SourceChanged),
             "GLOSSARY_ENTRY_STATE_SOURCE_UNAVAILABLE" => Some(Self::SourceUnavailable),
             "GLOSSARY_ENTRY_STATE_REVIEW_DUE" => Some(Self::ReviewDue),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryEvidenceState {
+    Unspecified = 0,
+    Current = 1,
+    Changed = 2,
+    Unavailable = 3,
+}
+impl GlossaryEvidenceState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_EVIDENCE_STATE_UNSPECIFIED",
+            Self::Current => "GLOSSARY_EVIDENCE_STATE_CURRENT",
+            Self::Changed => "GLOSSARY_EVIDENCE_STATE_CHANGED",
+            Self::Unavailable => "GLOSSARY_EVIDENCE_STATE_UNAVAILABLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_EVIDENCE_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_EVIDENCE_STATE_CURRENT" => Some(Self::Current),
+            "GLOSSARY_EVIDENCE_STATE_CHANGED" => Some(Self::Changed),
+            "GLOSSARY_EVIDENCE_STATE_UNAVAILABLE" => Some(Self::Unavailable),
             _ => None,
         }
     }

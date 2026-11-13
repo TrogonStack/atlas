@@ -51,9 +51,16 @@ message ListGlossaryEntriesResponse {
   string snapshot_revision = 4;
 }
 
+enum GlossaryEvidenceState {
+  GLOSSARY_EVIDENCE_STATE_UNSPECIFIED = 0;
+  GLOSSARY_EVIDENCE_STATE_CURRENT = 1;
+  GLOSSARY_EVIDENCE_STATE_CHANGED = 2;
+  GLOSSARY_EVIDENCE_STATE_UNAVAILABLE = 3;
+}
+
 message GlossaryEvidenceResolution {
   uint32 evidence_index = 1;
-  GlossaryEntryState state = 2;
+  GlossaryEvidenceState state = 2;
   string reason = 3;
 }
 
@@ -79,7 +86,7 @@ message GlossarySourceMaterial {
   string etag = 3;
   trogonatlas.eventmodel.v1alpha1.ContentDigest content_digest = 4;
   string text = 5;
-  GlossaryEntryState state = 6;
+  GlossaryEvidenceState state = 6;
 }
 
 message InspectGlossarySourcesResponse {
