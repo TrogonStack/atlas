@@ -1351,6 +1351,85 @@ async fn an_empty_namespace_is_deleted_and_leaves_the_listing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn deleted_minted_namespace_cannot_be_adopted_with_its_history() {
+    let mut c = client().await;
+    let name = "deleted-minted-history";
+    let id = register(&mut c, name).await;
+    c.put_entity(authed(put_req(event(&id, "prior-record")), ACME_TOKEN))
+        .await
+        .unwrap();
+    delete_event(&mut c, &id, "prior-record").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+
+    let history = pb::GetEntityHistoryRequest {
+        r#ref: Some(key(&id, "prior-record")),
+        ..Default::default()
+    };
+    let retained = c
+        .get_entity_history(authed(history.clone(), ADMIN_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        !retained.revisions.is_empty(),
+        "deleting a namespace retains history"
+    );
+    assert_eq!(
+        c.get_entity_history(authed(history.clone(), BETA_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound,
+    );
+
+    for validate_only in [true, false] {
+        let mut request = put_req(event(&id, "new-record"));
+        request.validate_only = validate_only;
+        let err = c.put_entity(authed(request, BETA_TOKEN)).await.unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition, "{err:?}");
+    }
+    assert_eq!(
+        c.get_entity_history(authed(history, BETA_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound,
+    );
+    assert!(!namespaces_seen(&mut c, ADMIN_TOKEN)
+        .await
+        .iter()
+        .any(|(seen, _)| seen == &id));
+
+    let fresh = c
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: name.into(),
+                parent: "beta".into(),
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    assert_ne!(fresh, id);
+    let new_history = c
+        .get_entity_history(authed(
+            pb::GetEntityHistoryRequest {
+                r#ref: Some(key(&fresh, "prior-record")),
+                ..Default::default()
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(new_history.revisions.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_namespace_holding_an_entity_is_not_deleted() {
     let mut c = client().await;
     let id = register(&mut c, "acme-probe-held").await;

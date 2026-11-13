@@ -2464,6 +2464,11 @@ impl EventModelServiceImpl {
                 }
                 WriteVerdict::Unclaimed => {}
             }
+            if id.is_minted() {
+                return Err(Status::failed_precondition(format!(
+                    "namespace {namespace:?} is not registered; register a namespace to get a fresh id",
+                )));
+            }
             let name = NamespaceName::parse(namespace).map_err(|e| {
                 Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
             })?;
