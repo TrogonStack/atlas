@@ -1426,7 +1426,7 @@ async fn deleted_minted_namespace_cannot_be_adopted_with_its_history() {
         .await
         .unwrap()
         .into_inner();
-    assert!(new_history.revisions.is_empty());
+    assert_eq!(new_history.revisions, [] as [pb::EntityRevision; 0]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
