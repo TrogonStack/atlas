@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_nats::jetstream::{
     kv::Store as KvStore,
     message::PublishMessage,
-    stream::{DiscardPolicy, LastRawMessageErrorKind, RetentionPolicy, Stream},
+    stream::{DiscardPolicy, LastRawMessageErrorKind, RetentionPolicy, StorageType, Stream},
     Context,
 };
 use async_trait::async_trait;
@@ -68,7 +68,8 @@ impl NatsArtifactPublicationAuthority {
         .map_err(|_| unavailable())?
         .map_err(|_| unavailable())?;
         let config = &stream.cached_info().config;
-        if config.max_messages_per_subject != 1
+        if config.storage != StorageType::File
+            || config.max_messages_per_subject != 1
             || !config.max_age.is_zero()
             || config.retention != RetentionPolicy::Limits
             || (config.discard == DiscardPolicy::Old
@@ -87,7 +88,7 @@ impl NatsArtifactPublicationAuthority {
             || config.subjects != [format!("$KV.{}.>", self.bucket)]
         {
             return Err(StoreError::Unavailable(
-                "artifact publication stream must retain immutable receipts without expiry, eviction, sources or transforms".into(),
+                "artifact publication stream must use file-backed storage and retain immutable receipts without expiry, eviction, sources or transforms".into(),
             ));
         }
         Ok(stream)

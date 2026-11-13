@@ -1,0 +1,119 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.placed
+  namespace: acme-order-workflow
+spec:
+  doc: The shopper placed the order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Order placed
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: tax.calculated
+  namespace: acme-order-workflow
+spec:
+  doc: Tax for the order was calculated.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Tax calculated
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: payment.captured
+  namespace: acme-order-workflow
+spec:
+  doc: The payment for the order was captured.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Payment captured
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: payment.failed
+  namespace: acme-order-workflow
+spec:
+  doc: The payment for the order was declined.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Payment failed
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.shipped
+  namespace: acme-order-workflow
+spec:
+  doc: The order was handed to the carrier.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Order shipped
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.cancelled
+  namespace: acme-order-workflow
+spec:
+  doc: The order was cancelled after a failed step.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-order-workflow
+      slug: order
+      version: '1'
+  title: Order cancelled
