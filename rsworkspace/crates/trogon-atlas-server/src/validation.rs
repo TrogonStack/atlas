@@ -290,6 +290,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("MEMBER_NOT_FOUND", Error, "Member not found in store",
           "A member's (kind, id) does not resolve in the store; either the entity was deleted or the model is pointing at nothing.",
           Unspecified, "", "model"),
+        r("OPEN_QUESTION_DUE_INVALID", Warning, "Open question due date is not a calendar date",
+          "An OpenQuestionAnnotation carries a due date that is not a Gregorian YYYY-MM-DD date. The validator never compares the date to the clock, so it only checks the format.",
+          Unspecified, "metadata", "model"),
         r("OPEN_QUESTION_PRESENT", Info, "Entity carries an open question",
           "An entity or scenario carries an OpenQuestionAnnotation: an unanswered design question pinned to it. Informational; humans answer by editing the annotation or removing it once resolved.",
           Unspecified, "metadata", "model"),
@@ -314,6 +317,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("EVENT_MULTIPLE_EMITTERS", Error, "Event emitted by more than one command",
           "An event is emitted by more than one distinct command; the board cannot say which decision caused the fact. There is NO annotation escape: when a design fans in, fix it structurally (origin split merged by a read model, or a projection + detector automation firing one dedicated completion command); when an AS-IS mapping fans in, the error is the finding: it reports the mapped system's own causal ambiguity, and the fix belongs in that system's code, not in the model.",
           Event, "", "model"),
+        r("ENTITY_UNBACKED", Info, "Entity has no recorded backing",
+          "Reported only by GetBackingReport when the caller opts in. The entity has no accepted Decision, Document or complete code reference naming it exactly, and the view was complete enough to rule out hidden evidence. Presence is all it checks: a backed entity is not thereby correct.",
+          Unspecified, "", "backing"),
         r("CODE_REF_INCOMPLETE", Error, "CodeRefAnnotation missing repo or path",
           "A CodeRefAnnotation must carry a logical `repo` name and a repo-relative `path`; without both the reference cannot be resolved, verified for drift, or queried. Fill both (symbol recommended, line numbers never) or remove the annotation.",
           Unspecified, "metadata", "model"),
@@ -691,6 +697,7 @@ mod catalog_drift_tests {
         "BC_PROJECT_COLLISION",
         "BC_REALIZES_NOTHING",
         "CODE_REF_INCOMPLETE",
+        "ENTITY_UNBACKED",
         "COMMAND_FIELD_NEVER_RECORDED",
         "COMMAND_HAS_NO_TRIGGER",
         "COMMAND_MULTIPLE_ISSUERS",
@@ -712,6 +719,7 @@ mod catalog_drift_tests {
         "INVALID_KIND",
         "MEMBER_NOT_FOUND",
         "MISSING_ID",
+        "OPEN_QUESTION_DUE_INVALID",
         "OPEN_QUESTION_PRESENT",
         "ORPHAN_DOC_EMPTY",
         "ORPHAN_FLAG_OBSOLETE",
@@ -1007,13 +1015,42 @@ fn push_annotation_findings(
             if let Ok(a) =
                 <pb::OpenQuestionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
+                // Pure on purpose: no overdue check, so a bundle validates the
+                // same whenever it is checked.
+                let due = a
+                    .due
+                    .as_ref()
+                    .map(|d| d.value.as_str())
+                    .filter(|d| !d.is_empty());
+                let mut message = format!(
+                    "{label} has an open question ({}): {}",
+                    a.author, a.question
+                );
+                if !a.owner.is_empty() {
+                    message = format!("{message} [owner: {}]", a.owner);
+                }
+                if let Some(due) = due {
+                    message = format!("{message} [due: {due}]");
+                    if due
+                        .parse::<trogon_atlas_core::authored_date::AuthoredDate>()
+                        .is_err()
+                    {
+                        issues.push(pb::ValidationIssue {
+                            severity: pb::validation_issue::Severity::Warning as i32,
+                            code: "OPEN_QUESTION_DUE_INVALID".into(),
+                            message: format!(
+                                "{label} has an open question with due {due:?}: expected a Gregorian calendar date in YYYY-MM-DD format"
+                            ),
+                            subject: subject.cloned(),
+                            subject_field: subject_field.into(),
+                            ..Default::default()
+                        });
+                    }
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Info as i32,
                     code: "OPEN_QUESTION_PRESENT".into(),
-                    message: format!(
-                        "{label} has an open question ({}): {}",
-                        a.author, a.question
-                    ),
+                    message,
                     subject: subject.cloned(),
                     subject_field: subject_field.into(),
                     ..Default::default()
@@ -6554,11 +6591,7 @@ pub fn validate_model_content(
             if o.to_id.namespace != id.namespace {
                 let seam = o.from_field.starts_with("source_events[")
                     || o.from_field.starts_with("calls[")
-                    // Strategic mapping, not behavioral coupling: contexts
-                    // point at the problem space they realize (Decision #29)
-                    // and record the agreement behind each seam (Decision #30).
-                    || o.from_field.starts_with("realizes[")
-                    || o.from_field.starts_with("relationships[")
+                    || is_strategic_mapping_field(k, &o.from_field)
                     || o.from_field == "external_source.system"
                     // Automation slices are the wire that crosses contexts:
                     // a choreographer subscribes to an upstream event (via
@@ -6671,6 +6704,7 @@ pub fn validate_model_content(
                     let declared_seam = o.to_id.namespace != id.namespace
                         && (o.from_field.starts_with("source_events[")
                             || o.from_field.starts_with("calls[")
+                            || is_strategic_mapping_field(k, &o.from_field)
                             || o.from_field == "external_source.system"
                             || o.from_field == "emitted_command"
                             || o.from_field.starts_with("outcome.events[")
@@ -8483,6 +8517,15 @@ mod scenario_gap_tests {
     }
 }
 
+/// Strategic mapping, not behavioral coupling: contexts point at the problem
+/// space they realize (Decision #29) and record the agreement behind each seam
+/// (Decision #30). Shared by the boundary check and CROSS_MODEL_REF so the two
+/// seam lists cannot drift.
+fn is_strategic_mapping_field(kind: pb::EntityKind, from_field: &str) -> bool {
+    kind == pb::EntityKind::BoundedContext
+        && (from_field.starts_with("realizes[") || from_field.starts_with("relationships["))
+}
+
 #[cfg(test)]
 mod boundary_tests {
     use super::*;
@@ -8556,6 +8599,123 @@ mod boundary_tests {
             "{issues:?}"
         );
         assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0); // declared seam: legal, silent
+    }
+
+    fn assert_seam_is_silent(issues: &[pb::ValidationIssue]) {
+        assert_eq!(count(issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
+        assert_eq!(
+            count(issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    fn bc_with(ns: &str, f: impl FnOnce(&mut pb::BoundedContext)) -> pb::Entity {
+        let mut bc = pb::BoundedContext {
+            id: Some(id(ns, ns)),
+            title: ns.into(),
+            ..Default::default()
+        };
+        f(&mut bc);
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::BoundedContext(bc)),
+        }
+    }
+
+    fn model_with_bc(ns: &str) -> pb::EventModel {
+        pb::EventModel {
+            id: Some(id(ns, "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::BoundedContext, ns, ns)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn realizes_into_other_namespace_is_declared_seam() {
+        let bc = bc_with("acme-orders", |bc| {
+            bc.realizes = vec![pb::SubdomainRef {
+                id: Some(id("acme", "orders")),
+            }];
+        });
+        let subdomain = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Subdomain(pb::Subdomain {
+                id: Some(id("acme", "orders")),
+                title: "orders".into(),
+                ..Default::default()
+            })),
+        };
+        let issues = validate_model(
+            &model_with_bc("acme-orders"),
+            &[stored(bc), stored(subdomain)],
+        );
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn relationship_to_other_namespace_is_declared_seam() {
+        let down = bc_with("acme-billing", |bc| {
+            bc.relationships = vec![pb::bounded_context::ContextRelationship {
+                upstream: Some(pb::BoundedContextRef {
+                    id: Some(id("acme-orders", "acme-orders")),
+                }),
+                ..Default::default()
+            }];
+        });
+        let up = bc_with("acme-orders", |_| {});
+        let issues = validate_model(&model_with_bc("acme-billing"), &[stored(down), stored(up)]);
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn component_relationship_to_other_namespace_is_not_strategic_seam() {
+        let source_id = id("acme-orders", "order-service");
+        let target_id = id("acme-billing", "billing-service");
+        let source = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(source_id.clone()),
+                title: "order-service".into(),
+                relationships: vec![pb::ArchitecturalRelationship {
+                    target: Some(pb::ArchitecturalEndpoint {
+                        target: Some(pb::architectural_endpoint::Target::Component(
+                            pb::ComponentRef {
+                                id: Some(target_id.clone()),
+                            },
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let target = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(target_id),
+                title: "billing-service".into(),
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("acme-orders", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::Component,
+                "acme-orders",
+                "order-service",
+            )],
+            ..Default::default()
+        };
+        let issues = validate_model(&model, &[stored(source), stored(target)]);
+        assert_eq!(
+            count(&issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            1,
+            "{issues:?}"
+        );
+        assert_eq!(count(&issues, "CROSS_MODEL_REF"), 1, "{issues:?}");
     }
 
     #[test]
@@ -14402,18 +14562,21 @@ mod annotation_finding_tests {
         }
     }
 
-    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+    fn pack_open_question(ann: &pb::OpenQuestionAnnotation) -> prost_types::Any {
         use prost::Message;
-        let ann = pb::OpenQuestionAnnotation {
-            question: question.into(),
-            author: author.into(),
-            created_at: String::new(),
-        };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
                 .into(),
             value: ann.encode_to_vec(),
         }
+    }
+
+    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+        pack_open_question(&pb::OpenQuestionAnnotation {
+            question: question.into(),
+            author: author.into(),
+            ..Default::default()
+        })
     }
 
     fn assumption_any(statement: &str, author: &str) -> prost_types::Any {
@@ -14456,6 +14619,67 @@ mod annotation_finding_tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    fn open_question_with_owner_due(owner: &str, due: &str) -> prost_types::Any {
+        pack_open_question(&pb::OpenQuestionAnnotation {
+            question: "who refunds a split shipment?".into(),
+            author: "alex".into(),
+            owner: owner.into(),
+            due: Some(pb::CalendarDate { value: due.into() }),
+            ..Default::default()
+        })
+    }
+
+    fn open_question_issues(any: prost_types::Any) -> Vec<pb::ValidationIssue> {
+        let all = vec![stored(event_with_metadata("order.placed", vec![any]))];
+        validate_model(&model(&[(pb::EntityKind::Event, "order.placed")]), &all)
+    }
+
+    #[test]
+    fn open_question_owner_and_due_appear_in_message() {
+        let issues =
+            open_question_issues(open_question_with_owner_due("payments team", "2026-12-01"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(
+            hit.message
+                .ends_with("[owner: payments team] [due: 2026-12-01]"),
+            "{}",
+            hit.message
+        );
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
+    }
+
+    #[test]
+    fn open_question_without_owner_or_due_keeps_old_message() {
+        let issues = open_question_issues(open_question_any("why?", "alex"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(hit.message.ends_with("(alex): why?"), "{}", hit.message);
+    }
+
+    #[test]
+    fn open_question_malformed_due_warns() {
+        for bad in ["next week", "2026-02-30", "2026-1-5"] {
+            let issues = open_question_issues(open_question_with_owner_due("", bad));
+            let hit = issues
+                .iter()
+                .find(|i| i.code == "OPEN_QUESTION_DUE_INVALID")
+                .unwrap_or_else(|| panic!("{bad}: {issues:?}"));
+            assert_eq!(hit.severity, pb::validation_issue::Severity::Warning as i32);
+            assert!(issues.iter().any(|i| i.code == "OPEN_QUESTION_PRESENT"));
+        }
+    }
+
+    #[test]
+    fn open_question_empty_due_value_is_unset() {
+        let issues = open_question_issues(open_question_with_owner_due("", ""));
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
     }
 
     #[test]

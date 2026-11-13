@@ -23,6 +23,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/backing.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
@@ -958,6 +959,18 @@ message MoveNamespaceResponse {
   trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
 }
 
+message DeleteNamespaceRequest {
+  // Namespace id, not name, as for MoveNamespace. Refused with
+  // FAILED_PRECONDITION unless the namespace holds no entity on baseline and
+  // on every branch.
+  string id = 1;
+}
+
+message DeleteNamespaceResponse {
+  // The registry row that was removed.
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
 // ---------- Entity protection -------------------------------------------------
 //
 // Protecting an identity freezes it on every route: no new version, no edit,
@@ -1385,6 +1398,8 @@ service EventModelService {
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+  // Evidence presence across the visible model, bound to its snapshot id.
+  rpc GetBackingReport(GetBackingReportRequest) returns (GetBackingReportResponse);
 
   rpc GetDesignGraphDetail(GetDesignGraphDetailRequest) returns (GetDesignGraphDetailResponse);
   rpc ListSubjectDesignGraphs(ListSubjectDesignGraphsRequest) returns (ListSubjectDesignGraphsResponse);
@@ -1409,6 +1424,7 @@ service EventModelService {
   // an existing namespace without touching a single entity.
   rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
   rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
   // Entity protection. Setting and lifting are admin-only and baseline-only;
   // reading is open to any reader.
   rpc ProtectEntity(ProtectEntityRequest) returns (ProtectEntityResponse);

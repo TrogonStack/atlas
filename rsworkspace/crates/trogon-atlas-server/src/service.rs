@@ -7,6 +7,8 @@ mod term_domains;
 
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
+#[path = "backing_report.rs"]
+mod backing_report;
 #[path = "business_admission.rs"]
 mod business_admission;
 #[cfg(test)]
@@ -2325,6 +2327,60 @@ impl EventModelServiceImpl {
         ))
     }
 
+    /// Authorization runs before the mutation lock, so a row it saw can be
+    /// released while the write waits, and landing anyway leaves entities in
+    /// a namespace the next writer of any owner claims. A released legacy
+    /// name can also be adopted by another owner under the same id, so a
+    /// bound caller is asked again, under the lock, whether it may still
+    /// write there. Dry runs and principal-less writes never claim a row, so
+    /// they have none to lose.
+    async fn require_targets_still_registered(
+        &self,
+        principal: Option<&crate::auth::Principal>,
+        targets: &WriteTargets,
+        effect: WriteEffect,
+    ) -> Result<(), Status> {
+        let (Some(principal), WriteTargets::Known(namespaces), WriteEffect::Persist) =
+            (principal, targets, effect)
+        else {
+            return Ok(());
+        };
+        // Unbound callers are never denied on ownership, so only a bound
+        // one can lose its authorization to a change of owner.
+        let bound = principal
+            .parent
+            .clone()
+            .map(|owner| Visibility::owned_by(principal.name.clone(), owner));
+        for namespace in namespaces {
+            let id = NamespaceId::parse(namespace).map_err(|e| {
+                Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
+            })?;
+            if self
+                .store
+                .get_namespace(&id)
+                .await
+                .map_err(store_err)?
+                .is_none()
+            {
+                return Err(Status::failed_precondition(format!(
+                    "namespace {namespace:?} was removed while this write waited; retry the write",
+                )));
+            }
+            if let Some(vis) = &bound {
+                if !matches!(
+                    self.authorizer.may_write(vis, &id).await?,
+                    WriteVerdict::Allowed
+                ) {
+                    return Err(Status::failed_precondition(format!(
+                        "namespace {namespace:?} changed owner while this write waited; retry \
+                         the write",
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The namespace half of `authorize_write`, on its own. Used by
     /// `MergeBranch`, which lands on baseline by design and so must not
     /// consult baseline protection, but must still respect the caller's
@@ -2464,6 +2520,11 @@ impl EventModelServiceImpl {
                 }
                 WriteVerdict::Unclaimed => {}
             }
+            if id.is_minted() {
+                return Err(Status::failed_precondition(format!(
+                    "namespace {namespace:?} is not registered; register a namespace to get a fresh id",
+                )));
+            }
             let name = NamespaceName::parse(namespace).map_err(|e| {
                 Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
             })?;
@@ -2533,6 +2594,31 @@ impl EventModelServiceImpl {
             self.authorizer.on_released(&record).await?;
         }
         self.invalidate_directory().await;
+        Ok(())
+    }
+
+    /// Refuses unless `entities` holds nothing in `id`. A truncated view
+    /// cannot prove emptiness, so it refuses too.
+    fn refuse_unless_empty(
+        id: &NamespaceId,
+        entities: &[StoredEntity],
+        truncated: bool,
+        view: &str,
+    ) -> Result<(), Status> {
+        if truncated {
+            return Err(Status::failed_precondition(format!(
+                "cannot prove namespace {id} is empty: the {view} view was truncated",
+            )));
+        }
+        if entities
+            .iter()
+            .filter_map(|se| trogon_atlas_store::refs::entity_id(&se.entity))
+            .any(|e| e.namespace == id.as_str())
+        {
+            return Err(Status::failed_precondition(format!(
+                "namespace {id} still holds entities on {view}",
+            )));
+        }
         Ok(())
     }
 
@@ -4510,6 +4596,84 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }))
     }
 
+    async fn delete_namespace(
+        &self,
+        req: Request<pb::DeleteNamespaceRequest>,
+    ) -> Result<Response<pb::DeleteNamespaceResponse>, Status> {
+        let _guard = self.lock_mutations().await;
+        if !self.store.is_writer() {
+            let writer = self.store.writer_status();
+            return Err(store_err(trogon_atlas_store::StoreError::NotWriter {
+                role: writer.role,
+                epoch: writer.epoch,
+            }));
+        }
+        let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
+        let id = NamespaceId::parse(req.into_inner().id.trim())
+            .map_err(|e| Status::invalid_argument(format!("invalid namespace id: {e}")))?;
+        let not_registered = || Status::not_found(format!("namespace {id} is not registered"));
+        // Reads the registry, not the cached directory view, because this
+        // decides what to delete.
+        let record = self
+            .store
+            .get_namespace(&id)
+            .await
+            .map_err(store_err)?
+            .ok_or_else(not_registered)?;
+        // A caller bound to an owner may only delete inside its own subtree.
+        // Answers like a missing row, so the id of another tenant's
+        // namespace is not confirmed.
+        if vis.owner().is_some_and(|owner| owner != &record.parent)
+            || !self.lens(&vis).await?.admits(id.as_str())
+        {
+            return Err(not_registered());
+        }
+        if let Some(principal) =
+            principal.filter(|principal| !principal.namespaces.admits(id.as_str()))
+        {
+            return Err(Status::permission_denied(format!(
+                "principal {} may not write namespace {:?}; its scope is {}",
+                principal.name,
+                id.as_str(),
+                principal.namespaces,
+            )));
+        }
+        if record.id == NamespaceId::adopt_legacy(&record.name) {
+            return Err(Status::failed_precondition(format!(
+                "namespace {id} is a legacy namespace whose id is its name: entity history \
+                 is keyed by that name, so a later write under it would re-adopt the history \
+                 under another owner",
+            )));
+        }
+        // The caller's view is deliberately not used below: a namespace
+        // another owner filled is not empty because this caller cannot see it.
+        let baseline = self.attestation_baseline().await?;
+        Self::refuse_unless_empty(&id, &baseline.entities, baseline.truncated, "baseline")?;
+        for branch in self.store.list_branches().await.map_err(store_err)? {
+            let view = graph::load_all(&self.store, Some(&branch.name)).await?;
+            Self::refuse_unless_empty(&id, &view.entities, view.truncated, &branch.name)?;
+        }
+        if let Some(registration) =
+            source_integration::registration_naming(self, id.as_str()).await?
+        {
+            return Err(Status::failed_precondition(format!(
+                "source registration {registration} names namespace {id}: delete the \
+                 registration first, or a later source run could recreate the namespace",
+            )));
+        }
+        // Revoked before the row goes, because the row is what a retry finds:
+        // a failed revoke keeps it, and the retry revokes again. A failed
+        // delete after it leaves a row nobody holds a grant for, which fails
+        // closed.
+        self.authorizer.on_released(&record).await?;
+        let record = self.store.delete_namespace(&id).await.map_err(store_err)?;
+        self.invalidate_directory().await;
+        Ok(Response::new(pb::DeleteNamespaceResponse {
+            namespace: Some(namespace_record_to_proto(&record)),
+        }))
+    }
+
     async fn protect_entity(
         &self,
         req: Request<pb::ProtectEntityRequest>,
@@ -4766,6 +4930,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }),
             identity_version: trogon_atlas_core::SNAPSHOT_IDENTITY_VERSION,
         }))
+    }
+
+    async fn get_backing_report(
+        &self,
+        req: Request<pb::GetBackingReportRequest>,
+    ) -> Result<Response<pb::GetBackingReportResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.backing_report(req.into_inner(), branch, &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn list_subject_decisions(
@@ -7539,6 +7721,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
 
         let guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &WriteTargets::of(&id.namespace),
+            WriteEffect::of(req.validate_only),
+        )
+        .await?;
         let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
         let resumed = match (&protect_reason, EntityIdentity::of(kind, &id)) {
             (Some(_), Some(identity)) => self
@@ -8536,6 +8724,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
 
         let guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &targets,
+            WriteEffect::of(any_dry_run),
+        )
+        .await?;
         let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
         let resumed = self
             .protections_resumed_by(
@@ -9897,6 +10091,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        // Claimed before the lock, and nothing landed: release the claim so
+        // the retry this refusal asks for can take it.
+        if let Err(status) = self
+            .require_targets_still_registered(
+                principal.as_ref(),
+                &targets,
+                WriteEffect::of(req.dry_run),
+            )
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_not_applied(&*self.store, key).await;
+            }
+            return Err(status);
+        }
         // Protection can be lifted, so refusing on it is not a final answer
         // for this id: release the claim, as `DeleteEntity` does.
         if let Err(status) = self
@@ -11883,27 +12092,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
-        if matches!(
-            kind,
-            pb::EntityKind::SystemGroup
-                | pb::EntityKind::Channel
-                | pb::EntityKind::DataStore
-                | pb::EntityKind::Specification
-                | pb::EntityKind::DataProduct
-                | pb::EntityKind::Team
-                | pb::EntityKind::Person
-                | pb::EntityKind::Decision
-                | pb::EntityKind::Term
-                | pb::EntityKind::Document
-                | pb::EntityKind::DesignGraph
-        ) {
-            self.authorize_write(
-                principal.as_ref(),
-                Some(&req.name),
-                &WriteTargets::of(&id.namespace),
-            )
-            .await?;
-        }
+        self.authorize_write(
+            principal.as_ref(),
+            Some(&req.name),
+            &WriteTargets::of(&id.namespace),
+        )
+        .await?;
         let resolution = pb::resolve_branch_entry_request::Resolution::try_from(req.resolution)
             .map_err(|_| Status::invalid_argument("unknown resolution"))?;
         if matches!(
@@ -11920,6 +12114,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
 
         let _guard = self.lock_mutations().await;
+        self.require_targets_still_registered(
+            principal.as_ref(),
+            &WriteTargets::of(&id.namespace),
+            WriteEffect::Persist,
+        )
+        .await?;
         if !take_theirs {
             self.refuse_protected([(kind, &id)]).await?;
         }
