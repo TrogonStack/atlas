@@ -360,8 +360,20 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         area: ToolArea::Model,
     },
     ToolPolicy {
+        tool: "list_glossary_pointers",
+        rpcs: &["ListGlossaryPointers"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
         tool: "get_glossary_term",
         rpcs: &["GetGlossaryTerm"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_glossary_definition",
+        rpcs: &["GetGlossaryDefinition"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
@@ -386,6 +398,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
         tool: "check_glossary_usage",
         rpcs: &["CheckGlossaryUsage"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "check_glossary_code_usage",
+        rpcs: &["CheckGlossaryCodeUsage"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
@@ -3321,6 +3339,26 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Load lean published glossary pointers for selected contexts and audience: exact Term references, titles, audience and state, with cursor, incomplete flag and snapshot revision. Definitions and review metadata are omitted. includeUnreviewed is refused; follow exact references with get_glossary_definition only as needed.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_glossary_pointers(
+        &self,
+        Parameters(p): Parameters<GlossaryRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = crate::glossary::request("ListGlossaryEntriesRequest", &p)?;
+        crate::glossary::response(
+            trogon_atlas_client::glossary::list_glossary_pointers(&mut self.client(), request)
+                .await,
+        )
+    }
+
+    #[tool(
         description = "Read one exact glossary Term with definition, server review, source-resolution states, etag and owner incarnation. Unavailable or changed evidence is explicit; a stored citation does not prove meaning.",
         annotations(
             read_only_hint = true,
@@ -3336,6 +3374,26 @@ impl McpServer {
         let request = crate::glossary::request("GetGlossaryTermRequest", &p)?;
         crate::glossary::response(
             trogon_atlas_client::glossary::get_glossary_term(&mut self.client(), request).await,
+        )
+    }
+
+    #[tool(
+        description = "Read one exact glossary definition with policy, term use period, evidence-resolution flags and owner UID, etag and snapshot provenance. Omits Entity, source quotes, metadata and full review. This projection is read-only; use get_glossary_term for review or guarded authoring. Draft and unavailable-evidence states remain explicit.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_glossary_definition(
+        &self,
+        Parameters(p): Parameters<GlossaryRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = crate::glossary::request("GetGlossaryTermRequest", &p)?;
+        crate::glossary::response(
+            trogon_atlas_client::glossary::get_glossary_definition(&mut self.client(), request)
+                .await,
         )
     }
 
@@ -3417,6 +3475,26 @@ impl McpServer {
         let request = crate::glossary::request("CheckGlossaryUsageRequest", &p)?;
         crate::glossary::response(
             trogon_atlas_client::glossary::check_glossary_usage(&mut self.client(), request).await,
+        )
+    }
+
+    #[tool(
+        description = "Check revision-bound supplied code using identifier word segments, including snake_case, SCREAMING_SNAKE, camelCase and PascalCase. Preserve exact original UTF-8 byte ranges, date, exclusions and quoted-use handling. Selected policies and term use periods apply. Prose matching remains separate in check_glossary_usage; findings do not rename software.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn check_glossary_code_usage(
+        &self,
+        Parameters(p): Parameters<GlossaryRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = crate::glossary::request("CheckGlossaryUsageRequest", &p)?;
+        crate::glossary::response(
+            trogon_atlas_client::glossary::check_glossary_code_usage(&mut self.client(), request)
+                .await,
         )
     }
 

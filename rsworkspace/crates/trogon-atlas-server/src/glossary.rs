@@ -55,6 +55,22 @@ struct Entry {
     provenance: Vec<u8>,
 }
 
+struct Page {
+    entries: Vec<Entry>,
+    next_page_token: String,
+    revision: String,
+    incomplete: bool,
+}
+
+fn pointer(index: pb::GlossaryIndexEntry) -> pb::GlossaryPointer {
+    pb::GlossaryPointer {
+        term: index.term,
+        title: index.title,
+        audience: index.audience,
+        state: index.state,
+    }
+}
+
 struct Catalog {
     entries: Vec<Entry>,
     revision: String,
@@ -383,12 +399,12 @@ impl EventModelServiceImpl {
         })
     }
 
-    pub(super) async fn glossary_list(
+    async fn glossary_page(
         &self,
         request: pb::ListGlossaryEntriesRequest,
         branch: Option<&str>,
         visibility: &Visibility,
-    ) -> Result<pb::ListGlossaryEntriesResponse, Status> {
+    ) -> Result<Page, Status> {
         if request.page_size > 500 || request.page_token.len() > 128 {
             return Err(Status::invalid_argument("invalid glossary page"));
         }
@@ -426,30 +442,79 @@ impl EventModelServiceImpl {
             request.page_size as usize
         };
         let end = offset.saturating_add(size).min(catalog.entries.len());
+        let next_page_token = if end < catalog.entries.len() {
+            format!("{}:{end}", catalog.revision)
+        } else {
+            String::new()
+        };
+        Ok(Page {
+            entries: catalog
+                .entries
+                .into_iter()
+                .skip(offset)
+                .take(size)
+                .collect(),
+            next_page_token,
+            incomplete: catalog.incomplete,
+            revision: catalog.revision,
+        })
+    }
+
+    pub(super) async fn glossary_list(
+        &self,
+        request: pb::ListGlossaryEntriesRequest,
+        branch: Option<&str>,
+        visibility: &Visibility,
+    ) -> Result<pb::ListGlossaryEntriesResponse, Status> {
+        let page = self.glossary_page(request, branch, visibility).await?;
         bounded_output(
             "ListGlossaryEntriesResponse",
             pb::ListGlossaryEntriesResponse {
-                entries: catalog.entries[offset..end]
-                    .iter()
-                    .map(|entry| entry.index.clone())
-                    .collect(),
-                next_page_token: if end < catalog.entries.len() {
-                    format!("{}:{end}", catalog.revision)
-                } else {
-                    String::new()
-                },
-                incomplete: catalog.incomplete,
-                snapshot_revision: catalog.revision,
+                entries: page.entries.into_iter().map(|entry| entry.index).collect(),
+                next_page_token: page.next_page_token,
+                incomplete: page.incomplete,
+                snapshot_revision: page.revision,
             },
         )
     }
 
-    pub(super) async fn glossary_detail(
+    pub(super) async fn glossary_pointers(
+        &self,
+        request: pb::ListGlossaryEntriesRequest,
+        branch: Option<&str>,
+        visibility: &Visibility,
+    ) -> Result<pb::ListGlossaryPointersResponse, Status> {
+        if request
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.include_unreviewed)
+        {
+            return Err(Status::invalid_argument(
+                "glossary pointers require published selection",
+            ));
+        }
+        let page = self.glossary_page(request, branch, visibility).await?;
+        bounded_output(
+            "ListGlossaryPointersResponse",
+            pb::ListGlossaryPointersResponse {
+                entries: page
+                    .entries
+                    .into_iter()
+                    .map(|entry| pointer(entry.index))
+                    .collect(),
+                next_page_token: page.next_page_token,
+                incomplete: page.incomplete,
+                snapshot_revision: page.revision,
+            },
+        )
+    }
+
+    async fn glossary_read(
         &self,
         request: pb::GetGlossaryTermRequest,
         branch: Option<&str>,
         visibility: &Visibility,
-    ) -> Result<pb::GetGlossaryTermResponse, Status> {
+    ) -> Result<Entry, Status> {
         let id = exact(
             request
                 .term
@@ -459,15 +524,54 @@ impl EventModelServiceImpl {
         let row = self
             .glossary_row(pb::EntityKind::Term, id, branch, visibility)
             .await?;
-        let entry = self
-            .glossary_entry(row, branch, visibility, &mut Budget::default())
-            .await?;
+        self.glossary_entry(row, branch, visibility, &mut Budget::default())
+            .await
+    }
+
+    pub(super) async fn glossary_detail(
+        &self,
+        request: pb::GetGlossaryTermRequest,
+        branch: Option<&str>,
+        visibility: &Visibility,
+    ) -> Result<pb::GetGlossaryTermResponse, Status> {
+        let entry = self.glossary_read(request, branch, visibility).await?;
         bounded_output(
             "GetGlossaryTermResponse",
             pb::GetGlossaryTermResponse {
                 entity: Some(entry.stored.entity),
                 etag: entry.stored.etag,
                 entry: Some(entry.index),
+                evidence: entry.evidence,
+                incomplete: entry.incomplete,
+            },
+        )
+    }
+
+    pub(super) async fn glossary_definition(
+        &self,
+        request: pb::GetGlossaryTermRequest,
+        branch: Option<&str>,
+        visibility: &Visibility,
+    ) -> Result<pb::GetGlossaryDefinitionResponse, Status> {
+        let entry = self.glossary_read(request, branch, visibility).await?;
+        let term = term(&entry.stored.entity)
+            .ok_or_else(|| Status::internal("stored glossary kind is invalid"))?;
+        bounded_output(
+            "GetGlossaryDefinitionResponse",
+            pb::GetGlossaryDefinitionResponse {
+                owner_uid: uid(&entry.stored.entity).into(),
+                etag: entry.stored.etag.clone(),
+                snapshot_revision: hex(&entry.provenance),
+                definition: term.doc.clone(),
+                policy: term
+                    .glossary
+                    .as_ref()
+                    .and_then(|glossary| glossary.policy.clone()),
+                usage_period: term
+                    .glossary
+                    .as_ref()
+                    .and_then(|glossary| glossary.usage_period.clone()),
+                entry: Some(pointer(entry.index)),
                 evidence: entry.evidence,
                 incomplete: entry.incomplete,
             },
@@ -748,6 +852,7 @@ impl EventModelServiceImpl {
         request: pb::CheckGlossaryUsageRequest,
         branch: Option<&str>,
         visibility: &Visibility,
+        kind: core::UsageTextKind,
     ) -> Result<pb::CheckGlossaryUsageResponse, Status> {
         if request.text_revision.trim().is_empty() || request.text_revision.len() > 1024 {
             return Err(Status::invalid_argument("exact text_revision is required"));
@@ -798,7 +903,11 @@ impl EventModelServiceImpl {
             .collect();
         let mut findings = Vec::new();
         let mut incomplete = false;
-        for finding in core::check_usage(
+        let check = match kind {
+            core::UsageTextKind::Prose => core::check_usage,
+            core::UsageTextKind::Code => core::check_code_usage,
+        };
+        for finding in check(
             &terms,
             &audience,
             &at,

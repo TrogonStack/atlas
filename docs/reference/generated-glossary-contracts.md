@@ -1,7 +1,7 @@
 # Generated glossary contracts
 
 Status: implemented native profile, with agent procedures for extraction and
-maintenance. Contract revision and mutation compatibility floors are 25.
+maintenance. Contract revision and mutation compatibility floors are 26.
 [Delivery coverage](generated-glossary-gaps.md) maps the original gaps to the
 implementation; [acceptance](generated-glossary-acceptance.md) identifies the
 executable checks. Semantic definition quality remains subject to expert review.
@@ -13,8 +13,8 @@ keeps its namespace/slug/version identity, definition in doc, modeled embodied_b
 references and optional owning Domain. Its optional
 [GlossaryEntry](../../proto/trogonatlas/eventmodel/v1alpha1/glossary.proto)
 adds generation revision, audience, evidence, next review date, terminology
-policy and a server-owned review. Terms without this field remain legal;
-they are not implicitly generated or reviewed.
+policy, an optional permitted term-use period and a server-owned review. Terms
+without this field remain legal; they are not implicitly generated or reviewed.
 
 Generated entries require nonblank title and definition, explicit generation
 revision and audience, and bounded evidence. Each evidence item selects an exact
@@ -45,10 +45,10 @@ boundary.
 
 The candidate digest uses shared canonical content with glossary domain
 separation. It includes exact Term identity, definition, modeled references,
-metadata, owning Domain, source evidence, generation revision, audience and
-policy. Review and next-review date are excluded. Equivalent supported metadata
-encodings preserve the digest. Unrenderable metadata has no canonical review
-identity.
+metadata, owning Domain, source evidence, generation revision, audience, policy
+and permitted use period. Review and next-review date are excluded. Equivalent
+supported metadata encodings preserve the digest. Unrenderable metadata has no
+canonical review identity.
 
 ReviewGlossaryTerm requires an authenticated, nonanonymous User principal with
 ordinary write authority over the Term namespace. Agent credentials, directory
@@ -101,6 +101,17 @@ policies, review records and evidence by exact reference. Pagination binds
 caller visibility, branch, selection and the read revision; a changed query or
 read set invalidates its token.
 
+For agent bootstrap, ListGlossaryPointers returns only exact Term references,
+titles, audiences and states with the same paging, visibility and freshness
+boundaries. It refuses include_unreviewed. GetGlossaryDefinition then returns
+the selected definition, policy, permitted use period and evidence-resolution
+flags without the full Entity, metadata, supporting quotations or review body.
+Its owner UID, etag and snapshot revision bind the consumed meaning to the
+incarnation and read set. These projections are built before full-record JSON
+encoding limits and retain their own response quotas. Use GetGlossaryTerm for
+authoring and full evidence inspection; compact responses are not writable
+Entities.
+
 Publication and freshness are separate. An accepted definition remains selected
 when its evidence changes or disappears, with SOURCE_CHANGED or
 SOURCE_UNAVAILABLE and explicit incomplete status where appropriate. REVIEW_DUE
@@ -138,7 +149,10 @@ review authority or an apply receipt.
 Periodic review uses an externally scheduled agent and the declared review date.
 This profile installs no scheduler or remote provider connector. Acquisition is
 separate from interpreting supplied, authorized text. Agent context loading
-starts with a compact index and retrieves only needed exact definitions.
+starts with lean published pointers and retrieves only needed compact definitions.
+The procedure records both automated refresh and human review cadence, responsible
+participants and the next review date. Updating a schedule does not establish
+that human review occurred.
 
 ## Comparison and terminology policy
 
@@ -155,6 +169,14 @@ Invalid intervals, unknown enums, self-replacements and replacement cycles refus
 References join discovery, impact, guarded writes, branches, manifests and safe
 deletion.
 
+An independent usage_period declares when the term itself may be used, using
+the half-open interval [valid_from, valid_until). Either boundary may be absent;
+an empty declared period, invalid dates and non-increasing bounds refuse.
+Matching use outside that period is PROHIBITED even when no policy is present
+or the policy is ALLOWED or inactive. Inside the period, the existing policy
+applies normally. This period is reviewed meaning and cannot be changed on a
+currently accepted version. Absence leaves the term without this restriction.
+
 Policy applies to the selected published version; an inactive policy does not
 fall back to a historical version. The generic descriptive deprecated_on
 annotation retains its meaning. A date or label never renames a model entity or
@@ -165,11 +187,25 @@ text revision. It returns scoped word/phrase matches with exact Term references,
 UTF-8 byte ranges, rationale and optional preferred reference. Case folding
 preserves original byte spans. Explicit exclusions and quoted-text skipping are
 bounded; an unmatched quote refuses rather than hiding unchecked text.
+Prose matching normalizes whitespace within phrases. CheckGlossaryCodeUsage is
+a separate read operation that also recognizes identifier word boundaries in
+snake_case, camelCase, PascalCase and acronym names. It returns original UTF-8
+spans, including multiword identifier matches, under the same policy, date,
+exclusion and work limits. It performs lexical checking, not AST or semantic
+analysis. Older servers refuse the new RPC rather than silently using prose
+matching.
 The text revision is a caller-supplied label echoed in the result. Retain the
 checked bytes and their digest in the run record to bind that label to input;
 the checker does not resolve or verify an external repository revision.
 Stale or unavailable evidence produces an incomplete check instead of a clean
 verdict. Suggestions never apply a rename.
+
+Customer copy needs explicit reviewed customer-audience policy entries for
+internal terms that should not appear there. Rules are not inferred from a
+different namespace or audience, and checking an internal selection does not
+certify customer wording. The supplied customer-language-policy source and
+connected acceptance demonstrate Booking permitted internally and prohibited
+for customer copy, with Pickup slot as the exact customer replacement.
 
 ## Studio and authority
 
@@ -182,6 +218,9 @@ inspection rejects a substituted kind or version.
 The copy action communicates exact context and etag to an agent; it is not a
 mutation. People inspect and communicate, and agents use governed backend tools.
 Ownership, directory membership and cached views grant no additional permission.
+Comparison selects the right audience independently and can compare code and
+human vocabulary inside the same namespace. Term-use periods are displayed
+separately from rule activation and review dates.
 
 ## Bounds and failure behavior
 

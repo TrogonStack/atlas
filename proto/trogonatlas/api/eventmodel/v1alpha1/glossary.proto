@@ -51,6 +51,20 @@ message ListGlossaryEntriesResponse {
   string snapshot_revision = 4;
 }
 
+message GlossaryPointer {
+  trogonatlas.eventmodel.v1alpha1.TermRef term = 1;
+  string title = 2;
+  string audience = 3;
+  GlossaryEntryState state = 4;
+}
+
+message ListGlossaryPointersResponse {
+  repeated GlossaryPointer entries = 1;
+  string next_page_token = 2;
+  bool incomplete = 3;
+  string snapshot_revision = 4;
+}
+
 enum GlossaryEvidenceState {
   GLOSSARY_EVIDENCE_STATE_UNSPECIFIED = 0;
   GLOSSARY_EVIDENCE_STATE_CURRENT = 1;
@@ -74,6 +88,18 @@ message GetGlossaryTermResponse {
   GlossaryIndexEntry entry = 3;
   repeated GlossaryEvidenceResolution evidence = 4;
   bool incomplete = 5;
+}
+
+message GetGlossaryDefinitionResponse {
+  GlossaryPointer entry = 1;
+  string definition = 2;
+  trogonatlas.eventmodel.v1alpha1.GlossaryUsagePolicy policy = 3;
+  repeated GlossaryEvidenceResolution evidence = 4;
+  bool incomplete = 5;
+  trogonatlas.eventmodel.v1alpha1.GlossaryUsagePeriod usage_period = 6;
+  string owner_uid = 7;
+  string etag = 8;
+  string snapshot_revision = 9;
 }
 
 message InspectGlossarySourcesRequest {

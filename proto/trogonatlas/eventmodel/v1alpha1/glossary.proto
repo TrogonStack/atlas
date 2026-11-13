@@ -29,6 +29,11 @@ message GlossaryUsagePolicy {
   trogonatlas.type.v1alpha1.CalendarDate effective_until = 5;
 }
 
+message GlossaryUsagePeriod {
+  trogonatlas.type.v1alpha1.CalendarDate valid_from = 1;
+  trogonatlas.type.v1alpha1.CalendarDate valid_until = 2;
+}
+
 enum GlossaryReviewDisposition {
   GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED = 0;
   GLOSSARY_REVIEW_DISPOSITION_ACCEPTED = 1;
@@ -52,4 +57,5 @@ message GlossaryEntry {
   trogonatlas.type.v1alpha1.CalendarDate next_review_on = 4;
   GlossaryUsagePolicy policy = 5;
   GlossaryReview review = 6;
+  GlossaryUsagePeriod usage_period = 7;
 }

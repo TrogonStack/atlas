@@ -72,21 +72,28 @@ checks do not verify a credential holder's expertise.
 ## GG-05 Scoped compact retrieval
 
 **Implemented:** backend, CLI and MCP expose explicit namespace/audience selection,
-bounded compact indexes, exact definition retrieval and revision-bound paging.
+published-only lean term pointers, compact exact definitions, richer review
+indexes and revision-bound paging. Lean definitions omit full Entities,
+metadata, quotations and review bodies while retaining policy, permitted use
+period, source status and exact incarnation/read revisions.
 Default publication selects the highest currently accepted version per
 namespace/slug/audience family. A newer draft does not replace it. General MCP
 search exposes namespace filters and listing has opt-in latest-version selection.
 
 **Evidence:** connected tests cover audience families, restricted visibility,
-page-token scope and source/output budgets. The independent Reader run measured
-compact-index and selective-definition bytes and latency. Model-token cost is
-model dependent and is not inferred from byte counts.
+page-token scope, source/output budgets and smaller pointer/definition payloads
+than the inspection responses. Large evidence-bearing records remain available
+through lean projections without first encoding a full inspection response.
+The independent Reader run measured the earlier inspection index and selective
+full-entry bytes and latency. Model-token cost is model dependent and is not
+inferred from byte counts.
 
 ## GG-06 Agent context loading
 
-**Implemented:** agent bootstrap guidance starts with a scoped compact index and
-loads only relevant exact definitions, retaining ambiguity, publication and
-freshness warnings. It keeps organizational, code and customer meanings separate.
+**Implemented:** agent bootstrap guidance starts with scoped published term
+pointers and loads only relevant compact exact definitions, retaining ambiguity,
+publication and freshness warnings. It keeps organizational, code and customer
+meanings separate.
 
 **Evidence:** a separate Reader agent discovered the published index and fetched
 only the Parcel and readiness entries needed to explain the contextual meanings.
@@ -109,7 +116,9 @@ reapply, safe deletion and refusal before oversized review mutation.
 generation revision without writing. Source changes, availability and review-due
 state remain separate from publication. Run Documents retain attempt and input
 coverage independently. Agents apply corrections through guarded writes and
-schedule periodic review externally.
+schedule periodic review externally. The procedure records automated refresh
+and human review cadences and responsible participants independently; a
+scheduled run does not supply human approval.
 
 **Evidence:** connected tests detect a newly selected source version, preserve
 old publication, refuse review against changed evidence and prevent rebinding to
@@ -121,7 +130,9 @@ requires an explicit review disposition before deletion.
 **Implemented:** `compare_glossaries` returns bounded candidates for equal labels
 with different text, equal definitions with different labels and missing
 counterparts. Exact entries and evidence remain available for interpretation;
-the guide covers organizational/code and customer comparisons.
+the guide covers organizational/code and customer comparisons. Studio selects
+the audience on each side independently, including code and human vocabulary
+inside the same namespace.
 
 **Evidence:** core and connected tests plus the supplied-corpus run preserve
 contextual meanings. Lexical candidates do not establish semantic equivalence,
@@ -131,32 +142,42 @@ conflict or an Ambiguity ruling; agents and experts decide those explicitly.
 
 **Implemented:** native policy supports ALLOWED, DEPRECATED and PROHIBITED usage,
 exact preferred replacement, rationale, audience selection and optional half-open
-calendar intervals. References participate in authorization, impact, lifecycle,
-branches and manifests. Descriptive `deprecated_on` retains its existing meaning.
+policy activation intervals. A separate reviewed `usagePeriod` declares when
+the term itself may be used; use outside that period is prohibited even with
+an ALLOWED, inactive or absent rule. References participate in authorization,
+impact, lifecycle, branches and manifests. Descriptive `deprecated_on` retains
+its existing meaning.
 
-**Evidence:** tests cover intervals, unknown enums, self/cyclic replacements,
+**Evidence:** tests cover inclusive start/exclusive end, independent policy and
+term-use intervals, review binding, unknown enums, self/cyclic replacements,
 reference traversal and safe deletion. The supplied corpus proposes Consignment
-as unsuitable operational copy with Parcel as its exact replacement.
+as unsuitable operational copy with Parcel as its exact replacement. Retained
+customer-language policy and connected CLI acceptance preserve Booking internally
+while prohibiting it in customer copy with Pickup slot as the exact replacement.
 
 ## GG-11 Code and UI checks
 
 **Implemented:** `check_glossary_usage` checks an explicit text revision against
 published audience-scoped policies, returning exact Terms, UTF-8 byte spans,
 reasons and preferred replacements. Explicit exclusions and quoted-text skipping
-are bounded. The generation guide explains applying this to supplied code,
-documents and UI copy. Findings never perform a rename.
+are bounded. Prose phrases normalize whitespace. The separate
+`check_glossary_code_usage` also recognizes snake_case, camelCase, PascalCase
+and acronym boundaries. The generation guide applies the appropriate checker
+to supplied code, documents and UI copy. Findings never perform a rename.
 
-**Evidence:** core and connected tests cover phrase/case matching, UTF-8 ranges,
-audience boundaries, temporal policy, exclusions, incomplete evidence and work
-limits. Malformed quoted exclusions refuse rather than produce a clean result.
+**Evidence:** core and connected tests cover identifier/phrase/case matching,
+UTF-8 ranges, audience boundaries, temporal policy, exclusions, incomplete
+evidence and work limits. Malformed quoted exclusions refuse rather than produce a clean result.
 No generic linter runtime is required by this native checker.
 
 ## GG-12 Studio review
 
 **Implemented:** `/glossary` exposes read-only discovery, exact definitions,
 evidence, modeled usage, candidate comparison, review/freshness, refresh inspection
-and revision-bound correction handoff. Positive exact versions and kind checks
-prevent modeled-usage substitution. Navigation uses accessible controls.
+and revision-bound correction handoff. Comparison audiences are independent and
+permitted term-use dates are separate from rule activation. Positive exact
+versions and kind checks prevent modeled-usage substitution. Navigation uses
+accessible controls.
 
 **Evidence:** component/client/bridge tests and authenticated Chromium acceptance
 exercise the real Rust/NATS backend, production bridge and Studio. The bridge

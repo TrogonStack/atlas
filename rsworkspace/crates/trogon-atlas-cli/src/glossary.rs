@@ -11,8 +11,18 @@ pub enum GlossaryCmd {
         #[arg(long)]
         request: String,
     },
+    /// List lean published term pointers without definitions or review metadata.
+    Pointers {
+        #[arg(long)]
+        request: String,
+    },
     /// Read one exact glossary Term, its definition, review and source freshness.
     Get {
+        #[arg(long)]
+        request: String,
+    },
+    /// Read an exact definition, policy, use period and provenance without source quotes.
+    Definition {
         #[arg(long)]
         request: String,
     },
@@ -31,8 +41,13 @@ pub enum GlossaryCmd {
         #[arg(long)]
         request: String,
     },
-    /// Check supplied revision-bound text against scoped terminology policies.
+    /// Check supplied revision-bound prose against scoped terminology policies.
     Check {
+        #[arg(long)]
+        request: String,
+    },
+    /// Check code identifier segments against scoped policies and term use periods.
+    CheckCode {
         #[arg(long)]
         request: String,
     },
@@ -45,11 +60,14 @@ pub enum GlossaryCmd {
 
 pub enum PreparedGlossaryCommand {
     List(pb::ListGlossaryEntriesRequest),
+    Pointers(pb::ListGlossaryEntriesRequest),
     Get(pb::GetGlossaryTermRequest),
+    Definition(pb::GetGlossaryTermRequest),
     Sources(pb::InspectGlossarySourcesRequest),
     Review(pb::ReviewGlossaryTermRequest),
     Compare(pb::CompareGlossariesRequest),
     Check(pb::CheckGlossaryUsageRequest),
+    CheckCode(pb::CheckGlossaryUsageRequest),
     Refresh(pb::InspectGlossaryRefreshRequest),
 }
 
@@ -67,10 +85,16 @@ impl GlossaryCmd {
                 "ListGlossaryEntriesRequest",
                 &parse(&request)?,
             )?),
+            Self::Pointers { request } => PreparedGlossaryCommand::Pointers(
+                glossary::parse_request("ListGlossaryEntriesRequest", &parse(&request)?)?,
+            ),
             Self::Get { request } => PreparedGlossaryCommand::Get(glossary::parse_request(
                 "GetGlossaryTermRequest",
                 &parse(&request)?,
             )?),
+            Self::Definition { request } => PreparedGlossaryCommand::Definition(
+                glossary::parse_request("GetGlossaryTermRequest", &parse(&request)?)?,
+            ),
             Self::Sources { request } => PreparedGlossaryCommand::Sources(glossary::parse_request(
                 "InspectGlossarySourcesRequest",
                 &parse(&request)?,
@@ -87,6 +111,9 @@ impl GlossaryCmd {
                 "CheckGlossaryUsageRequest",
                 &parse(&request)?,
             )?),
+            Self::CheckCode { request } => PreparedGlossaryCommand::CheckCode(
+                glossary::parse_request("CheckGlossaryUsageRequest", &parse(&request)?)?,
+            ),
             Self::Refresh { request } => PreparedGlossaryCommand::Refresh(glossary::parse_request(
                 "InspectGlossaryRefreshRequest",
                 &parse(&request)?,
@@ -106,11 +133,14 @@ impl PreparedGlossaryCommand {
     pub async fn execute(self, client: &mut Client) -> Result<Value> {
         match self {
             Self::List(request) => glossary::list_glossary_entries(client, request).await,
+            Self::Pointers(request) => glossary::list_glossary_pointers(client, request).await,
             Self::Get(request) => glossary::get_glossary_term(client, request).await,
+            Self::Definition(request) => glossary::get_glossary_definition(client, request).await,
             Self::Sources(request) => glossary::inspect_glossary_sources(client, request).await,
             Self::Review(request) => glossary::review_glossary_term(client, request).await,
             Self::Compare(request) => glossary::compare_glossaries(client, request).await,
             Self::Check(request) => glossary::check_glossary_usage(client, request).await,
+            Self::CheckCode(request) => glossary::check_glossary_code_usage(client, request).await,
             Self::Refresh(request) => glossary::inspect_glossary_refresh(client, request).await,
         }
     }

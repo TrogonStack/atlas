@@ -3965,6 +3965,13 @@ pub struct GlossaryUsagePolicy {
     pub effective_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsagePeriod {
+    #[prost(message, optional, tag="1")]
+    pub valid_from: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="2")]
+    pub valid_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GlossaryReview {
     #[prost(enumeration="GlossaryReviewDisposition", tag="1")]
     pub disposition: i32,
@@ -3993,6 +4000,8 @@ pub struct GlossaryEntry {
     pub policy: ::core::option::Option<GlossaryUsagePolicy>,
     #[prost(message, optional, tag="6")]
     pub review: ::core::option::Option<GlossaryReview>,
+    #[prost(message, optional, tag="7")]
+    pub usage_period: ::core::option::Option<GlossaryUsagePeriod>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

@@ -121,14 +121,16 @@ export function GlossaryComparisonPanel({
   branch?: string;
 }) {
   const [other, setOther] = useState('');
-  const [submitted, setSubmitted] = useState('');
+  const [audience, setAudience] = useState('');
+  const audienceId = useId();
+  const [submitted, setSubmitted] = useState<{ namespace: string; audience: string }>();
   const right = useMemo<GlossarySelection>(
     () => ({
-      namespaces: [submitted],
-      ...(selection.audience ? { audience: selection.audience } : {}),
+      namespaces: submitted ? [submitted.namespace] : [],
+      ...(submitted?.audience ? { audience: submitted.audience } : {}),
       includeUnreviewed: selection.includeUnreviewed,
     }),
-    [submitted, selection.audience, selection.includeUnreviewed],
+    [submitted, selection.includeUnreviewed],
   );
   const load = useCallback(
     (signal: AbortSignal) => compareGlossaries({ left: selection, right }, { signal, branch }),
@@ -146,20 +148,35 @@ export function GlossaryComparisonPanel({
             value={other}
             onChange={(event) => {
               setOther(event.target.value);
-              setSubmitted('');
+              setSubmitted(undefined);
             }}
           >
-            <option value="">Choose another context</option>
-            {namespaces
-              .filter((namespace) => !selection.namespaces.includes(namespace))
-              .map((namespace) => (
-                <option key={namespace} value={namespace}>
-                  {labels[namespace] ?? namespace}
-                </option>
-              ))}
+            <option value="">Choose a context</option>
+            {namespaces.map((namespace) => (
+              <option key={namespace} value={namespace}>
+                {labels[namespace] ?? namespace}
+              </option>
+            ))}
           </select>
         </label>
-        <Button variant="outline" size="sm" disabled={!other} onClick={() => setSubmitted(other)}>
+        <label htmlFor={audienceId} className="flex min-w-48 flex-1 flex-col gap-2 text-xs">
+          Comparison audience
+          <Input
+            id={audienceId}
+            placeholder="Any audience"
+            value={audience}
+            onChange={(event) => {
+              setAudience(event.target.value);
+              setSubmitted(undefined);
+            }}
+          />
+        </label>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!other}
+          onClick={() => setSubmitted({ namespace: other, audience: audience.trim() })}
+        >
           Compare contexts
         </Button>
       </div>

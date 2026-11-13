@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   api,
@@ -242,6 +242,78 @@ describe('glossary review page', () => {
       },
       expect.anything(),
     );
+  });
+
+  it('compares independently selected audiences and clears a superseded comparison', async () => {
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Audience' }), { target: { value: 'internal' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Compare with context' }), { target: { value: 'shipping' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comparison audience' }), { target: { value: 'customer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare contexts' }));
+    expect(await screen.findByText('The contexts use order differently.')).toBeTruthy();
+    expect(compareGlossaries).toHaveBeenLastCalledWith(
+      {
+        left: { namespaces: ['sales'], audience: 'internal', includeUnreviewed: true },
+        right: { namespaces: ['shipping'], audience: 'customer', includeUnreviewed: true },
+      },
+      expect.anything(),
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comparison audience' }), { target: { value: 'code' } });
+    expect(screen.queryByText('The contexts use order differently.')).toBeNull();
+    expect(compareGlossaries).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Compare contexts' }));
+    await waitFor(() => expect(compareGlossaries).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(compareGlossaries).mock.calls[1][0].right).toEqual({
+      namespaces: ['shipping'],
+      audience: 'code',
+      includeUnreviewed: true,
+    });
+  });
+
+  it('compares code and human vocabulary inside the same bounded context', async () => {
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Audience' }), { target: { value: 'internal' } });
+    const target = screen.getByRole('combobox', { name: 'Compare with context' });
+    expect(within(target).getByRole('option', { name: 'Sales' })).toBeTruthy();
+    fireEvent.change(target, { target: { value: 'sales' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comparison audience' }), { target: { value: 'code' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Compare contexts' }));
+    await waitFor(() => expect(compareGlossaries).toHaveBeenCalled());
+    expect(vi.mocked(compareGlossaries).mock.calls[0][0]).toEqual({
+      left: { namespaces: ['sales'], audience: 'internal', includeUnreviewed: true },
+      right: { namespaces: ['sales'], audience: 'code', includeUnreviewed: true },
+    });
+  });
+
+  it('keeps the permitted term period distinct from terminology-rule activation dates', async () => {
+    vi.mocked(getGlossaryTerm).mockResolvedValue({
+      ...detail,
+      entity: {
+        ...detail.entity,
+        term: {
+          ...detail.entity.term,
+          glossary: {
+            ...detail.entity.term.glossary,
+            usagePeriod: { validFrom: { value: '2026-11-01' }, validUntil: { value: '2026-12-01' } },
+            policy: {
+              ...detail.entity.term.glossary.policy,
+              effectiveFrom: { value: '2026-11-15' },
+              effectiveUntil: { value: '2026-11-20' },
+            },
+          },
+        },
+      },
+    });
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    const period = await screen.findByRole('region', { name: 'Permitted term use' });
+    expect(period.textContent).toContain('2026-11-01');
+    expect(period.textContent).toContain('2026-12-01');
+    expect(period.textContent).toContain('end excluded');
+    expect(screen.getByText('Effective from 2026-11-15 until 2026-11-20 (end excluded).')).toBeTruthy();
   });
 
   it('reopens an exact large-version deep link in the active branch', async () => {

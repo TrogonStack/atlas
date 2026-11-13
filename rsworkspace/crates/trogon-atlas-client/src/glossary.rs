@@ -27,6 +27,18 @@ pub async fn list_glossary_entries(
     response("ListGlossaryEntriesResponse", &value)
 }
 
+pub async fn list_glossary_pointers(
+    client: &mut Client,
+    request: pb::ListGlossaryEntriesRequest,
+) -> Result<Value> {
+    let value = client
+        .list_glossary_pointers(request)
+        .await
+        .context("ListGlossaryPointers failed")?
+        .into_inner();
+    response("ListGlossaryPointersResponse", &value)
+}
+
 pub async fn get_glossary_term(
     client: &mut Client,
     request: pb::GetGlossaryTermRequest,
@@ -37,6 +49,18 @@ pub async fn get_glossary_term(
         .context("GetGlossaryTerm failed")?
         .into_inner();
     response("GetGlossaryTermResponse", &value)
+}
+
+pub async fn get_glossary_definition(
+    client: &mut Client,
+    request: pb::GetGlossaryTermRequest,
+) -> Result<Value> {
+    let value = client
+        .get_glossary_definition(request)
+        .await
+        .context("GetGlossaryDefinition failed")?
+        .into_inner();
+    response("GetGlossaryDefinitionResponse", &value)
 }
 
 pub async fn inspect_glossary_sources(
@@ -83,6 +107,18 @@ pub async fn check_glossary_usage(
         .check_glossary_usage(request)
         .await
         .context("CheckGlossaryUsage failed")?
+        .into_inner();
+    response("CheckGlossaryUsageResponse", &value)
+}
+
+pub async fn check_glossary_code_usage(
+    client: &mut Client,
+    request: pb::CheckGlossaryUsageRequest,
+) -> Result<Value> {
+    let value = client
+        .check_glossary_code_usage(request)
+        .await
+        .context("CheckGlossaryCodeUsage failed")?
         .into_inner();
     response("CheckGlossaryUsageResponse", &value)
 }

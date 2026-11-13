@@ -354,6 +354,19 @@ async fn glossary_native_fixture() {
     )
     .await;
     let candidate = candidate(&mut client, 1).await;
+    let mut with_period = candidate.entity.clone().unwrap();
+    let Some(pb::entity::Kind::Term(term)) = &mut with_period.kind else {
+        panic!("fixture term");
+    };
+    term.glossary.as_mut().unwrap().usage_period = Some(pb::GlossaryUsagePeriod {
+        valid_from: Some(pb::CalendarDate {
+            value: "2026-11-01".into(),
+        }),
+        valid_until: Some(pb::CalendarDate {
+            value: "2026-12-01".into(),
+        }),
+    });
+    let candidate = put(&mut client, with_period, &candidate.etag).await;
     let published = client
         .review_glossary_term(request(
             pb::ReviewGlossaryTermRequest {

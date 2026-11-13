@@ -4882,6 +4882,47 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map(Response::new)
     }
 
+    async fn list_glossary_pointers(
+        &self,
+        req: Request<pb::ListGlossaryEntriesRequest>,
+    ) -> Result<Response<pb::ListGlossaryPointersResponse>, Status> {
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_pointers(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn get_glossary_definition(
+        &self,
+        req: Request<pb::GetGlossaryTermRequest>,
+    ) -> Result<Response<pb::GetGlossaryDefinitionResponse>, Status> {
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_definition(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn check_glossary_code_usage(
+        &self,
+        req: Request<pb::CheckGlossaryUsageRequest>,
+    ) -> Result<Response<pb::CheckGlossaryUsageResponse>, Status> {
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_check(
+            input,
+            branch.as_deref(),
+            &vis,
+            trogon_atlas_core::glossary::UsageTextKind::Code,
+        )
+        .await
+        .map(Response::new)
+    }
+
     async fn list_glossary_entries(
         &self,
         req: Request<pb::ListGlossaryEntriesRequest>,
@@ -4944,9 +4985,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (vis, branch) = self.glossary_context(&req).await?;
         let input = req.into_inner();
         let _guard = self.lock_mutations().await;
-        self.glossary_check(input, branch.as_deref(), &vis)
-            .await
-            .map(Response::new)
+        self.glossary_check(
+            input,
+            branch.as_deref(),
+            &vis,
+            trogon_atlas_core::glossary::UsageTextKind::Prose,
+        )
+        .await
+        .map(Response::new)
     }
 
     async fn inspect_glossary_refresh(

@@ -1384,6 +1384,9 @@ service EventModelService {
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
+  rpc ListGlossaryPointers(ListGlossaryEntriesRequest) returns (ListGlossaryPointersResponse);
+  rpc GetGlossaryDefinition(GetGlossaryTermRequest) returns (GetGlossaryDefinitionResponse);
+  rpc CheckGlossaryCodeUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
   rpc ListGlossaryEntries(ListGlossaryEntriesRequest) returns (ListGlossaryEntriesResponse);
   rpc GetGlossaryTerm(GetGlossaryTermRequest) returns (GetGlossaryTermResponse);
   rpc InspectGlossarySources(InspectGlossarySourcesRequest) returns (InspectGlossarySourcesResponse);

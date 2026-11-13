@@ -145,6 +145,39 @@ fn validate_policy(policy: &pb::GlossaryUsagePolicy) -> Result<()> {
     )
 }
 
+fn validate_usage_period(period: &pb::GlossaryUsagePeriod) -> Result<()> {
+    require(
+        period.valid_from.is_some() || period.valid_until.is_some(),
+        "usage_period.empty",
+    )?;
+    let from = calendar(period.valid_from.as_ref(), "usage_period.valid_from")?;
+    let until = calendar(period.valid_until.as_ref(), "usage_period.valid_until")?;
+    require(
+        !matches!((from, until), (Some(from), Some(until)) if from >= until),
+        "usage_period.interval",
+    )
+}
+
+fn usage_period_reason(
+    period: &pb::GlossaryUsagePeriod,
+    at: &AuthoredDate,
+) -> Result<Option<String>> {
+    validate_usage_period(period)?;
+    if let Some(from) = calendar(period.valid_from.as_ref(), "usage_period.valid_from")? {
+        if at < &from {
+            return Ok(Some(format!("Term is not valid for use before {from}.")));
+        }
+    }
+    if let Some(until) = calendar(period.valid_until.as_ref(), "usage_period.valid_until")? {
+        if at >= &until {
+            return Ok(Some(format!(
+                "Term is no longer valid for use on or after {until}."
+            )));
+        }
+    }
+    Ok(None)
+}
+
 fn validate_review(review: &pb::GlossaryReview) -> Result<()> {
     require(
         matches!(
@@ -201,6 +234,9 @@ pub fn validate_term(term: &pb::Term) -> Result<()> {
         require(seen.insert(evidence.encode_to_vec()), "evidence.duplicate")?;
     }
     calendar(glossary.next_review_on.as_ref(), "next_review_on")?;
+    if let Some(period) = &glossary.usage_period {
+        validate_usage_period(period)?;
+    }
     if let Some(policy) = &glossary.policy {
         validate_policy(policy)?;
         require(
@@ -323,6 +359,31 @@ pub fn policy_active(policy: &pb::GlossaryUsagePolicy, at: &AuthoredDate) -> Res
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageTextKind {
+    Prose,
+    Code,
+}
+
+pub fn check_code_usage(
+    terms: &[pb::Term],
+    audience: &str,
+    at: &AuthoredDate,
+    text: &str,
+    exclusions: &[TextRange],
+    skip_quoted: bool,
+) -> Result<Vec<UsageFinding>> {
+    check_usage_in(
+        terms,
+        audience,
+        at,
+        text,
+        exclusions,
+        skip_quoted,
+        UsageTextKind::Code,
+    )
+}
+
 pub fn check_usage(
     terms: &[pb::Term],
     audience: &str,
@@ -330,6 +391,26 @@ pub fn check_usage(
     text: &str,
     exclusions: &[TextRange],
     skip_quoted: bool,
+) -> Result<Vec<UsageFinding>> {
+    check_usage_in(
+        terms,
+        audience,
+        at,
+        text,
+        exclusions,
+        skip_quoted,
+        UsageTextKind::Prose,
+    )
+}
+
+fn check_usage_in(
+    terms: &[pb::Term],
+    audience: &str,
+    at: &AuthoredDate,
+    text: &str,
+    exclusions: &[TextRange],
+    skip_quoted: bool,
+    kind: UsageTextKind,
 ) -> Result<Vec<UsageFinding>> {
     require(
         terms.len() <= MAX_TERMS
@@ -364,28 +445,52 @@ pub fn check_usage(
             excluded.push(range);
         }
     }
-    let (folded, mapping) = folded_with_offsets(text);
+    let (folded, mapping) = folded_with_offsets(text, kind);
     let mut findings = Vec::new();
     for term in terms {
         validate_term(term)?;
         let Some(entry) = &term.glossary else {
             continue;
         };
-        let Some(policy) = &entry.policy else {
-            continue;
-        };
-        if entry.audience != audience
-            || policy.usage == pb::GlossaryUsage::Allowed as i32
-            || !policy_active(policy, at)?
-        {
+        if entry.audience != audience {
             continue;
         }
-        let pattern = term.title.trim().to_lowercase();
-        for (start, matched) in folded.match_indices(&pattern) {
+        let period_reason = entry
+            .usage_period
+            .as_ref()
+            .map(|period| usage_period_reason(period, at))
+            .transpose()?
+            .flatten();
+        let (usage, preferred_term, rationale) = if let Some(reason) = period_reason {
+            (
+                pb::GlossaryUsage::Prohibited,
+                entry
+                    .policy
+                    .as_ref()
+                    .and_then(|policy| policy.preferred_term.clone()),
+                reason,
+            )
+        } else {
+            let Some(policy) = &entry.policy else {
+                continue;
+            };
+            if policy.usage == pb::GlossaryUsage::Allowed as i32 || !policy_active(policy, at)? {
+                continue;
+            }
+            (
+                pb::GlossaryUsage::try_from(policy.usage)
+                    .map_err(|_| GlossaryError("policy.usage".into()))?,
+                policy.preferred_term.clone(),
+                policy.rationale.clone(),
+            )
+        };
+        let (pattern, _) = folded_with_offsets(term.title.trim(), kind);
+        let pattern = pattern.trim();
+        for (start, matched) in folded.match_indices(pattern) {
             let end = start + matched.len();
             if start == end
-                || (start > 0 && mapping[start - 1].start == mapping[start].start)
-                || (end < mapping.len() && mapping[end - 1].start == mapping[end].start)
+                || (start > 0 && mapping[start - 1] == mapping[start])
+                || (end < mapping.len() && mapping[end - 1] == mapping[end])
             {
                 continue;
             }
@@ -393,8 +498,8 @@ pub fn check_usage(
                 start: mapping[start].start,
                 end: mapping[end - 1].end,
             };
-            if !word_boundary(text[..range.start].chars().next_back())
-                || !word_boundary(text[range.end..].chars().next())
+            if !word_boundary(folded[..start].chars().next_back())
+                || !word_boundary(folded[end..].chars().next())
                 || excluded
                     .get(excluded.partition_point(|ignored| ignored.end <= range.start))
                     .is_some_and(|ignored| ignored.start < range.end)
@@ -408,10 +513,9 @@ pub fn check_usage(
                 },
                 range,
                 matched: text[range.start..range.end].to_owned(),
-                usage: pb::GlossaryUsage::try_from(policy.usage)
-                    .map_err(|_| GlossaryError("policy.usage".into()))?,
-                preferred_term: policy.preferred_term.clone(),
-                rationale: policy.rationale.clone(),
+                usage,
+                preferred_term: preferred_term.clone(),
+                rationale: rationale.clone(),
             });
         }
     }
@@ -546,20 +650,50 @@ fn word_boundary(value: Option<char>) -> bool {
     !value.is_some_and(|value| value.is_alphanumeric() || value == '_')
 }
 
-fn folded_with_offsets(value: &str) -> (String, Vec<TextRange>) {
+fn folded_with_offsets(value: &str, kind: UsageTextKind) -> (String, Vec<TextRange>) {
+    let characters: Vec<_> = value.char_indices().collect();
     let mut folded = String::new();
-    let mut mapping = Vec::new();
-    for (start, value) in value.char_indices() {
+    let mut mapping: Vec<TextRange> = Vec::new();
+    for (index, &(start, character)) in characters.iter().enumerate() {
         let range = TextRange {
             start,
-            end: start + value.len_utf8(),
+            end: start + character.len_utf8(),
         };
-        for value in value.to_lowercase() {
-            folded.push(value);
-            mapping.extend(std::iter::repeat_n(range, value.len_utf8()));
+        if character.is_whitespace() || (kind == UsageTextKind::Code && character == '_') {
+            separator(&mut folded, &mut mapping, range);
+            continue;
+        }
+        if kind == UsageTextKind::Code && character.is_uppercase() {
+            let previous = index
+                .checked_sub(1)
+                .and_then(|index| characters.get(index))
+                .map(|(_, character)| *character);
+            let next = characters.get(index + 1).map(|(_, character)| *character);
+            if previous.is_some_and(|previous| {
+                previous.is_lowercase()
+                    || previous.is_numeric()
+                    || (previous.is_uppercase() && next.is_some_and(char::is_lowercase))
+            }) {
+                separator(&mut folded, &mut mapping, TextRange { start, end: start });
+            }
+        }
+        for character in character.to_lowercase() {
+            folded.push(character);
+            mapping.extend(std::iter::repeat_n(range, character.len_utf8()));
         }
     }
     (folded, mapping)
+}
+
+fn separator(folded: &mut String, mapping: &mut Vec<TextRange>, range: TextRange) {
+    if folded.ends_with(' ') {
+        if let Some(previous) = mapping.last_mut() {
+            previous.end = range.end;
+        }
+    } else {
+        folded.push(' ');
+        mapping.push(range);
+    }
 }
 
 fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {

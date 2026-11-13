@@ -24,8 +24,9 @@ without putting their values in commands, files or receipts.
 Retain the selected material as Documents under the [existing content contract](../reference/decision-and-document-contracts.md).
 Prefer a new exact Document version for changed material so historical input
 stays addressable. Record logical repository/path/symbol references for code
-where useful. Remote document, email and chat acquisition is separate from this
-procedure; supplied snapshots are sufficient.
+where useful. Supplied document, email, chat and audio/video transcript text use
+this retained UTF-8 boundary. Remote acquisition and transcription are upstream
+steps; supplied snapshots are sufficient for this procedure.
 
 For a controlled starting corpus, apply the [shipping source manifests](../../examples/manifests/generated-glossary/sources.yaml):
 
@@ -70,9 +71,9 @@ not establish that the input contains no terminology.
 Fetch the `generate-glossary` MCP prompt, or give the authoring agent the exact
 sources and these instructions:
 
-- Identify individual words, recurring phrases and familiar words with a
-  specialized meaning. Explain their meaning in the selected context using
-  concise dictionary-style definitions.
+- Identify unfamiliar words, recurring multiword phrases and familiar words
+  used with specialized or unexpected meanings. Explain their meaning in the
+  selected context using precise, concise dictionary-style definitions.
 - Copy a supporting passage exactly and retain its returned source identity,
   owner incarnation and digest. State a useful locator. Quotes and locators are
   evidence to inspect, not proof that the proposed meaning is correct.
@@ -199,10 +200,28 @@ removing guards or replaying an old manifest over expert edits.
 
 ## Load vocabulary in an agent session
 
-Use `list_glossary_entries` with explicit context namespaces and audience and
-without `includeUnreviewed` for normal agent consumption. The compact index
-contains titles, exact Term references and status, without every definition.
-Follow its exact references with `get_glossary_term` only when needed.
+Use `list_glossary_pointers` or `glossary pointers` with explicit context
+namespaces and audience for normal agent consumption. This published-only view
+contains titles, exact Term references, audiences and status. Follow its exact
+references with `get_glossary_definition` or `glossary definition` when needed:
+
+```sh
+trogon-atlas glossary pointers --request '{
+  "selection": {"namespaces": ["glossary-fulfillment"], "audience": "internal"}
+}'
+trogon-atlas glossary definition --request '{
+  "term": {"id": {
+    "namespace": "glossary-fulfillment", "slug": "parcel", "version": "1"
+  }}
+}'
+```
+
+The definition projection retains policy, permitted use period, evidence states
+and exact incarnation/read revisions while omitting supporting quotations,
+metadata and full review records. Keep its owner UID, etag and snapshot revision
+in the task receipt. Use `get_glossary_term` or `glossary get` for full evidence
+and before authoring; a compact definition is not a writable Entity. The richer
+`list_glossary_entries` remains useful for candidate review and inspection.
 
 Missing, stale or ambiguous entries should become explicit questions. Never
 silently use another context's definition. A request that is incomplete, denied
@@ -218,6 +237,8 @@ definitions under different titles are candidates for expert interpretation.
 These deterministic comparisons do not prove semantic equivalence. Preserve
 intentional differences; create an Ambiguity only after a real HOMONYM/SYNONYM
 ruling and its DELIBERATE/RENAME/MERGE decision are known.
+In Studio, select the comparison audience independently. The same namespace can
+be selected on both sides to compare its code and human vocabulary.
 
 Use a context and audience-specific usage policy for deprecated or prohibited
 terms. An optional `preferredTerm` is an exact reference. `effectiveFrom` and
@@ -225,6 +246,26 @@ terms. An optional `preferredTerm` is an exact reference. `effectiveFrom` and
 start and excluding its end. An absent endpoint is unbounded on that side.
 The explicit `on` date makes evaluation reproducible; a descriptive lifecycle
 `deprecated_on` date does not activate a policy or rename software.
+
+When the source also declares when the term itself may be used, retain that
+separately as `glossary.usagePeriod`:
+
+```json
+{
+  "usagePeriod": {
+    "validFrom": {"value": "2026-11-01"},
+    "validUntil": {"value": "2026-12-01"}
+  }
+}
+```
+
+Use is permitted by this period from its start through the day before its end.
+An omitted endpoint is unbounded. Matching use outside the period is reported
+as prohibited, including for an ALLOWED or absent rule. Inside the period,
+ordinary policy applies. This declaration is part of reviewed meaning, so a
+currently accepted version needs a new candidate version for a changed period.
+Evaluation uses the selected published version and the requested date; it does
+not reconstruct historical publication or fall back to an older version.
 
 ```sh
 trogon-atlas glossary check --request '{
@@ -241,6 +282,23 @@ matched text and UTF-8 byte range, selected policy and proposed replacement. Sup
 explicit exclusion ranges for reviewed historical or otherwise allowed uses;
 review ambiguous matches instead of renaming code merely to clear a finding.
 Agent generation should consult these policies before proposing names or copy.
+
+For identifiers and source code, use `glossary check-code` or
+`check_glossary_code_usage` with the same request shape. Identifier checking
+recognizes snake_case, camelCase, PascalCase and acronym word boundaries, so
+terms remain recognizable inside names such as `consignment_id` and
+`ConsignmentPanel`. Multiword phrases and ordinary prose normalize whitespace.
+Findings still point into the original UTF-8 bytes. This is lexical inspection;
+review findings in their code context before changing behavior.
+
+Choose the audience of the output being generated. Internal code and
+customer-visible copy can need different selections even in the same product.
+The supplied `customer-language-policy` Document explicitly retains Booking as
+an internal label and directs customer copy to use Pickup slot. Extract the
+customer Pickup slot definition and a customer Booking entry with PROHIBITED
+policy and exact preferred reference, then obtain their review. The internal
+Booking entry remains ALLOWED. A prohibition in one audience is not inherited
+by another, and a successful internal check does not certify customer copy.
 
 ## Refresh and retain run evidence
 
@@ -271,6 +329,15 @@ it again still requires valid targets. To retire a whole vocabulary family,
 inspect every accepted version and audience: an older accepted version can
 otherwise become the default catalog selection. Failed or partial runs preserve
 prior publication.
+
+Record the automated refresh cadence, human review cadence and responsible
+participants with the selected input inventory. Configure the external task to
+invoke this procedure for those pinned contexts and source selections. Automated
+refresh can run more frequently than human review. When a review is due, present
+changes and unresolved meanings for an actual decision; a successful scheduled
+run does not supply human approval. After review, update `nextReviewOn` through a
+guarded exact-entry write according to the agreed cadence. Scheduling changes
+preserve meaning review but do not establish a new review event.
 
 For retirement on a branch, land the negative review before a separate guarded
 deletion. A deleted branch head alone does not carry that review decision into

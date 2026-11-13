@@ -97,3 +97,19 @@ spec:
           parcel.payment_accepted && parcel.packing_complete
       }
     digest: {sha256: 0789bd0c472869badce9462a5753ca7c0aad1007ec69aaa8858fdb75bd6ee6dc}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Document
+metadata: {namespace: glossary-customer, name: customer-language-policy}
+spec:
+  title: {value: Customer language policy snapshot}
+  subjects:
+    - subject:
+        entity:
+          kind: ENTITY_KIND_BOUNDED_CONTEXT
+          id: {namespace: glossary-customer, slug: glossary-customer, version: '1'}
+  retained:
+    mediaType: {value: text/plain}
+    content: |
+      Booking is an internal label for a reserved carrier handoff slot. Customer-facing copy must not use Booking and should use Pickup slot instead. A pickup slot is the scheduled time window when a customer can hand a package to a carrier.
+    digest: {sha256: 07dbf598735aecb830b99454dc274b142688e3efc9c01fbd05a9f9c8933101e2}

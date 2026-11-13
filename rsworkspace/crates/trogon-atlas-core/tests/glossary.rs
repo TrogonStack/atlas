@@ -506,3 +506,170 @@ fn unrenderable_metadata_has_no_glossary_review_identity() {
     });
     assert!(glossary::candidate_digest(&candidate).is_err());
 }
+
+#[test]
+fn prose_phrase_matching_normalizes_whitespace_without_matching_identifiers() {
+    let mut term = term();
+    term.title = "Ready to ship".into();
+    term.glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+        usage: pb::GlossaryUsage::Prohibited as i32,
+        rationale: "Use awaiting carrier handoff in this audience.".into(),
+        ..Default::default()
+    });
+    let text = "é Ready  to\nship; ready_to_ship readyToShip already to ship";
+    let findings =
+        glossary::check_usage(&[term], "customer", &date("2026-11-13"), text, &[], false).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].matched, "Ready  to\nship");
+    assert_eq!(
+        &text[findings[0].range.start()..findings[0].range.end()],
+        "Ready  to\nship"
+    );
+}
+
+#[test]
+fn usage_period_enforces_own_half_open_window_with_allowed_or_absent_policy() {
+    for policy in [
+        None,
+        Some(pb::GlossaryUsagePolicy {
+            usage: pb::GlossaryUsage::Allowed as i32,
+            ..Default::default()
+        }),
+    ] {
+        let mut term = term();
+        let entry = term.glossary.as_mut().unwrap();
+        entry.policy = policy;
+        entry.usage_period = Some(pb::GlossaryUsagePeriod {
+            valid_from: Some(pb::CalendarDate {
+                value: "2026-11-01".into(),
+            }),
+            valid_until: Some(pb::CalendarDate {
+                value: "2026-12-01".into(),
+            }),
+        });
+        for (on, count) in [
+            ("2026-10-31", 1),
+            ("2026-11-01", 0),
+            ("2026-11-30", 0),
+            ("2026-12-01", 1),
+        ] {
+            let findings = glossary::check_usage(
+                std::slice::from_ref(&term),
+                "customer",
+                &date(on),
+                "Purchase",
+                &[],
+                false,
+            )
+            .unwrap();
+            assert_eq!(findings.len(), count, "{on}");
+            if count > 0 {
+                assert_eq!(findings[0].usage, pb::GlossaryUsage::Prohibited);
+                assert_ne!(findings[0].rationale, "");
+            }
+        }
+    }
+}
+
+#[test]
+fn usage_period_refuses_empty_invalid_and_reversed_intervals_and_binds_review() {
+    let mut candidate = term();
+    let digest = glossary::candidate_digest(&candidate).unwrap();
+    for period in [
+        pb::GlossaryUsagePeriod::default(),
+        pb::GlossaryUsagePeriod {
+            valid_from: Some(pb::CalendarDate {
+                value: "bad-date".into(),
+            }),
+            valid_until: None,
+        },
+        pb::GlossaryUsagePeriod {
+            valid_from: Some(pb::CalendarDate {
+                value: "2026-12-01".into(),
+            }),
+            valid_until: Some(pb::CalendarDate {
+                value: "2026-11-01".into(),
+            }),
+        },
+    ] {
+        candidate.glossary.as_mut().unwrap().usage_period = Some(period);
+        assert!(glossary::validate_term(&candidate).is_err());
+    }
+    candidate.glossary.as_mut().unwrap().usage_period = Some(pb::GlossaryUsagePeriod {
+        valid_from: Some(pb::CalendarDate {
+            value: "2026-11-01".into(),
+        }),
+        valid_until: None,
+    });
+    assert!(glossary::validate_term(&candidate).is_ok());
+    assert_ne!(glossary::candidate_digest(&candidate).unwrap(), digest);
+}
+
+#[test]
+fn code_matching_segments_identifiers_acronyms_and_retains_original_utf8_ranges() {
+    let mut term = term();
+    term.title = "HTTP booking".into();
+    term.glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+        usage: pb::GlossaryUsage::Prohibited as i32,
+        rationale: "Use Parcel.".into(),
+        ..Default::default()
+    });
+    let text = "é HTTPBooking httpBooking HttpBooking HTTP_BOOKING http_booking xhttp_booking \"HTTPBooking\"";
+    let excluded = text.find("HttpBooking").unwrap();
+    let findings = glossary::check_code_usage(
+        &[term.clone()],
+        "customer",
+        &date("2026-11-13"),
+        text,
+        &[TextRange::new(excluded, excluded + "HttpBooking".len()).unwrap()],
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding.matched.as_str())
+            .collect::<Vec<_>>(),
+        vec!["HTTPBooking", "httpBooking", "HTTP_BOOKING", "http_booking"]
+    );
+    for finding in &findings {
+        assert_eq!(
+            &text[finding.range.start()..finding.range.end()],
+            finding.matched
+        );
+    }
+    assert_eq!(
+        glossary::check_usage(&[term], "customer", &date("2026-11-13"), text, &[], true).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn code_one_word_policy_matches_whole_segments_but_prose_keeps_ordinary_boundaries() {
+    let mut term = term();
+    term.glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+        usage: pb::GlossaryUsage::Prohibited as i32,
+        rationale: "Use Order.".into(),
+        ..Default::default()
+    });
+    let text = "repurchase purchase_id createPurchase Purchased purchase";
+    let code = glossary::check_code_usage(
+        &[term.clone()],
+        "customer",
+        &date("2026-11-13"),
+        text,
+        &[],
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        code.iter()
+            .map(|finding| finding.matched.as_str())
+            .collect::<Vec<_>>(),
+        vec!["purchase", "Purchase", "purchase"]
+    );
+    let prose =
+        glossary::check_usage(&[term], "customer", &date("2026-11-13"), text, &[], false).unwrap();
+    assert_eq!(prose.len(), 1);
+    assert_eq!(prose[0].range.end(), text.len());
+}

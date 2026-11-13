@@ -1294,6 +1294,28 @@ pub struct ListGlossaryEntriesResponse {
     pub snapshot_revision: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryPointer {
+    #[prost(message, optional, tag="1")]
+    pub term: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TermRef>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(enumeration="GlossaryEntryState", tag="4")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListGlossaryPointersResponse {
+    #[prost(message, repeated, tag="1")]
+    pub entries: ::prost::alloc::vec::Vec<GlossaryPointer>,
+    #[prost(string, tag="2")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(string, tag="4")]
+    pub snapshot_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GlossaryEvidenceResolution {
     #[prost(uint32, tag="1")]
     pub evidence_index: u32,
@@ -1319,6 +1341,27 @@ pub struct GetGlossaryTermResponse {
     pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidenceResolution>,
     #[prost(bool, tag="5")]
     pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetGlossaryDefinitionResponse {
+    #[prost(message, optional, tag="1")]
+    pub entry: ::core::option::Option<GlossaryPointer>,
+    #[prost(string, tag="2")]
+    pub definition: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub policy: ::core::option::Option<super::super::super::eventmodel::v1alpha1::GlossaryUsagePolicy>,
+    #[prost(message, repeated, tag="4")]
+    pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidenceResolution>,
+    #[prost(bool, tag="5")]
+    pub incomplete: bool,
+    #[prost(message, optional, tag="6")]
+    pub usage_period: ::core::option::Option<super::super::super::eventmodel::v1alpha1::GlossaryUsagePeriod>,
+    #[prost(string, tag="7")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(string, tag="8")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(string, tag="9")]
+    pub snapshot_revision: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InspectGlossarySourcesRequest {

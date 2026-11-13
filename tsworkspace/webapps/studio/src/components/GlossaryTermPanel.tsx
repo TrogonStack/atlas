@@ -172,6 +172,7 @@ export function GlossaryTermPanel({
   const glossary = glossaryRecord(term.glossary);
   const review = glossaryRecord(glossary.review);
   const policy = glossaryRecord(glossary.policy);
+  const period = glossaryRecord(glossary.usagePeriod);
   const evidence = useMemo(() => {
     const items = glossaryRecord(glossaryRecord(detail.entity?.term).glossary).evidence;
     return Array.isArray(items) ? items.map(glossaryRecord) : [];
@@ -218,6 +219,15 @@ export function GlossaryTermPanel({
       <p className="whitespace-pre-wrap text-sm leading-relaxed">
         {glossaryText(term.doc) || 'No definition recorded.'}
       </p>
+      {glossary.usagePeriod ? (
+        <section aria-label="Permitted term use" className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Permitted term use</h3>
+          <p className="text-xs text-muted-foreground">
+            From {period.validFrom ? valueText(period.validFrom) || 'date unavailable' : 'unbounded'} until{' '}
+            {period.validUntil ? valueText(period.validUntil) || 'date unavailable' : 'unbounded'} (end excluded).
+          </p>
+        </section>
+      ) : null}
       <details className="rounded-md border border-border">
         <summary className="cursor-pointer p-3 text-sm font-semibold">Recorded review</summary>
         <dl className="grid gap-3 border-t border-border p-3 text-xs sm:grid-cols-2">

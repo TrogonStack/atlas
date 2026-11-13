@@ -4135,6 +4135,9 @@
         },
         "review": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryReview"
+        },
+        "usagePeriod": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryUsagePeriod"
         }
       },
       "type": "object"
@@ -4208,6 +4211,18 @@
         "GLOSSARY_USAGE_UNSPECIFIED"
       ],
       "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryUsagePeriod": {
+      "additionalProperties": false,
+      "properties": {
+        "validFrom": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.GlossaryUsagePolicy": {
       "oneOf": [

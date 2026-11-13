@@ -10,17 +10,20 @@ evaluation require their own receipts.
 
 | Surface | Maintained checks | Assertions |
 | --- | --- | --- |
-| Core | [glossary tests](../../rsworkspace/crates/trogon-atlas-core/tests/glossary.rs) | Generated-entry admission, exact source bytes/UID, canonical candidate identity, review binding, calendar policy, reference traversal, scoped comparison and bounded UTF-8 usage findings. |
+| Core | [glossary tests](../../rsworkspace/crates/trogon-atlas-core/tests/glossary.rs) | Generated-entry admission, exact source bytes/UID, canonical candidate identity, review binding, independent policy and term-use periods, identifier and whitespace-normalized phrase matching, reference traversal, scoped comparison and bounded UTF-8 usage findings. |
 | Backend | [main fixture](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_backend.rs) | Current accepted version selection, draft isolation, ordinary-write and Agent review refusal, source incarnation, selected-source refresh and pre-mutation reply limits. |
 | Backend boundaries | [boundary fixture](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_boundaries_backend.rs) | Atomic forged-review refusal, accepted immutability, preview, audience families, stale etags/page tokens, restricted visibility, safe deletion, branch landing, source recreation, retirement and shared traversal budgets. |
 | Lifecycle, policy and refresh | [lifecycle acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_lifecycle_acceptance.rs) | Explicit rejection, retirement after changed/deleted evidence or a deleted replacement target, safe deletion and incoming-reference protection, self/missing/cyclic replacement refusal, and exact preservation of expert corrections and publication after failed or partial refresh. |
 | Missing evidence | [missing-evidence budget](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_missing_evidence_budget.rs) | Missing-source lookups count toward the shared traversal budget, including exact-limit success and overflow refusal. |
+| Lean backend reads and code checks | [backend acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_lean_and_code_backend.rs) | Published pointer selection, exact compact definitions, omitted inspection payload, payload reduction, large-record projection, provenance/freshness revisions, authorization, pagination, identifier matching and reviewed term-use periods. |
 | CLI | [connected CLI tests](../../rsworkspace/crates/trogon-atlas-cli/tests/glossary_cli_integration.rs) | Native manifest/source roundtrip, review, published index, exact retrieval, comparison, usage and refresh, malformed-request exit and exact supplied code bytes. |
 | History and export | [CLI history acceptance](../../rsworkspace/crates/trogon-atlas-cli/tests/glossary_history_cli_integration.rs) | Correction/review history through authenticated gRPC, native CLI export, unchanged reapply, exact source retention and refusal to replay review authority into a new incarnation. |
+| Lean CLI and MCP consumption | [connected client acceptance](../../rsworkspace/crates/trogon-atlas-cli/tests/glossary_lean_readers_cli_mcp_integration.rs) | CLI and authenticated HTTP MCP pointers, exact compact definitions, reduced payload, branch forwarding, strict request refusal, code identifier spans, temporal boundaries and Reader nonmutation. |
+| Customer wording | [connected CLI acceptance](../../rsworkspace/crates/trogon-atlas-cli/tests/glossary_customer_language_cli_integration.rs) | Retained customer policy, source-only starting corpus, explicit review, Booking allowed internally and prohibited in customer UI copy, exact Pickup slot replacement, UTF-8 span and successful recheck without changing internal meaning. |
 | MCP | [connected MCP test](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_mcp_integration.rs) | Real HTTP MCP authoring, NEEDS_CHANGES correction, stale receipt, explicit acceptance, compact retrieval, scoped policy, context comparison and changed-source refresh. Reader discovery excludes review mutation. |
-| MCP discovery | [scope tests](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_scope_mcp_integration.rs), [prompt test](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_prompt.rs) | Namespace-filtered search, opt-in latest versions and discoverable source/review/refresh procedure. |
-| Studio | [page tests](../../tsworkspace/webapps/studio/src/components/GlossaryPage.test.tsx), [HTTP tests](../../tsworkspace/webapps/studio/src/lib/glossary-api.test.ts), [bridge tests](../../tsworkspace/webapps/studio/server/glossary-bridge.test.mjs) | Explicit context, exact identity, stale-request isolation, source status distinct from review, modeled-usage substitution refusal, branch forwarding and correction handoff. |
-| Authenticated browser | [native Playwright test](../../tsworkspace/webapps/studio/e2e/glossary.native.spec.ts) | Real Rust/NATS, bridge and Chromium; anonymous refusal, read-only model boundary, exact published/draft/source/usage inspection, published-only filtering and credential-free correction context. |
+| MCP discovery | [scope tests](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_scope_mcp_integration.rs), [prompt test](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_prompt.rs), [lean reader metadata](../../rsworkspace/crates/trogon-atlas-mcp/tests/glossary_lean_reader_metadata.rs) | Namespace-filtered search, opt-in latest versions, lean tool profiles and read annotations, and discoverable source/review/refresh procedure. |
+| Studio | [page tests](../../tsworkspace/webapps/studio/src/components/GlossaryPage.test.tsx), [HTTP tests](../../tsworkspace/webapps/studio/src/lib/glossary-api.test.ts), [bridge tests](../../tsworkspace/webapps/studio/server/glossary-bridge.test.mjs) | Explicit context, exact identity, stale-request isolation, independent comparison audiences in the same or different contexts, separate permitted-use/rule dates, source status distinct from review, modeled-usage substitution refusal, branch forwarding and correction handoff. |
+| Authenticated browser | [native Playwright test](../../tsworkspace/webapps/studio/e2e/glossary.native.spec.ts) | Real Rust/NATS, bridge and Chromium; anonymous refusal, read-only model boundary, exact published/draft/source/usage inspection, separate term-use dates, same-context code/human comparison, published-only filtering and credential-free correction context. |
 
 Core and transport bounds are described in the contract. Limit tests assert
 explicit refusal rather than silent truncation or an unchecked clean result.
@@ -33,9 +36,9 @@ From the repository root, using the configured toolchain:
 
 ```sh
 mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-core --test glossary
-mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-server --test glossary_backend --test glossary_boundaries_backend --test glossary_lifecycle_acceptance --test glossary_missing_evidence_budget
-mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-cli --test glossary_cli_integration --test glossary_history_cli_integration
-mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-mcp --test glossary_mcp_integration --test glossary_scope_mcp_integration --test glossary_prompt
+mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-server --test glossary_backend --test glossary_boundaries_backend --test glossary_lifecycle_acceptance --test glossary_missing_evidence_budget --test glossary_lean_and_code_backend
+mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-cli --test glossary_cli_integration --test glossary_history_cli_integration --test glossary_lean_readers_cli_mcp_integration --test glossary_customer_language_cli_integration
+mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-mcp --test glossary_mcp_integration --test glossary_scope_mcp_integration --test glossary_prompt --test glossary_lean_reader_metadata
 mise exec -- cargo test --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-client --lib manifest_schema::tests::committed_schema_file_matches_generator
 ```
 
@@ -96,8 +99,18 @@ not establish a domain conflict.
 The independent Reader's successful local run returned an index of eight entries
 in 3,587 stdout UTF-8 bytes and about 0.063 seconds. Selective exact retrieval of
 the five needed definitions used 9,997 bytes in about 0.313 seconds in total.
-These are controlled-corpus CLI measurements, not production latency guarantees
-or model-token counts.
+These historical measurements used the inspection index and full-entry lookup.
+They do not measure the newer lean pointer/definition projections. Maintained
+lean-reader tests compare the projections with inspection payloads on identical
+entries. Byte reduction is a payload assertion; these are not production
+latency guarantees or model-token counts.
+
+The connected lean-reader fixture returned the same compact JSON sizes through
+CLI and HTTP MCP: 795 UTF-8 bytes for the inspection index versus 435 for
+pointers, and 11,582 bytes for a full Term versus 760 for its compact definition.
+These measurements serialize the parsed result objects without transport
+framing. They establish reduction for that controlled fixture, not a general
+compression ratio or tokenizer-specific saving.
 
 An earlier consumer attempt used an incorrect request shape and then encountered
 an expired fixture. Both failures were retained. The successful run reconstructed

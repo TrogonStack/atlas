@@ -171,6 +171,16 @@ test('authenticated glossary review preserves exact published, draft and stale-s
     const panel = page.getByRole('region', { name: 'Selected glossary entry' });
     await expect(panel.getByText('Published selection', { exact: true })).toBeVisible();
     await expect(panel.getByText('Current', { exact: true })).toBeVisible();
+    expect(published.entity.term.glossary.usagePeriod).toEqual({
+      validFrom: { value: '2026-11-01' },
+      validUntil: { value: '2026-12-01' },
+    });
+    const permittedUse = panel.getByRole('region', { name: 'Permitted term use' });
+    await expect(permittedUse).toContainText('2026-11-01');
+    await expect(permittedUse).toContainText('2026-12-01');
+    assertions.push(
+      'The exact retained term-use period is decoded and displayed separately from policy and review dates',
+    );
     await panel.getByRole('button', { name: 'Inspect source' }).click();
     await expect(panel.getByText('Current source inspection', { exact: true })).toBeVisible();
     const usageObserved = page.waitForResponse((response) => response.url().includes('/api/glossary/usage?'));
@@ -229,12 +239,27 @@ test('authenticated glossary review preserves exact published, draft and stale-s
     await expect(entries.getByRole('button', { name: /shop\/purchase@2/ })).toHaveCount(0);
     await expect(entries.getByRole('button', { name: /shop\/stale@1/ })).toBeVisible();
     await expect(entries.getByRole('button', { name: /shop\/stale@1/ })).toContainText('Source changed');
+    await page.getByRole('textbox', { name: 'Audience', exact: true }).fill('customer');
+    await page.getByRole('combobox', { name: 'Compare with context' }).selectOption(fixture.namespace);
+    await page.getByRole('textbox', { name: 'Comparison audience', exact: true }).fill('code');
+    const comparisonObserved = page.waitForResponse((response) => response.url().includes('/api/glossary/compare?'));
+    await page.getByRole('button', { name: 'Compare contexts', exact: true }).click();
+    const comparisonResponse = await comparisonObserved;
+    expect(comparisonResponse.status()).toBe(200);
+    const comparisonRequest = JSON.parse(new URL(comparisonResponse.url()).searchParams.get('request') ?? '');
+    expect(comparisonRequest.left).toMatchObject({ namespaces: [fixture.namespace], audience: 'customer' });
+    expect(comparisonRequest.right).toMatchObject({ namespaces: [fixture.namespace], audience: 'code' });
+    expect(comparisonRequest.left.includeUnreviewed ?? false).toBe(false);
+    expect(comparisonRequest.right.includeUnreviewed ?? false).toBe(false);
+    await expect(page.getByText('Differences are candidates for review, not language rulings.')).toBeVisible();
+    const comparison = await comparisonResponse.json();
+    assertions.push('Authenticated comparison preserves independent customer/code audiences in the same exact context');
     await expect(page.getByRole('button', { name: /^(approve|publish|save|delete)(?:\s|$)/i })).toHaveCount(0);
     expect(apiMethods.every((method) => method === 'GET')).toBe(true);
     expect(errors).toEqual([]);
     await writeFile(
       path.join(evidence, 'glossary-responses.internal.trogonai.md'),
-      JSON.stringify({ published, draft, stale, modeledUsage }, null, 2),
+      JSON.stringify({ published, draft, stale, modeledUsage, comparison }, null, 2),
     );
     assertions.push(
       'Published-only filter retains reviewed v1 and stale published content with its warning, excludes draft v2, and exposes only GET reads without model mutation controls',
