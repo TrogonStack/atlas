@@ -51,6 +51,11 @@ pub struct ListEntitiesParams {
     #[schemars(description = "Restrict by entity kind (optional)")]
     pub kind: Option<String>,
     pub namespace: Option<String>,
+    #[schemars(
+        description = "Return only the highest stored version per identity. This does not imply review or publication. Defaults to false."
+    )]
+    #[serde(default)]
+    pub latest_versions_only: bool,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -248,6 +253,10 @@ pub struct SearchParams {
     #[schemars(description = "Full-text search query. Maximum 2048 bytes.")]
     pub q: String,
     pub kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Restrict search to these exact namespaces. Omit or pass an empty list for every namespace visible to the caller."
+    )]
+    pub namespaces: Option<Vec<String>>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,

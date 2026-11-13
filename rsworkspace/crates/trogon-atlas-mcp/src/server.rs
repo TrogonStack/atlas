@@ -1982,7 +1982,7 @@ impl McpServer {
         let req = pb::ListEntitiesRequest {
             kinds,
             namespaces,
-            latest_versions_only: false,
+            latest_versions_only: p.latest_versions_only,
             page_size,
             page_token: p.page_token.unwrap_or_default(),
             lifecycle_status_in: p.lifecycle_status_in.unwrap_or_default(),
@@ -3799,7 +3799,7 @@ impl McpServer {
         let req = pb::SearchEntitiesRequest {
             query: p.q,
             kinds,
-            namespaces: Vec::new(),
+            namespaces: p.namespaces.unwrap_or_default(),
             limit,
         };
         let mut client = self.client();
