@@ -283,6 +283,7 @@ impl EventModelServiceImpl {
         selection: pb::GlossarySelection,
         branch: Option<&str>,
         visibility: &Visibility,
+        budget: &mut Budget,
     ) -> Result<Catalog, Status> {
         if selection.namespaces.is_empty()
             || selection.namespaces.len() > 32
@@ -322,7 +323,6 @@ impl EventModelServiceImpl {
                 .and_then(|value| value.id.clone())
                 .map(|id| (id.namespace, id.slug, id.version))
         });
-        let mut budget = Budget::default();
         let mut hash = Sha256::new();
         hash.update(format!("{visibility:?}:{branch:?}"));
         hash.update(selection.encode_to_vec());
@@ -338,9 +338,7 @@ impl EventModelServiceImpl {
             if !selection.audience.is_empty() && audience != selection.audience {
                 continue;
             }
-            let entry = self
-                .glossary_entry(row, branch, visibility, &mut budget)
-                .await?;
+            let entry = self.glossary_entry(row, branch, visibility, budget).await?;
             hash.update(&entry.provenance);
             if selection.include_unreviewed || entry.index.published {
                 entries.push(entry);
@@ -384,6 +382,7 @@ impl EventModelServiceImpl {
         if request.page_size > 500 || request.page_token.len() > 128 {
             return Err(Status::invalid_argument("invalid glossary page"));
         }
+        let mut budget = Budget::default();
         let catalog = self
             .glossary_catalog(
                 request
@@ -391,6 +390,7 @@ impl EventModelServiceImpl {
                     .ok_or_else(|| Status::invalid_argument("selection is required"))?,
                 branch,
                 visibility,
+                &mut budget,
             )
             .await?;
         let offset = if request.page_token.is_empty() {
@@ -470,6 +470,18 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         visibility: &Visibility,
     ) -> Result<pb::InspectGlossarySourcesResponse, Status> {
+        let mut budget = Budget::default();
+        self.glossary_sources_with_budget(request, branch, visibility, &mut budget)
+            .await
+    }
+
+    async fn glossary_sources_with_budget(
+        &self,
+        request: pb::InspectGlossarySourcesRequest,
+        branch: Option<&str>,
+        visibility: &Visibility,
+        budget: &mut Budget,
+    ) -> Result<pb::InspectGlossarySourcesResponse, Status> {
         if request.documents.len() > 32 {
             return Err(Status::invalid_argument(
                 "at most 32 exact source Documents are supported",
@@ -488,6 +500,7 @@ impl EventModelServiceImpl {
                 .await
             {
                 Ok(row) => {
+                    budget.source(&row.entity)?;
                     let content = core::retained_document_bytes(&row.entity).map_err(invalid)?;
                     bytes = bytes.saturating_add(content.len());
                     if bytes > 1024 * 1024 {
@@ -654,6 +667,7 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         visibility: &Visibility,
     ) -> Result<pb::CompareGlossariesResponse, Status> {
+        let mut budget = Budget::default();
         let left = self
             .glossary_catalog(
                 request
@@ -661,6 +675,7 @@ impl EventModelServiceImpl {
                     .ok_or_else(|| Status::invalid_argument("left selection is required"))?,
                 branch,
                 visibility,
+                &mut budget,
             )
             .await?;
         let right = self
@@ -670,6 +685,7 @@ impl EventModelServiceImpl {
                     .ok_or_else(|| Status::invalid_argument("right selection is required"))?,
                 branch,
                 visibility,
+                &mut budget,
             )
             .await?;
         let left_terms: Vec<_> = left
@@ -734,7 +750,10 @@ impl EventModelServiceImpl {
             ));
         }
         let audience = selection.audience.clone();
-        let catalog = self.glossary_catalog(selection, branch, visibility).await?;
+        let mut budget = Budget::default();
+        let catalog = self
+            .glossary_catalog(selection, branch, visibility, &mut budget)
+            .await?;
         let stale = catalog.entries.iter().any(|entry| {
             !matches!(
                 pb::GlossaryEntryState::try_from(entry.index.state),
@@ -784,7 +803,7 @@ impl EventModelServiceImpl {
                     .glossary_row(pb::EntityKind::Term, target, branch, visibility)
                     .await
                 {
-                    Ok(_) => {}
+                    Ok(row) => budget.source(&row.entity)?,
                     Err(error) if error.code() == tonic::Code::NotFound => {
                         incomplete = true;
                         continue;
@@ -825,6 +844,7 @@ impl EventModelServiceImpl {
         {
             return Err(Status::invalid_argument("generation_revision is required"));
         }
+        let mut budget = Budget::default();
         let catalog = self
             .glossary_catalog(
                 request
@@ -832,15 +852,17 @@ impl EventModelServiceImpl {
                     .ok_or_else(|| Status::invalid_argument("selection is required"))?,
                 branch,
                 visibility,
+                &mut budget,
             )
             .await?;
         let sources = self
-            .glossary_sources(
+            .glossary_sources_with_budget(
                 pb::InspectGlossarySourcesRequest {
                     documents: request.documents,
                 },
                 branch,
                 visibility,
+                &mut budget,
             )
             .await?;
         let mut selected_sources = BTreeMap::new();
