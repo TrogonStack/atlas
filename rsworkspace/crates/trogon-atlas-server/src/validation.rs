@@ -6586,11 +6586,7 @@ pub fn validate_model_content(
             if o.to_id.namespace != id.namespace {
                 let seam = o.from_field.starts_with("source_events[")
                     || o.from_field.starts_with("calls[")
-                    // Strategic mapping, not behavioral coupling: contexts
-                    // point at the problem space they realize (Decision #29)
-                    // and record the agreement behind each seam (Decision #30).
-                    || o.from_field.starts_with("realizes[")
-                    || o.from_field.starts_with("relationships[")
+                    || is_strategic_mapping_field(k, &o.from_field)
                     || o.from_field == "external_source.system"
                     // Automation slices are the wire that crosses contexts:
                     // a choreographer subscribes to an upstream event (via
@@ -6703,6 +6699,7 @@ pub fn validate_model_content(
                     let declared_seam = o.to_id.namespace != id.namespace
                         && (o.from_field.starts_with("source_events[")
                             || o.from_field.starts_with("calls[")
+                            || is_strategic_mapping_field(k, &o.from_field)
                             || o.from_field == "external_source.system"
                             || o.from_field == "emitted_command"
                             || o.from_field.starts_with("outcome.events[")
@@ -8515,6 +8512,15 @@ mod scenario_gap_tests {
     }
 }
 
+/// Strategic mapping, not behavioral coupling: contexts point at the problem
+/// space they realize (Decision #29) and record the agreement behind each seam
+/// (Decision #30). Shared by the boundary check and CROSS_MODEL_REF so the two
+/// seam lists cannot drift.
+fn is_strategic_mapping_field(kind: pb::EntityKind, from_field: &str) -> bool {
+    kind == pb::EntityKind::BoundedContext
+        && (from_field.starts_with("realizes[") || from_field.starts_with("relationships["))
+}
+
 #[cfg(test)]
 mod boundary_tests {
     use super::*;
@@ -8588,6 +8594,123 @@ mod boundary_tests {
             "{issues:?}"
         );
         assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0); // declared seam: legal, silent
+    }
+
+    fn assert_seam_is_silent(issues: &[pb::ValidationIssue]) {
+        assert_eq!(count(issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
+        assert_eq!(
+            count(issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    fn bc_with(ns: &str, f: impl FnOnce(&mut pb::BoundedContext)) -> pb::Entity {
+        let mut bc = pb::BoundedContext {
+            id: Some(id(ns, ns)),
+            title: ns.into(),
+            ..Default::default()
+        };
+        f(&mut bc);
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::BoundedContext(bc)),
+        }
+    }
+
+    fn model_with_bc(ns: &str) -> pb::EventModel {
+        pb::EventModel {
+            id: Some(id(ns, "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::BoundedContext, ns, ns)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn realizes_into_other_namespace_is_declared_seam() {
+        let bc = bc_with("acme-orders", |bc| {
+            bc.realizes = vec![pb::SubdomainRef {
+                id: Some(id("acme", "orders")),
+            }];
+        });
+        let subdomain = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Subdomain(pb::Subdomain {
+                id: Some(id("acme", "orders")),
+                title: "orders".into(),
+                ..Default::default()
+            })),
+        };
+        let issues = validate_model(
+            &model_with_bc("acme-orders"),
+            &[stored(bc), stored(subdomain)],
+        );
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn relationship_to_other_namespace_is_declared_seam() {
+        let down = bc_with("acme-billing", |bc| {
+            bc.relationships = vec![pb::bounded_context::ContextRelationship {
+                upstream: Some(pb::BoundedContextRef {
+                    id: Some(id("acme-orders", "acme-orders")),
+                }),
+                ..Default::default()
+            }];
+        });
+        let up = bc_with("acme-orders", |_| {});
+        let issues = validate_model(&model_with_bc("acme-billing"), &[stored(down), stored(up)]);
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn component_relationship_to_other_namespace_is_not_strategic_seam() {
+        let source_id = id("acme-orders", "order-service");
+        let target_id = id("acme-billing", "billing-service");
+        let source = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(source_id.clone()),
+                title: "order-service".into(),
+                relationships: vec![pb::ArchitecturalRelationship {
+                    target: Some(pb::ArchitecturalEndpoint {
+                        target: Some(pb::architectural_endpoint::Target::Component(
+                            pb::ComponentRef {
+                                id: Some(target_id.clone()),
+                            },
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let target = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(target_id),
+                title: "billing-service".into(),
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("acme-orders", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::Component,
+                "acme-orders",
+                "order-service",
+            )],
+            ..Default::default()
+        };
+        let issues = validate_model(&model, &[stored(source), stored(target)]);
+        assert_eq!(
+            count(&issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            1,
+            "{issues:?}"
+        );
+        assert_eq!(count(&issues, "CROSS_MODEL_REF"), 1, "{issues:?}");
     }
 
     #[test]
