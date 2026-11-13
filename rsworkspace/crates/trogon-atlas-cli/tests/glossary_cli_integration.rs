@@ -51,7 +51,7 @@ fn command(endpoint: &str) -> Command {
     command
 }
 
-fn glossary(endpoint: &str, action: &str, request: Value) -> Value {
+fn glossary(endpoint: &str, action: &str, request: &Value) -> Value {
     let result = command(endpoint)
         .args(["glossary", action, "--request", &request.to_string()])
         .output()
@@ -64,7 +64,7 @@ fn glossary(endpoint: &str, action: &str, request: Value) -> Value {
     serde_json::from_slice(&result.stdout).unwrap()
 }
 
-fn apply(endpoint: &str, path: &Path, manifest: Value) {
+fn apply(endpoint: &str, path: &Path, manifest: &Value) {
     std::fs::write(path, manifest.to_string()).unwrap();
     let result = command(endpoint)
         .args(["apply", "-f", path.to_str().unwrap()])
@@ -94,7 +94,7 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
     apply(
         &endpoint,
         &path,
-        json!({
+        &json!({
             "apiVersion": trogon_atlas_client::manifest::API_VERSION, "kind": "Event",
             "metadata": {"namespace": "glossary-cli", "name": "context"},
             "spec": {"title": "Controlled vocabulary context"}
@@ -103,7 +103,7 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
     apply(
         &endpoint,
         &path,
-        json!({
+        &json!({
             "apiVersion": trogon_atlas_client::manifest::API_VERSION, "kind": "Document",
             "metadata": {"namespace": "glossary-cli", "name": "source"},
             "spec": {
@@ -119,14 +119,14 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
     let sources = glossary(
         &endpoint,
         "sources",
-        json!({"documents": [reference("source")]}),
+        &json!({"documents": [reference("source")]}),
     );
     let source = &sources["sources"][0];
     assert_eq!(source["text"], content);
     apply(
         &endpoint,
         &path,
-        json!({
+        &json!({
             "apiVersion": trogon_atlas_client::manifest::API_VERSION, "kind": "Term",
             "metadata": {"namespace": "glossary-cli", "name": "parcel"},
             "spec": {"title": "Parcel", "doc": "A shipment handled by fulfillment.",
@@ -140,12 +140,12 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
             }
         }),
     );
-    let draft = glossary(&endpoint, "get", json!({"term": reference("parcel")}));
+    let draft = glossary(&endpoint, "get", &json!({"term": reference("parcel")}));
     assert_eq!(draft["entry"]["state"], "GLOSSARY_ENTRY_STATE_DRAFT");
     let accepted = glossary(
         &endpoint,
         "review",
-        json!({
+        &json!({
             "term": reference("parcel"), "ifMatch": draft["etag"],
             "disposition": "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED", "reason": "Checked against the retained source."
         }),
@@ -154,13 +154,13 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
         accepted["entity"]["term"]["glossary"]["review"]["actor"],
         "reviewer"
     );
-    let listed = glossary(&endpoint, "list", json!({"selection": selection()}));
+    let listed = glossary(&endpoint, "list", &json!({"selection": selection()}));
     assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
     assert_eq!(listed["entries"][0]["published"], true);
     let checked = glossary(
         &endpoint,
         "check",
-        json!({
+        &json!({
             "selection": selection(), "text": "Ship this parcel.", "textRevision": "copy-v1",
             "on": {"value": "2026-11-12"}
         }),
@@ -170,13 +170,13 @@ async fn cli_glossary_source_review_lookup_and_analysis_roundtrip() {
     let compared = glossary(
         &endpoint,
         "compare",
-        json!({"left": selection(), "right": selection()}),
+        &json!({"left": selection(), "right": selection()}),
     );
-    assert!(!compared["snapshotRevision"].as_str().unwrap().is_empty());
+    assert_ne!(compared["snapshotRevision"].as_str().unwrap(), "");
     let refreshed = glossary(
         &endpoint,
         "refresh",
-        json!({
+        &json!({
             "selection": selection(), "documents": [reference("source")],
             "generationRevision": "controlled-extraction-v1"
         }),
@@ -222,7 +222,7 @@ async fn controlled_corpus_roundtrip_retains_contextual_text_and_exact_code() {
     let inspected = glossary(
         &endpoint,
         "sources",
-        json!({"documents": [
+        &json!({"documents": [
             {"id": {"namespace": "glossary-fulfillment", "slug": "source", "version": "1"}},
             {"id": {"namespace": "glossary-fulfillment", "slug": "code-source", "version": "1"}},
             {"id": {"namespace": "glossary-customer", "slug": "source", "version": "1"}}

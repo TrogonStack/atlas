@@ -5,6 +5,10 @@ expert correction, publish reviewed definitions and keep them useful to agents.
 The agent performs model writes through Atlas CLI/MCP. Studio remains a review
 surface for people to inspect meanings and communicate corrections.
 
+See the [native contract](../reference/generated-glossary-contracts.md) for field
+semantics and bounds, and [acceptance](../reference/generated-glossary-acceptance.md)
+for executable checks and controlled-run evidence.
+
 ## Prepare the source selection
 
 Choose the bounded contexts and audience for the task. Keep organizational,
@@ -258,14 +262,29 @@ with the previous run's exact source inventory. A newly selected Document
 version is changed input even when an old cited version remains available.
 Re-extract affected meanings, retain unresolved conflicts and obtain expert
 review for corrected candidates. Source removal is a proposed retirement, not
-permission to delete a Term. Failed or partial runs preserve prior publication.
+permission to delete a Term. To retire an accepted entry, obtain an explicit
+User review with a retirement reason, using REJECTED to remove it from the
+published selection. Inspect incoming references and resolve them before a
+guarded native deletion. A negative decision over unchanged content remains
+possible after its evidence or replacement target becomes unavailable; accepting
+it again still requires valid targets. To retire a whole vocabulary family,
+inspect every accepted version and audience: an older accepted version can
+otherwise become the default catalog selection. Failed or partial runs preserve
+prior publication.
+
+For retirement on a branch, land the negative review before a separate guarded
+deletion. A deleted branch head alone does not carry that review decision into
+the baseline.
 
 Retain a run receipt as an ordinary Document attached to the affected native
 subjects, with its JSON bytes and verified digest under the existing Document
 contract. Include the selected inputs, prompt revision, declared coverage,
 attempt outcome, commands/exits, candidate references, expert-review references,
 publication receipts and next review date. Keep last attempt, successful
-publication and expert review times distinct. If the backend is unavailable,
+publication and expert review times distinct. For the `retained` text alternative,
+store JSON text with `mediaType.value` set to `text/plain`; that alternative does
+not accept `application/json`. Use `retainedContent` instead when retaining bytes
+under its separate media-type and digest contract. If the backend is unavailable,
 preserve the receipt locally and report that retention is pending.
 
 This procedure uses external agent scheduling and native retained records. It

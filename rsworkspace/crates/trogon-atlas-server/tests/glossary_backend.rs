@@ -148,7 +148,6 @@ async fn candidate(client: &mut Client, version: u64) -> pb::PutEntityResponse {
                             value: "text/plain".into(),
                         }),
                         digest: Some(trogon_atlas_core::specification::content_digest(SOURCE)),
-                        ..Default::default()
                     })),
                     ..Default::default()
                 })),

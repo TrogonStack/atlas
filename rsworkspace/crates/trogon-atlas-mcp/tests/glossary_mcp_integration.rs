@@ -268,7 +268,7 @@ async fn authenticated_mcp_glossary_authors_reviews_compares_checks_and_detects_
     .await;
     assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
     assert!(listed["entries"][0].get("definition").is_none());
-    assert!(!listed["snapshotRevision"].as_str().unwrap().is_empty());
+    assert_ne!(listed["snapshotRevision"].as_str().unwrap(), "");
     let index_bytes = listed.to_string().len();
     let detail_bytes = accepted.to_string().len();
     assert!(index_bytes < detail_bytes);
@@ -357,7 +357,7 @@ async fn authenticated_mcp_glossary_authors_reviews_compares_checks_and_detects_
     )
     .await;
     let observations = refresh["observations"].as_array().unwrap();
-    assert!(!observations.is_empty());
+    assert_ne!(observations, &Vec::<Value>::new());
     assert!(observations
         .iter()
         .all(|observation| observation["generationChanged"] == true));

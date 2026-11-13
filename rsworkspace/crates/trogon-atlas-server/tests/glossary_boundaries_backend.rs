@@ -994,6 +994,138 @@ async fn branch_review_and_landing_preserve_exact_term_and_source_incarnations()
 }
 
 #[tokio::test]
+async fn branch_negative_review_lands_with_unavailable_original_evidence() {
+    let mut client = client().await;
+    let target = id("shop", "purchase", 1);
+    let source = source(&mut client, "shop", "source", None).await;
+    let draft = put(&mut client, candidate(&source, "purchase", 1), "", None).await;
+    let accepted = review(&mut client, &target, &draft.etag, false, None)
+        .await
+        .unwrap();
+    delete(
+        &mut client,
+        pb::EntityKind::Document,
+        &id("shop", "source", 1),
+        &source.etag,
+        pb::delete_entity_request::Mode::Force,
+    )
+    .await
+    .unwrap();
+    let baseline = detail(&mut client, &target).await;
+    assert!(baseline.entry.as_ref().unwrap().published);
+    assert!(baseline.incomplete);
+    let branch = "glossary-retirement-branch";
+    create_branch(&mut client, branch).await;
+    let rejected = client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(target.clone()),
+                }),
+                if_match: accepted.etag,
+                disposition: pb::GlossaryReviewDisposition::Rejected as i32,
+                reason: "Retire the exact definition whose original source was removed.".into(),
+                validate_only: false,
+            },
+            ADMIN,
+            Some(branch),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!rejected.entry.as_ref().unwrap().published);
+    assert_eq!(
+        rejected.entry.as_ref().unwrap().state,
+        pb::GlossaryEntryState::Rejected as i32
+    );
+    assert_eq!(detail(&mut client, &target).await, baseline);
+    let rejected_term = term(rejected.entity.as_ref().unwrap());
+    let accepted_term = term(accepted.entity.as_ref().unwrap());
+    assert_eq!(
+        trogon_atlas_core::glossary::candidate_digest(rejected_term).unwrap(),
+        trogon_atlas_core::glossary::candidate_digest(accepted_term).unwrap()
+    );
+    assert_eq!(
+        rejected_term.glossary.as_ref().unwrap().evidence,
+        accepted_term.glossary.as_ref().unwrap().evidence
+    );
+    let rejected_review = rejected_term
+        .glossary
+        .as_ref()
+        .unwrap()
+        .review
+        .as_ref()
+        .unwrap();
+    let accepted_review = accepted_term
+        .glossary
+        .as_ref()
+        .unwrap()
+        .review
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        rejected_review.content_digest,
+        accepted_review.content_digest
+    );
+    assert_eq!(rejected_review.owner_uid, accepted_review.owner_uid);
+    assert_eq!(
+        rejected
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid,
+        accepted
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid
+    );
+    for dry_run in [true, false] {
+        let merged = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
+                    name: branch.into(),
+                    dry_run,
+                    keep_branch: true,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .expect("exact negative review must land despite unavailable original evidence")
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated as i32
+            } else {
+                pb::merge_branch_response::Status::Applied as i32
+            },
+            "{merged:?}"
+        );
+        if dry_run {
+            assert_eq!(detail(&mut client, &target).await, baseline);
+        }
+    }
+    let landed = detail(&mut client, &target).await;
+    assert_eq!(landed.entity, rejected.entity);
+    assert!(!landed.entry.as_ref().unwrap().published);
+    assert_eq!(
+        landed.entry.unwrap().state,
+        pb::GlossaryEntryState::Rejected as i32
+    );
+    assert_eq!(landed.evidence, rejected.evidence);
+    assert!(landed.incomplete);
+}
+
+#[tokio::test]
 async fn source_changes_deletion_and_recreation_do_not_rebind_published_evidence() {
     let mut client = client().await;
     let source = source(&mut client, "shop", "source", None).await;

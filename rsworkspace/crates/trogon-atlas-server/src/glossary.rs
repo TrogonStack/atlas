@@ -26,10 +26,19 @@ struct Budget {
 }
 
 impl Budget {
-    fn source(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+    fn attempt(&mut self) -> Result<(), Status> {
         self.work = self.work.saturating_add(1);
+        if self.work > MAX_EVIDENCE_WORK {
+            return Err(Status::resource_exhausted(
+                "glossary evidence budget exceeded",
+            ));
+        }
+        Ok(())
+    }
+
+    fn source(&mut self, entity: &pb::Entity) -> Result<(), Status> {
         self.bytes = self.bytes.saturating_add(entity.encoded_len());
-        if self.work > MAX_EVIDENCE_WORK || self.bytes > MAX_EVIDENCE_BYTES {
+        if self.bytes > MAX_EVIDENCE_BYTES {
             return Err(Status::resource_exhausted(
                 "glossary evidence budget exceeded",
             ));
@@ -190,6 +199,7 @@ impl EventModelServiceImpl {
                         .as_ref()
                         .and_then(|reference| reference.id.as_ref()),
                 )?;
+                budget.attempt()?;
                 let (source_state, source_reason) = match self
                     .glossary_row(pb::EntityKind::Document, id, branch, visibility)
                     .await
@@ -495,6 +505,7 @@ impl EventModelServiceImpl {
         for reference in request.documents {
             let id = exact(reference.id.as_ref())?;
             hash.update(reference.encode_to_vec());
+            budget.attempt()?;
             match self
                 .glossary_row(pb::EntityKind::Document, id, branch, visibility)
                 .await
@@ -799,6 +810,7 @@ impl EventModelServiceImpl {
         {
             if let Some(preferred) = &finding.preferred_term {
                 let target = exact(preferred.id.as_ref())?;
+                budget.attempt()?;
                 match self
                     .glossary_row(pb::EntityKind::Term, target, branch, visibility)
                     .await
@@ -1028,6 +1040,33 @@ impl EventModelServiceImpl {
                     ));
                 }
             }
+            if (permit || trusted_landing)
+                && new_review.is_some_and(|review| {
+                    matches!(
+                        pb::GlossaryReviewDisposition::try_from(review.disposition),
+                        Ok(pb::GlossaryReviewDisposition::Rejected
+                            | pb::GlossaryReviewDisposition::NeedsChanges)
+                    )
+                })
+            {
+                let current_digest = old
+                    .map(core::candidate_digest)
+                    .transpose()
+                    .map_err(invalid)?;
+                if previous
+                    .as_ref()
+                    .is_some_and(|current| core::review_is_current(value, uid(current)))
+                    && current_digest.as_ref()
+                        == new_review.and_then(|review| review.content_digest.as_ref())
+                {
+                    continue;
+                }
+                if permit {
+                    return Err(Status::failed_precondition(
+                        "negative review requires unchanged current glossary content",
+                    ));
+                }
+            }
             let Some(glossary) = &value.glossary else {
                 continue;
             };
@@ -1044,6 +1083,7 @@ impl EventModelServiceImpl {
                         .as_ref()
                         .and_then(|reference| reference.id.as_ref()),
                 )?;
+                budget.attempt()?;
                 let row = self
                     .glossary_proposed_target(
                         pb::EntityKind::Document,
@@ -1073,6 +1113,7 @@ impl EventModelServiceImpl {
                 if !visited.insert(pb::EntityKey::new(pb::EntityKind::Term, id)) {
                     return Err(Status::invalid_argument("glossary preferred-term cycle"));
                 }
+                budget.attempt()?;
                 let row = self
                     .glossary_proposed_target(
                         pb::EntityKind::Term,

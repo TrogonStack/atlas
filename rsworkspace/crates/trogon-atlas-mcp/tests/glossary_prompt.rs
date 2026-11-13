@@ -29,5 +29,5 @@ fn generation_task_is_discoverable_with_evidence_review_and_refresh_guidance() {
     ] {
         assert!(prompt.body.contains(boundary), "lost boundary: {boundary}");
     }
-    assert!(!prompt.result().messages.is_empty());
+    assert_ne!(prompt.result().messages, Vec::new());
 }
