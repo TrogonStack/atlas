@@ -533,3 +533,946 @@ async fn omitted_audience_preserves_distinct_published_audience_versions() {
         );
     }
 }
+
+async fn list(
+    client: &mut Client,
+    selection: pb::GlossarySelection,
+    page_token: &str,
+    identity: &str,
+    branch: Option<&str>,
+) -> Result<pb::ListGlossaryEntriesResponse, tonic::Status> {
+    client
+        .list_glossary_entries(request(
+            pb::ListGlossaryEntriesRequest {
+                selection: Some(selection),
+                page_size: 1,
+                page_token: page_token.into(),
+            },
+            identity,
+            branch,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+async fn create_branch(client: &mut Client, name: &str) {
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: name.into(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+async fn delete(
+    client: &mut Client,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    etag: &str,
+    mode: pb::delete_entity_request::Mode,
+) -> Result<pb::DeleteEntityResponse, tonic::Status> {
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: kind as i32,
+                id: Some(id.clone()),
+                if_match: etag.into(),
+                mode: mode as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+#[tokio::test]
+async fn stale_review_etag_and_page_tokens_cannot_authorize_moved_scope() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let original = put(&mut client, candidate(&source, "alpha", 1), "", None).await;
+    put(&mut client, candidate(&source, "beta", 1), "", None).await;
+    let mut corrected = original.entity.unwrap();
+    term_mut(&mut corrected).doc = "A corrected customer request definition.".into();
+    let corrected = put(&mut client, corrected, &original.etag, None).await;
+    assert_eq!(
+        review(
+            &mut client,
+            &id("shop", "alpha", 1),
+            &original.etag,
+            false,
+            None
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::Aborted
+    );
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "alpha", 1),
+            None
+        )
+        .await
+        .etag,
+        corrected.etag
+    );
+    let first = list(&mut client, selection("shop", true), "", READER, None)
+        .await
+        .unwrap();
+    assert_ne!(first.next_page_token, "");
+    let second = list(
+        &mut client,
+        selection("shop", true),
+        &first.next_page_token,
+        READER,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_ne!(first.entries[0].term, second.entries[0].term);
+    assert_eq!(first.snapshot_revision, second.snapshot_revision);
+    for changed in [
+        pb::GlossarySelection {
+            audience: "internal".into(),
+            ..selection("shop", true)
+        },
+        selection("shop", false),
+    ] {
+        assert_eq!(
+            list(&mut client, changed, &first.next_page_token, READER, None)
+                .await
+                .unwrap_err()
+                .code(),
+            Code::FailedPrecondition
+        );
+    }
+    create_branch(&mut client, "glossary-pages").await;
+    assert_eq!(
+        list(
+            &mut client,
+            selection("shop", true),
+            &first.next_page_token,
+            READER,
+            Some("glossary-pages")
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::FailedPrecondition
+    );
+    let mut changed_source = source.entity.unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut changed_source.kind else {
+        panic!("document required");
+    };
+    let text = "The source material changed after catalog pagination began.";
+    document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: text.into(),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        digest: Some(trogon_atlas_core::specification::content_digest(text)),
+    }));
+    put(&mut client, changed_source, &source.etag, None).await;
+    assert_eq!(
+        list(
+            &mut client,
+            selection("shop", true),
+            &first.next_page_token,
+            READER,
+            None
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::FailedPrecondition
+    );
+}
+
+#[tokio::test]
+async fn restricted_readers_cannot_distinguish_hidden_and_missing_terms_or_source_bytes() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [
+        ("glossary-visible", "visible"),
+        ("glossary-hidden", "hidden"),
+    ] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let visible = &namespaces[0];
+    let hidden = &namespaces[1];
+    let visible_source = source(&mut client, visible, "source", None).await;
+    let hidden_source = source(&mut client, hidden, "source", None).await;
+    put(&mut client, candidate(&visible_source, "word", 1), "", None).await;
+    put(
+        &mut client,
+        candidate(&visible_source, "other", 1),
+        "",
+        None,
+    )
+    .await;
+    put(
+        &mut client,
+        candidate(&hidden_source, "secret-word", 1),
+        "",
+        None,
+    )
+    .await;
+    let visible_page = list(&mut client, selection(visible, true), "", ADMIN, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        list(
+            &mut client,
+            selection(visible, true),
+            &visible_page.next_page_token,
+            LIMITED,
+            None
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::FailedPrecondition
+    );
+    let limited_page = list(&mut client, selection(visible, true), "", LIMITED, None)
+        .await
+        .unwrap();
+    assert!(limited_page.entries.iter().all(|entry| entry
+        .term
+        .as_ref()
+        .unwrap()
+        .id
+        .as_ref()
+        .unwrap()
+        .namespace
+        == *visible));
+    let mut errors = Vec::new();
+    let mut unavailable_sources = Vec::new();
+    for slug in ["secret-word", "never-existed"] {
+        let error = client
+            .get_glossary_term(request(
+                pb::GetGlossaryTermRequest {
+                    term: Some(pb::TermRef {
+                        id: Some(id(hidden, slug, 1)),
+                    }),
+                },
+                LIMITED,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::NotFound);
+        errors.push(error.message().to_owned());
+        let material = client
+            .inspect_glossary_sources(request(
+                pb::InspectGlossarySourcesRequest {
+                    documents: vec![pb::DocumentRef {
+                        id: Some(id(
+                            hidden,
+                            if slug == "secret-word" {
+                                "source"
+                            } else {
+                                "missing"
+                            },
+                            1,
+                        )),
+                    }],
+                },
+                LIMITED,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(material.incomplete);
+        let mut unavailable = material.sources.into_iter().next().unwrap();
+        assert_eq!(
+            unavailable.state,
+            pb::GlossaryEvidenceState::Unavailable as i32
+        );
+        assert_eq!(unavailable.text, "");
+        assert_eq!(unavailable.etag, "");
+        assert_eq!(unavailable.owner_uid, "");
+        assert!(unavailable.content_digest.is_none());
+        unavailable.document = None;
+        unavailable_sources.push(unavailable);
+    }
+    assert_eq!(errors[0], errors[1]);
+    assert_eq!(unavailable_sources[0], unavailable_sources[1]);
+}
+
+#[tokio::test]
+async fn source_and_preferred_term_references_block_safe_deletion() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let preferred = put(
+        &mut client,
+        entity(pb::entity::Kind::Term(pb::Term {
+            id: Some(id("shop", "order", 1)),
+            title: "Order".into(),
+            doc: "A customer order.".into(),
+            ..Default::default()
+        })),
+        "",
+        None,
+    )
+    .await;
+    let mut proposed = candidate(&source, "purchase", 1);
+    term_mut(&mut proposed).glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+        usage: pb::GlossaryUsage::Deprecated as i32,
+        preferred_term: Some(pb::TermRef {
+            id: Some(id("shop", "order", 1)),
+        }),
+        rationale: "Use the customer-facing term Order.".into(),
+        ..Default::default()
+    });
+    let declared = put(&mut client, proposed, "", None).await;
+    for (kind, target, etag, expected_path) in [
+        (
+            pb::EntityKind::Document,
+            id("shop", "source", 1),
+            source.etag.as_str(),
+            "glossary.evidence[0].document",
+        ),
+        (
+            pb::EntityKind::Term,
+            id("shop", "order", 1),
+            preferred.etag.as_str(),
+            "glossary.policy.preferred_term",
+        ),
+    ] {
+        let incoming = client
+            .get_incoming_references(request(
+                pb::GetReferencesRequest {
+                    kind: kind as i32,
+                    id: Some(target.clone()),
+                    ..Default::default()
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(incoming
+            .references
+            .iter()
+            .any(|reference| reference.from_field == expected_path));
+        assert_eq!(
+            delete(
+                &mut client,
+                kind,
+                &target,
+                etag,
+                pb::delete_entity_request::Mode::FailIfReferenced
+            )
+            .await
+            .unwrap_err()
+            .code(),
+            Code::FailedPrecondition
+        );
+        assert_eq!(read(&mut client, kind, &target, None).await.etag, etag);
+    }
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            None
+        )
+        .await
+        .entity,
+        declared.entity
+    );
+}
+
+#[tokio::test]
+async fn branch_review_and_landing_preserve_exact_term_and_source_incarnations() {
+    let mut client = client().await;
+    let branch = "glossary-reviewed-branch";
+    create_branch(&mut client, branch).await;
+    let source = source(&mut client, "shop", "source", Some(branch)).await;
+    let draft = put(
+        &mut client,
+        candidate(&source, "purchase", 1),
+        "",
+        Some(branch),
+    )
+    .await;
+    let accepted = review(
+        &mut client,
+        &id("shop", "purchase", 1),
+        &draft.etag,
+        false,
+        Some(branch),
+    )
+    .await
+    .unwrap();
+    assert!(accepted.entry.as_ref().unwrap().published);
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Term as i32,
+                    id: Some(id("shop", "purchase", 1)),
+                },
+                ADMIN,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    for dry_run in [true, false] {
+        let merged = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
+                    name: branch.into(),
+                    dry_run,
+                    keep_branch: true,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated as i32
+            } else {
+                pb::merge_branch_response::Status::Applied as i32
+            },
+            "{merged:?}"
+        );
+    }
+    let landed = detail(&mut client, &id("shop", "purchase", 1)).await;
+    assert_eq!(landed.entity, accepted.entity);
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Document,
+            &id("shop", "source", 1),
+            None
+        )
+        .await
+        .entity,
+        source.entity
+    );
+    assert!(landed.entry.unwrap().published);
+    assert_eq!(
+        landed.evidence[0].state,
+        pb::GlossaryEvidenceState::Current as i32
+    );
+}
+
+#[tokio::test]
+async fn source_changes_deletion_and_recreation_do_not_rebind_published_evidence() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let draft = put(&mut client, candidate(&source, "purchase", 1), "", None).await;
+    let accepted = review(
+        &mut client,
+        &id("shop", "purchase", 1),
+        &draft.etag,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    let initial = detail(&mut client, &id("shop", "purchase", 1)).await;
+    assert_eq!(
+        initial.evidence[0].state,
+        pb::GlossaryEvidenceState::Current as i32
+    );
+    let mut changed = source.entity.clone().unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut changed.kind else {
+        panic!("document");
+    };
+    let text = "This source no longer contains the reviewed evidence.";
+    document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: text.into(),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        digest: Some(trogon_atlas_core::specification::content_digest(text)),
+    }));
+    let changed = put(&mut client, changed, &source.etag, None).await;
+    let stale = detail(&mut client, &id("shop", "purchase", 1)).await;
+    assert!(stale.entry.as_ref().unwrap().published);
+    assert_eq!(
+        stale.entry.unwrap().state,
+        pb::GlossaryEntryState::SourceChanged as i32
+    );
+    assert_eq!(
+        stale.evidence[0].state,
+        pb::GlossaryEvidenceState::Changed as i32
+    );
+    delete(
+        &mut client,
+        pb::EntityKind::Document,
+        &id("shop", "source", 1),
+        &changed.etag,
+        pb::delete_entity_request::Mode::Force,
+    )
+    .await
+    .unwrap();
+    let missing = detail(&mut client, &id("shop", "purchase", 1)).await;
+    assert!(missing.incomplete);
+    assert!(missing.entry.as_ref().unwrap().published);
+    assert_eq!(
+        missing.entry.unwrap().state,
+        pb::GlossaryEntryState::SourceUnavailable as i32
+    );
+    assert_eq!(
+        missing.evidence[0].state,
+        pb::GlossaryEvidenceState::Unavailable as i32
+    );
+    let mut recreated = source.entity.unwrap();
+    let original_uid = recreated.system.take().unwrap().uid;
+    let Some(pb::entity::Kind::Document(document)) = &mut recreated.kind else {
+        panic!("document");
+    };
+    for subject in &mut document.subjects {
+        subject.connection_id = None;
+    }
+    let recreated = put(&mut client, recreated, "", None).await;
+    assert_ne!(
+        recreated
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid,
+        original_uid
+    );
+    let unresolved_pin = detail(&mut client, &id("shop", "purchase", 1)).await;
+    assert!(!unresolved_pin.incomplete);
+    assert_eq!(
+        unresolved_pin.evidence[0].state,
+        pb::GlossaryEvidenceState::Changed as i32
+    );
+    assert_eq!(unresolved_pin.entity, accepted.entity);
+}
+
+#[tokio::test]
+async fn source_change_refuses_review_without_persisting_a_new_decision() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let draft = put(&mut client, candidate(&source, "purchase", 1), "", None).await;
+    let before = read(
+        &mut client,
+        pb::EntityKind::Term,
+        &id("shop", "purchase", 1),
+        None,
+    )
+    .await;
+    let mut changed = source.entity.unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut changed.kind else {
+        panic!("document");
+    };
+    let text = "Different source content at the same exact key.";
+    document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: text.into(),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        digest: Some(trogon_atlas_core::specification::content_digest(text)),
+    }));
+    put(&mut client, changed, &source.etag, None).await;
+    assert_eq!(
+        review(
+            &mut client,
+            &id("shop", "purchase", 1),
+            &draft.etag,
+            false,
+            None
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            None
+        )
+        .await,
+        before
+    );
+}
+
+#[tokio::test]
+async fn published_term_deletion_requires_explicit_retirement() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let draft = put(&mut client, candidate(&source, "purchase", 1), "", None).await;
+    let accepted = review(
+        &mut client,
+        &id("shop", "purchase", 1),
+        &draft.etag,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        delete(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            &accepted.etag,
+            pb::delete_entity_request::Mode::Force
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            None
+        )
+        .await
+        .entity,
+        accepted.entity
+    );
+}
+
+#[tokio::test]
+async fn glossary_native_input_limits_refuse_instead_of_claiming_empty_success() {
+    let mut client = client().await;
+    let source_ref = pb::DocumentRef {
+        id: Some(id("shop", "source", 1)),
+    };
+    assert_eq!(
+        client
+            .inspect_glossary_sources(request(
+                pb::InspectGlossarySourcesRequest {
+                    documents: vec![source_ref; 33],
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        client
+            .list_glossary_entries(request(
+                pb::ListGlossaryEntriesRequest {
+                    selection: Some(pb::GlossarySelection {
+                        namespaces: vec!["shop".into(); 33],
+                        ..selection("shop", true)
+                    }),
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        client
+            .list_glossary_entries(request(
+                pb::ListGlossaryEntriesRequest {
+                    selection: Some(selection("shop", true)),
+                    page_size: 501,
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        client
+            .check_glossary_usage(request(
+                pb::CheckGlossaryUsageRequest {
+                    selection: Some(selection("shop", false)),
+                    text: "a".repeat(trogon_atlas_core::glossary::MAX_TEXT_BYTES + 1),
+                    text_revision: "controlled-code-revision".into(),
+                    on: Some(pb::CalendarDate {
+                        value: "2026-11-12".into()
+                    }),
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        client
+            .check_glossary_usage(request(
+                pb::CheckGlossaryUsageRequest {
+                    selection: Some(selection("shop", false)),
+                    text: "é".into(),
+                    text_revision: "controlled-code-revision".into(),
+                    on: Some(pb::CalendarDate {
+                        value: "2026-11-12".into()
+                    }),
+                    exclusions: vec![pb::GlossaryTextRange { start: 1, end: 2 }],
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+}
+
+#[tokio::test]
+async fn source_output_at_the_byte_budget_succeeds_and_overflow_refuses() {
+    let mut client = client().await;
+    let seed = source(&mut client, "shop", "source", None).await;
+    let content = "a".repeat(trogon_atlas_core::glossary::MAX_TEXT_BYTES);
+    let mut documents = Vec::new();
+    for index in 0..4 {
+        let mut supplied = seed.entity.clone().unwrap();
+        supplied.system = None;
+        let Some(pb::entity::Kind::Document(document)) = &mut supplied.kind else {
+            panic!("document required");
+        };
+        let target = id("shop", &format!("bounded-source-{index}"), 1);
+        document.id = Some(target.clone());
+        for subject in &mut document.subjects {
+            subject.connection_id = None;
+        }
+        document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+            content: content.clone(),
+            media_type: Some(pb::MediaType {
+                value: "text/plain".into(),
+            }),
+            digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+        }));
+        put(&mut client, supplied, "", None).await;
+        documents.push(pb::DocumentRef { id: Some(target) });
+    }
+    let complete = client
+        .inspect_glossary_sources(request(
+            pb::InspectGlossarySourcesRequest {
+                documents: documents.clone(),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!complete.incomplete);
+    assert_eq!(complete.sources.len(), 4);
+    assert_eq!(
+        complete
+            .sources
+            .iter()
+            .map(|source| source.text.len())
+            .sum::<usize>(),
+        1_048_576
+    );
+    assert!(complete
+        .sources
+        .iter()
+        .all(|source| source.state == pb::GlossaryEvidenceState::Current as i32));
+    documents.push(pb::DocumentRef {
+        id: Some(id("shop", "source", 1)),
+    });
+    assert_eq!(
+        client
+            .inspect_glossary_sources(request(
+                pb::InspectGlossarySourcesRequest { documents },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::ResourceExhausted
+    );
+}
+
+#[tokio::test]
+async fn review_reply_budget_refuses_before_persisting_the_review() {
+    use prost::Message;
+
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let mut proposed = candidate(&source, "purchase", 1);
+    term_mut(&mut proposed).metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.NoteAnnotation".into(),
+        value: pb::NoteAnnotation {
+            text: "\0".repeat(400_000),
+            ..Default::default()
+        }
+        .encode_to_vec(),
+    });
+    let draft = put(&mut client, proposed, "", None).await;
+    let before = read(
+        &mut client,
+        pb::EntityKind::Term,
+        &id("shop", "purchase", 1),
+        None,
+    )
+    .await;
+    assert_eq!(
+        review(
+            &mut client,
+            &id("shop", "purchase", 1),
+            &draft.etag,
+            false,
+            None
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::ResourceExhausted
+    );
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            None
+        )
+        .await,
+        before
+    );
+    assert!(term(before.entity.as_ref().unwrap())
+        .glossary
+        .as_ref()
+        .unwrap()
+        .review
+        .is_none());
+}
+
+#[tokio::test]
+async fn comparison_shares_one_evidence_byte_budget_across_both_selections() {
+    use prost::Message;
+
+    let mut client = client().await;
+    let text = format!("{SOURCE}\n{}", "a".repeat(230 * 1024 - SOURCE.len() - 1));
+    let source_digest = trogon_atlas_core::specification::content_digest(&text);
+    let request_byte_limit = 32 * 1024 * 1024;
+    let mut examined_bytes = Vec::new();
+    for namespace in ["glossary-left", "glossary-right"] {
+        let supplied = source(&mut client, namespace, "source", None).await;
+        let mut expanded = supplied.entity.unwrap();
+        let Some(pb::entity::Kind::Document(document)) = &mut expanded.kind else {
+            panic!("document required");
+        };
+        document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+            content: text.clone(),
+            media_type: Some(pb::MediaType {
+                value: "text/plain".into(),
+            }),
+            digest: Some(source_digest.clone()),
+        }));
+        let supplied = put(&mut client, expanded, &supplied.etag, None).await;
+        let catalog_bytes = 3 * 32 * supplied.entity.as_ref().unwrap().encoded_len();
+        assert!(catalog_bytes < request_byte_limit);
+        examined_bytes.push(catalog_bytes);
+        for index in 0..3 {
+            let slug = format!("word-{index}");
+            let mut proposed = candidate(&supplied, &slug, 1);
+            let glossary = term_mut(&mut proposed).glossary.as_mut().unwrap();
+            let mut citation = glossary.evidence[0].clone();
+            citation.content_digest = Some(source_digest.clone());
+            glossary.evidence = (0..32)
+                .map(|index| pb::GlossaryEvidence {
+                    locator: format!("paragraph:{index}"),
+                    ..citation.clone()
+                })
+                .collect();
+            let draft = put(&mut client, proposed, "", None).await;
+            let accepted = review(
+                &mut client,
+                &id(namespace, &slug, 1),
+                &draft.etag,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(accepted.entry.unwrap().published);
+        }
+        let independently_valid = client
+            .list_glossary_entries(request(
+                pb::ListGlossaryEntriesRequest {
+                    selection: Some(selection(namespace, false)),
+                    ..Default::default()
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!independently_valid.incomplete);
+        assert_eq!(independently_valid.entries.len(), 3);
+    }
+    assert!(examined_bytes.iter().sum::<usize>() > request_byte_limit);
+    assert_eq!(
+        client
+            .compare_glossaries(request(
+                pb::CompareGlossariesRequest {
+                    left: Some(selection("glossary-left", false)),
+                    right: Some(selection("glossary-right", false)),
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::ResourceExhausted
+    );
+}
