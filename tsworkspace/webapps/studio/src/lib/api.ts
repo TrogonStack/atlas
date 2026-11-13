@@ -497,34 +497,34 @@ function catalogQuery(query: string, request: unknown, opts: FetchOptions): Prom
 }
 
 export function listGlossaryEntries(
-  _request: { selection: GlossarySelection; pageSize?: number; pageToken?: string },
-  _opts: FetchOptions = {},
+  request: { selection: GlossarySelection; pageSize?: number; pageToken?: string },
+  opts: FetchOptions = {},
 ): Promise<GlossaryIndex> {
-  return Promise.reject(new Error('glossary inspection unavailable'));
+  return getJson(`/api/glossary/entries?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function getGlossaryTerm(
-  _request: { term: GlossaryTermRef },
-  _opts: FetchOptions = {},
+  request: { term: GlossaryTermRef },
+  opts: FetchOptions = {},
 ): Promise<GlossaryTermDetail> {
-  return Promise.reject(new Error('glossary inspection unavailable'));
+  return getJson(`/api/glossary/term?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function inspectGlossarySources(
-  _request: { documents: readonly GlossaryDocumentRef[] },
-  _opts: FetchOptions = {},
+  request: { documents: readonly GlossaryDocumentRef[] },
+  opts: FetchOptions = {},
 ): Promise<GlossarySources> {
-  return Promise.reject(new Error('glossary inspection unavailable'));
+  return getJson(`/api/glossary/sources?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function compareGlossaries(
-  _request: { left: GlossarySelection; right: GlossarySelection },
-  _opts: FetchOptions = {},
+  request: { left: GlossarySelection; right: GlossarySelection },
+  opts: FetchOptions = {},
 ): Promise<GlossaryComparison> {
-  return Promise.reject(new Error('glossary inspection unavailable'));
+  return getJson(`/api/glossary/compare?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function inspectGlossaryRefresh(
-  _request: { selection: GlossarySelection; documents: readonly GlossaryDocumentRef[]; generationRevision: string },
-  _opts: FetchOptions = {},
+  request: { selection: GlossarySelection; documents: readonly GlossaryDocumentRef[]; generationRevision: string },
+  opts: FetchOptions = {},
 ): Promise<GlossaryRefresh> {
-  return Promise.reject(new Error('glossary inspection unavailable'));
+  return getJson(`/api/glossary/refresh?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
   return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);
