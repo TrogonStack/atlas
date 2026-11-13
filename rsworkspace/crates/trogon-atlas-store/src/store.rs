@@ -695,6 +695,14 @@ pub struct ChangesetPage<'a> {
 /// management, and `docs/explanation/branching.md` for the full design.
 #[async_trait]
 pub trait Store: Send + Sync {
+    /// A leader-observed revision of every model input, unavailable while a
+    /// recoverable write is in flight. Equal markers bracket a stable read.
+    async fn read_marker(&self) -> StoreResult<StoreReadMarker> {
+        Err(StoreError::Unavailable(
+            "consistent read markers are unsupported by this store".into(),
+        ))
+    }
+
     fn artifact_publication_authority(
         &self,
     ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
@@ -810,11 +818,12 @@ pub trait Store: Send + Sync {
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
 
-    /// List with a cumulative encoded-entity byte budget enforced while fetching.
+    /// List with a cumulative stored-payload byte budget enforced before decoding.
     ///
-    /// The budget covers scanned entities before latest-version selection and
-    /// result truncation, including baseline and branch overlay entities. Return
-    /// `ResourceExhausted` rather than retaining an entity beyond the budget.
+    /// The budget covers scanned baseline Entity payloads and full branch delta
+    /// payloads before latest-version selection or result truncation. Branch
+    /// payloads include retained base/ours snapshots, tombstones and protobuf
+    /// framing. Return `ResourceExhausted` before decoding an over-budget payload.
     async fn list_bounded(
         &self,
         _filter: ListFilter<'_>,
@@ -1605,6 +1614,29 @@ pub struct ListFilter<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityByteBudget {
     max_encoded_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BucketReadRevision {
+    pub(crate) incarnation: String,
+    pub(crate) sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreNamespaceMarker(pub(crate) BucketReadRevision);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreReadMarker {
+    pub(crate) revisions: Vec<BucketReadRevision>,
+    pub(crate) namespace: StoreNamespaceMarker,
+    pub(crate) writer: Option<(String, u64)>,
+}
+
+impl StoreReadMarker {
+    #[must_use]
+    pub fn namespace_marker(&self) -> &StoreNamespaceMarker {
+        &self.namespace
+    }
 }
 
 impl EntityByteBudget {

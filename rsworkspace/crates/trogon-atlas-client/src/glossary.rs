@@ -3,8 +3,11 @@ use serde_json::Value;
 use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 
-use crate::client::Client;
 pub use crate::responsibility::parse_request;
+use crate::{
+    client::Client,
+    tenant_types::{self, TypeScope},
+};
 
 fn response<M: prost::Message>(name: &str, message: &M) -> Result<Value> {
     TranscodePool::builtin()?
@@ -13,6 +16,27 @@ fn response<M: prost::Message>(name: &str, message: &M) -> Result<Value> {
             message,
         )
         .with_context(|| format!("encode {name}"))
+}
+
+async fn term_response(
+    client: &mut Client,
+    message: &pb::GetGlossaryTermResponse,
+) -> Result<Value> {
+    let mut scope = TypeScope::default();
+    if let Some(id) = message
+        .entity
+        .as_ref()
+        .and_then(trogon_atlas_core::entity_id)
+    {
+        scope.add_namespace(id.namespace.clone());
+    }
+    tenant_types::transcode_pool(client, &scope)
+        .await?
+        .message_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.GetGlossaryTermResponse",
+            message,
+        )
+        .context("encode GetGlossaryTermResponse")
 }
 
 pub async fn list_glossary_entries(
@@ -48,7 +72,7 @@ pub async fn get_glossary_term(
         .await
         .context("GetGlossaryTerm failed")?
         .into_inner();
-    response("GetGlossaryTermResponse", &value)
+    term_response(client, &value).await
 }
 
 pub async fn get_glossary_definition(
@@ -84,7 +108,7 @@ pub async fn review_glossary_term(
         .await
         .context("ReviewGlossaryTerm failed")?
         .into_inner();
-    response("GetGlossaryTermResponse", &value)
+    term_response(client, &value).await
 }
 
 pub async fn compare_glossaries(

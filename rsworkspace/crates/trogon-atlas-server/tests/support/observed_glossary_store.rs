@@ -33,6 +33,20 @@ impl ObservedGlossaryStore {
 
 #[async_trait]
 impl Store for ObservedGlossaryStore {
+    async fn read_marker(
+        &self,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::StoreReadMarker> {
+        self.inner.read_marker().await
+    }
+
+    fn is_writer(&self) -> bool {
+        self.inner.is_writer()
+    }
+
+    fn writer_status(&self) -> trogon_atlas_store::store::WriterStatus {
+        self.inner.writer_status()
+    }
+
     async fn register_namespace(
         &self,
         name: &trogon_atlas_core::NamespaceName,

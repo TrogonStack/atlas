@@ -494,7 +494,7 @@ fn check_usage_in(
         )?;
     }
     if skip_quoted {
-        ignored.extend(quoted_ranges(text)?);
+        ignored.extend(quoted_ranges(text, kind)?);
     }
     ignored.sort_by_key(|range| (range.start, range.end));
     let mut excluded: Vec<TextRange> = Vec::new();
@@ -549,8 +549,17 @@ fn check_usage_in(
         };
         let (pattern, _) = folded_with_offsets(term.title.trim(), kind);
         let pattern = pattern.trim();
-        for (start, matched) in folded.match_indices(pattern) {
-            let end = start + matched.len();
+        if pattern.is_empty() {
+            continue;
+        }
+        let mut search_from = 0;
+        while let Some(relative_start) = folded[search_from..].find(pattern) {
+            let start = search_from + relative_start;
+            let end = start + pattern.len();
+            search_from = folded[start..]
+                .chars()
+                .next()
+                .map_or(folded.len(), |character| start + character.len_utf8());
             if start == end
                 || (start > 0 && mapping[start - 1] == mapping[start])
                 || (end < mapping.len() && mapping[end - 1] == mapping[end])
@@ -580,6 +589,7 @@ fn check_usage_in(
                 preferred_term: preferred_term.clone(),
                 rationale: rationale.clone(),
             });
+            search_from = end;
         }
     }
     findings.sort_by(|a, b| {
@@ -761,7 +771,71 @@ fn separator(folded: &mut String, mapping: &mut Vec<TextRange>, range: TextRange
     }
 }
 
-fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {
+fn closed_code_quote_ahead(value: &str, index: usize) -> bool {
+    let mut characters = value[index + 1..].chars().peekable();
+    let mut previous = None;
+    let mut escaped = false;
+    while let Some(character) = characters.next() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if matches!(character, '\n' | '\r' | '"' | '`') {
+            return false;
+        } else if character == '\''
+            && (word_boundary(previous) || word_boundary(characters.peek().copied()))
+        {
+            let next = characters.peek().copied();
+            return !next.is_some_and(|character| {
+                unicode_ident::is_xid_start(character) || matches!(character, '_' | '\\')
+            }) && characters.clone().nth(1) != Some('\'');
+        }
+        previous = Some(character);
+    }
+    false
+}
+
+fn rust_lifetime_at(value: &str, index: usize) -> bool {
+    let tail = &value[index + 1..];
+    let tail = tail.strip_prefix("r#").unwrap_or(tail);
+    if !tail
+        .chars()
+        .next()
+        .is_some_and(|character| unicode_ident::is_xid_start(character) || character == '_')
+    {
+        return false;
+    }
+    let identifier_end = tail
+        .char_indices()
+        .find(|(_, character)| !unicode_ident::is_xid_continue(*character))
+        .map_or(tail.len(), |(index, _)| index);
+    let suffix = &tail[identifier_end..];
+    if suffix.starts_with('\'') || closed_code_quote_ahead(value, index) {
+        return false;
+    }
+    let prefix = value[..index].trim_end();
+    let suffix = suffix.trim_start();
+    let parameter_end =
+        suffix.is_empty() || suffix.starts_with([',', '>', '+', '{', ';', ')', ']']);
+    let label = suffix.strip_prefix(':').is_some_and(|body| {
+        let body = body.trim_start();
+        ["loop ", "loop{", "while ", "for ", "{"]
+            .iter()
+            .any(|prefix| body.starts_with(prefix))
+    });
+    prefix.ends_with('&')
+        || (prefix.ends_with(['<', '+', ':', ',']) && parameter_end)
+        || ((prefix.ends_with('<') || prefix.split_whitespace().next_back() == Some("where"))
+            && suffix.starts_with(':'))
+        || label
+        || matches!(
+            prefix.split_whitespace().next_back(),
+            Some("break" | "continue")
+        )
+        || (prefix.is_empty() && suffix.is_empty())
+}
+
+fn quoted_ranges(value: &str, kind: UsageTextKind) -> Result<Vec<TextRange>> {
     let mut ranges = Vec::new();
     let mut quote = None;
     let mut escaped = false;
@@ -775,6 +849,14 @@ fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {
         }
         if character == '\\' {
             escaped = true;
+            previous = Some(character);
+            continue;
+        }
+        if quote.is_none()
+            && character == '\''
+            && kind == UsageTextKind::Code
+            && rust_lifetime_at(value, index)
+        {
             previous = Some(character);
             continue;
         }

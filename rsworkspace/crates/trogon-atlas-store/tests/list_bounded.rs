@@ -68,7 +68,14 @@ async fn bounded_list_charges_all_fetched_versions_before_result_limit() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bounded_list_shares_budget_with_branch_overlays_and_keeps_filters() {
-    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let nats = trogon_atlas_testsupport::shared().await;
+    let config = nats.store_config();
+    let store = NatsStore::connect_with(config.clone()).await.unwrap();
+    let client = async_nats::connect(&nats.url).await.unwrap();
+    let branches = async_nats::jetstream::new(client)
+        .get_key_value(&config.branches_bucket)
+        .await
+        .unwrap();
     let mut bytes = 0;
     for slug in ["a", "b", "c"] {
         let written = store
@@ -83,7 +90,7 @@ async fn bounded_list_shares_budget_with_branch_overlays_and_keeps_filters() {
     }
     store.create_branch("bounded", "").await.unwrap();
     for (slug, version) in [("a", 2), ("b", 1), ("d", 1)] {
-        let written = store
+        store
             .put(
                 pb::EntityKind::Event,
                 &event(slug, version, &"branch".repeat(256)),
@@ -92,7 +99,6 @@ async fn bounded_list_shares_budget_with_branch_overlays_and_keeps_filters() {
             )
             .await
             .unwrap();
-        bytes += written.entity.encoded_len();
     }
     store
         .delete(
@@ -125,6 +131,12 @@ async fn bounded_list_shares_budget_with_branch_overlays_and_keeps_filters() {
         latest_versions_only: true,
         ..Default::default()
     };
+    for delta in store.list_branch_deltas("bounded").await.unwrap() {
+        if delta.id.namespace == "shop" {
+            let key = trogon_atlas_store::key::branch_delta_key("bounded", delta.kind, &delta.id);
+            bytes += branches.get(key).await.unwrap().unwrap().len();
+        }
+    }
     let expected = store
         .list(filter.clone(), Some(2), Some("bounded"))
         .await
@@ -185,5 +197,131 @@ async fn bounded_list_checks_wire_bytes_before_decoding_a_baseline_entity() {
     assert!(matches!(
         store.list(ListFilter::default(), None, None).await,
         Err(StoreError::CorruptEntry { .. })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bounded_list_charges_retained_branch_tombstone_bytes_after_baseline_deletion() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let config = nats.store_config();
+    let store = NatsStore::connect_with(config.clone()).await.unwrap();
+    let client = async_nats::connect(&nats.url).await.unwrap();
+    let branches = async_nats::jetstream::new(client)
+        .get_key_value(&config.branches_bucket)
+        .await
+        .unwrap();
+    let target = pb::Id {
+        namespace: "shop".into(),
+        slug: "retained-base".into(),
+        version: 1,
+    };
+    store
+        .create(
+            pb::EntityKind::Event,
+            &event("retained-base", 1, &"large baseline".repeat(4096)),
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    store.create_branch("tombstone", "").await.unwrap();
+    store
+        .delete(
+            pb::EntityKind::Event,
+            &target,
+            None,
+            WriteContext::branch("tombstone"),
+        )
+        .await
+        .unwrap();
+    store
+        .delete(
+            pb::EntityKind::Event,
+            &target,
+            None,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let key =
+        trogon_atlas_store::key::branch_delta_key("tombstone", pb::EntityKind::Event, &target);
+    let bytes = branches.get(key).await.unwrap().unwrap();
+    let delta = pb::BranchDelta::decode(bytes.clone()).unwrap();
+    assert!(delta.tombstone);
+    assert!(delta.base.is_some());
+    assert!(delta.ours.is_none());
+    assert!(matches!(
+        store
+            .list_bounded(
+                ListFilter::default(),
+                None,
+                Some("tombstone"),
+                EntityByteBudget::new(0),
+            )
+            .await,
+        Err(StoreError::ResourceExhausted(_))
+    ));
+    assert_eq!(
+        store
+            .list_bounded(
+                ListFilter::default(),
+                None,
+                Some("tombstone"),
+                EntityByteBudget::new(bytes.len()),
+            )
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert!(matches!(
+        store
+            .list_bounded(
+                ListFilter::default(),
+                None,
+                Some("tombstone"),
+                EntityByteBudget::new(bytes.len() - 1),
+            )
+            .await,
+        Err(StoreError::ResourceExhausted(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bounded_list_checks_branch_wire_bytes_before_decoding() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let config = nats.store_config();
+    let store = NatsStore::connect_with(config.clone()).await.unwrap();
+    store.create_branch("corrupt", "").await.unwrap();
+    let client = async_nats::connect(&nats.url).await.unwrap();
+    let branches = async_nats::jetstream::new(client)
+        .get_key_value(&config.branches_bucket)
+        .await
+        .unwrap();
+    let key = trogon_atlas_store::key::branch_delta_key(
+        "corrupt",
+        pb::EntityKind::Event,
+        &pb::Id {
+            namespace: "shop".into(),
+            slug: "oversized".into(),
+            version: 1,
+        },
+    );
+    branches.put(key, vec![0xff; 1024].into()).await.unwrap();
+    assert!(matches!(
+        store
+            .list_bounded(
+                ListFilter::default(),
+                None,
+                Some("corrupt"),
+                EntityByteBudget::new(1023),
+            )
+            .await,
+        Err(StoreError::ResourceExhausted(_))
+    ));
+    assert!(matches!(
+        store
+            .list(ListFilter::default(), None, Some("corrupt"))
+            .await,
+        Err(StoreError::Backend(_))
     ));
 }

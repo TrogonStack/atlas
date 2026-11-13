@@ -544,6 +544,7 @@ pub struct EventModelServiceImpl {
     snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
     snapshot_generation: AtomicU64,
     namespace_generation: AtomicU64,
+    glossary_namespace_marker: tokio::sync::Mutex<Option<trogon_atlas_store::StoreNamespaceMarker>>,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -730,6 +731,7 @@ impl EventModelServiceImpl {
             snapshot_cache: tokio::sync::RwLock::new(None),
             snapshot_generation: AtomicU64::new(0),
             namespace_generation: AtomicU64::new(0),
+            glossary_namespace_marker: tokio::sync::Mutex::new(None),
             snapshot_cap: MAX_PROJECTION_ENTITIES,
             reverse_index_cache: tokio::sync::RwLock::new(None),
             snapshot_load_lock: tokio::sync::Mutex::new(()),

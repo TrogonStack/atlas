@@ -333,10 +333,20 @@ impl NatsStore {
 
     pub(super) async fn prepare_source(&self, publication: &SourcePublication) -> StoreResult<()> {
         self.require_writer()?;
+        let mutation = self.lock_native_mutation().await?;
         let _native =
             tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
                 .await
                 .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(&mutation, self.prepare_source_mutation_locked(publication))
+            .await
+    }
+
+    async fn prepare_source_mutation_locked(
+        &self,
+        publication: &SourcePublication,
+    ) -> StoreResult<()> {
         let _document = self.source_document_lock.lock().await;
         self.prepare_source_locked(publication).await?;
         Ok(())
@@ -408,10 +418,21 @@ impl NatsStore {
         publication: &SourcePublication,
     ) -> StoreResult<SourcePublicationOutcome> {
         self.require_writer()?;
-        let key = transaction_key(&publication.registration, &publication.run_id);
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(&mutation, self.publish_source_mutation_locked(publication))
             .await
-            .map_err(|_| blocked())?;
+    }
+
+    async fn publish_source_mutation_locked(
+        &self,
+        publication: &SourcePublication,
+    ) -> StoreResult<SourcePublicationOutcome> {
+        let key = transaction_key(&publication.registration, &publication.run_id);
         let _document = self.source_document_lock.lock().await;
         let (mut revision, mut transaction) = self.prepare_source_locked(publication).await?;
         match transaction.phase {
@@ -754,9 +775,25 @@ impl NatsStore {
         digest: &str,
     ) -> StoreResult<SourcePublicationOutcome> {
         self.require_writer()?;
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
-            .await
-            .map_err(|_| blocked())?;
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(
+            &mutation,
+            self.recover_source_mutation_locked(registration, run, digest),
+        )
+        .await
+    }
+
+    async fn recover_source_mutation_locked(
+        &self,
+        registration: &SourceDocumentKey,
+        run: &str,
+        digest: &str,
+    ) -> StoreResult<SourcePublicationOutcome> {
         let _document = self.source_document_lock.lock().await;
         let key = transaction_key(registration, run);
         let (revision, mut transaction) = self.load_transaction(&key).await?.ok_or_else(blocked)?;
@@ -843,9 +880,25 @@ impl NatsStore {
         digest: &str,
     ) -> StoreResult<()> {
         self.require_writer()?;
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
-            .await
-            .map_err(|_| blocked())?;
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(
+            &mutation,
+            self.expire_source_transaction_mutation_locked(registration, run, digest),
+        )
+        .await
+    }
+
+    async fn expire_source_transaction_mutation_locked(
+        &self,
+        registration: &SourceDocumentKey,
+        run: &str,
+        digest: &str,
+    ) -> StoreResult<()> {
         let _document = self.source_document_lock.lock().await;
         let key = transaction_key(registration, run);
         let Some((_, transaction)) = self.load_transaction(&key).await? else {

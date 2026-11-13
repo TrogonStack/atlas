@@ -237,6 +237,51 @@ describe('glossary review page', () => {
     expect(vi.mocked(inspectGlossaryRefresh).mock.calls[1][0].generationRevision).toBe('extract-v1');
   });
 
+  it('refreshes a source inspection when opened again', async () => {
+    window.history.replaceState(null, '', '/glossary?namespace=sales&branch=review');
+    render(<GlossaryPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Inspect source' }));
+    expect(await screen.findByText('Current source text.')).toBeTruthy();
+    vi.mocked(inspectGlossarySources).mockResolvedValue({
+      sources: [{ document: source, text: 'Updated source text.', state: 'GLOSSARY_EVIDENCE_STATE_CURRENT' }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect source' }));
+    expect(await screen.findByText('Updated source text.')).toBeTruthy();
+    expect(screen.queryByText('Current source text.')).toBeNull();
+    expect(inspectGlossarySources).toHaveBeenCalledTimes(2);
+    expect(inspectGlossarySources).toHaveBeenLastCalledWith(
+      { documents: [source] },
+      expect.objectContaining({ branch: 'review', signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('refreshes a modeled-resource inspection when opened again', async () => {
+    window.history.replaceState(null, '', '/glossary?namespace=sales&branch=review');
+    render(<GlossaryPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'sales/place-order@2' }));
+    expect(await screen.findByText('Place purchase request')).toBeTruthy();
+    vi.mocked(getGlossaryUsage).mockResolvedValue({
+      entity: {
+        command: {
+          id: { namespace: 'sales', slug: 'place-order', version: '2' },
+          title: 'Updated purchase request',
+          doc: 'The modeled resource changed.',
+        },
+      },
+      etag: 'updated-command-etag',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'sales/place-order@2' }));
+    expect(await screen.findByText('Updated purchase request')).toBeTruthy();
+    expect(screen.queryByText('Place purchase request')).toBeNull();
+    expect(getGlossaryUsage).toHaveBeenCalledTimes(2);
+    expect(getGlossaryUsage).toHaveBeenLastCalledWith(
+      { kind: 'ENTITY_KIND_COMMAND', id: { namespace: 'sales', slug: 'place-order', version: '2' } },
+      expect.objectContaining({ branch: 'review', signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it('does not substitute another version when modeled usage inspection returns a mismatched resource', async () => {
     vi.mocked(getGlossaryUsage).mockResolvedValue({
       entity: {

@@ -74,7 +74,15 @@ function EvidenceSource({
         </div>
       </dl>
       {id ? (
-        <Button className="self-start" variant="outline" size="sm" onClick={() => setOpened(true)}>
+        <Button
+          className="self-start"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (opened) source.retry();
+            else setOpened(true);
+          }}
+        >
           Inspect source
         </Button>
       ) : null}
@@ -128,7 +136,10 @@ function ModeledUsage({ reference, branch }: { reference: Record<string, unknown
           <button
             type="button"
             className="break-all text-left font-mono underline underline-offset-2"
-            onClick={() => setOpened(true)}
+            onClick={() => {
+              if (opened) resource.retry();
+              else setOpened(true);
+            }}
           >
             {glossaryIdLabel(target)}
           </button>

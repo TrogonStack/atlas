@@ -87,6 +87,15 @@ pub(crate) struct WriterLease {
 }
 
 impl WriterLease {
+    pub(super) async fn read_identity(kv: &KvStore) -> StoreResult<Option<(String, u64)>> {
+        let Some(entry) = live_entry(kv_entry_timeout(kv, LEASE_KEY.into()).await?) else {
+            return Ok(None);
+        };
+        let row = LeaseRow::decode(entry.value)
+            .map_err(|_| StoreError::Unavailable("invalid writer lease".into()))?;
+        Ok(Some((row.holder_id, row.epoch)))
+    }
+
     pub(super) fn publication_identity(&self) -> StoreResult<(String, Epoch)> {
         if !self.is_writer() {
             return Err(StoreError::NotWriter {

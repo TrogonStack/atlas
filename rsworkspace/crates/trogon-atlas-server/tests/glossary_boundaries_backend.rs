@@ -40,6 +40,17 @@ async fn client() -> Client {
 }
 
 async fn client_with_store(store: Arc<dyn trogon_atlas_store::Store>) -> Client {
+    client_with_store_and_directory(
+        store,
+        Arc::new(trogon_atlas_server::ownership::NamespaceDirectory::new()),
+    )
+    .await
+}
+
+async fn client_with_store_and_directory(
+    store: Arc<dyn trogon_atlas_store::Store>,
+    directory: Arc<trogon_atlas_server::ownership::NamespaceDirectory>,
+) -> Client {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let registry = TokenRegistry::from_file_contents(
@@ -60,7 +71,9 @@ tokens = ["{LIMITED}"]
         .unwrap(),
     )
     .unwrap();
-    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
+    let service =
+        EventModelServiceImpl::try_new_with_directory(store, directory, ServerMetrics::default())
+            .unwrap();
     let grpc = InterceptedService::new(
         tower::ServiceBuilder::new()
             .layer(AuthzLayer)
@@ -2245,4 +2258,482 @@ async fn glossary_read_refuses_changed_namespace_authority() {
         "namespace changes must not wait for an evidence scan"
     );
     assert_eq!(result.unwrap_err().code(), Code::Aborted);
+}
+
+#[tokio::test]
+async fn duplicate_batch_glossary_puts_cannot_hide_a_final_replacement_cycle() {
+    for branch in [None, Some("glossary-final-cycle")] {
+        let mut client = client().await;
+        let source = source(&mut client, "shop", "source", None).await;
+        if let Some(branch) = branch {
+            create_branch(&mut client, branch).await;
+        }
+        let first = candidate(&source, "first", 1);
+        let second = candidate(&source, "second", 1);
+        let mut first_cycle = first.clone();
+        let mut second_cycle = second.clone();
+        for (entity, target) in [
+            (&mut first_cycle, id("shop", "second", 1)),
+            (&mut second_cycle, id("shop", "first", 1)),
+        ] {
+            term_mut(entity).glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+                usage: pb::GlossaryUsage::Deprecated as i32,
+                preferred_term: Some(pb::TermRef { id: Some(target) }),
+                rationale: "Use the final preferred definition.".into(),
+                ..Default::default()
+            });
+        }
+        let ops = [first, second, first_cycle, second_cycle]
+            .into_iter()
+            .map(|entity| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(entity),
+                    ..Default::default()
+                })),
+            })
+            .collect::<Vec<_>>();
+        for validate_only in [true, false] {
+            let error = client
+                .batch_mutate(request(
+                    pb::BatchMutateRequest {
+                        ops: ops.clone(),
+                        validate_only,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    branch,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert!(error.message().contains("glossary preferred-term cycle"));
+            for slug in ["first", "second"] {
+                assert_eq!(
+                    client
+                        .get_entity(request(
+                            pb::GetEntityRequest {
+                                kind: pb::EntityKind::Term as i32,
+                                id: Some(id("shop", slug, 1)),
+                            },
+                            ADMIN,
+                            branch,
+                        ))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    Code::NotFound
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn duplicate_batch_glossary_targets_use_the_final_acyclic_put() {
+    for branch in [None, Some("glossary-final-acyclic")] {
+        let mut client = client().await;
+        let source = source(&mut client, "shop", "source", None).await;
+        if let Some(branch) = branch {
+            create_branch(&mut client, branch).await;
+        }
+        let first = candidate(&source, "first", 1);
+        let second = candidate(&source, "second", 1);
+        let mut first_cycle = first.clone();
+        let mut second_cycle = second.clone();
+        for (entity, target) in [
+            (&mut first_cycle, id("shop", "second", 1)),
+            (&mut second_cycle, id("shop", "first", 1)),
+        ] {
+            term_mut(entity).glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+                usage: pb::GlossaryUsage::Deprecated as i32,
+                preferred_term: Some(pb::TermRef { id: Some(target) }),
+                rationale: "Use the final preferred definition.".into(),
+                ..Default::default()
+            });
+        }
+        let ops = [first_cycle, second_cycle, first, second]
+            .into_iter()
+            .map(|entity| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(entity),
+                    ..Default::default()
+                })),
+            })
+            .collect::<Vec<_>>();
+        for validate_only in [true, false] {
+            let response = client
+                .batch_mutate(request(
+                    pb::BatchMutateRequest {
+                        ops: ops.clone(),
+                        validate_only,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    branch,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                response.status,
+                if validate_only {
+                    pb::batch_mutate_response::Status::Validated as i32
+                } else {
+                    pb::batch_mutate_response::Status::Applied as i32
+                }
+            );
+        }
+        for slug in ["first", "second"] {
+            let stored = read(
+                &mut client,
+                pb::EntityKind::Term,
+                &id("shop", slug, 1),
+                branch,
+            )
+            .await;
+            assert!(term(stored.entity.as_ref().unwrap())
+                .glossary
+                .as_ref()
+                .unwrap()
+                .policy
+                .is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn duplicate_batch_glossary_target_deleted_last_is_unavailable() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let replacement = candidate(&source, "replacement", 1);
+    let mut proposed = candidate(&source, "obsolete", 1);
+    term_mut(&mut proposed).glossary.as_mut().unwrap().policy = Some(pb::GlossaryUsagePolicy {
+        usage: pb::GlossaryUsage::Deprecated as i32,
+        preferred_term: Some(pb::TermRef {
+            id: Some(id("shop", "replacement", 1)),
+        }),
+        rationale: "Use the final preferred definition.".into(),
+        ..Default::default()
+    });
+    let mut ops = [replacement, proposed]
+        .into_iter()
+        .map(|entity| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            })),
+        })
+        .collect::<Vec<_>>();
+    ops.push(pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Term as i32,
+            id: Some(id("shop", "replacement", 1)),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        })),
+    });
+    for validate_only in [true, false] {
+        let error = client
+            .batch_mutate(request(
+                pb::BatchMutateRequest {
+                    ops: ops.clone(),
+                    validate_only,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("glossary target is unavailable"));
+        for slug in ["replacement", "obsolete"] {
+            assert_eq!(
+                client
+                    .get_entity(request(
+                        pb::GetEntityRequest {
+                            kind: pb::EntityKind::Term as i32,
+                            id: Some(id("shop", slug, 1)),
+                        },
+                        ADMIN,
+                        None,
+                    ))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::NotFound
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cached_source_provenance_keeps_repeat_revisions_and_tracks_metadata_changes() {
+    use std::sync::atomic::Ordering;
+
+    let store = Arc::new(observed_glossary_store::ObservedGlossaryStore::new(
+        trogon_atlas_testsupport::shared().await.store().await,
+    ));
+    let mut client = client_with_store(store.clone()).await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let content = format!("{SOURCE}\n{}", "a".repeat(230 * 1024));
+    let mut expanded = source.entity.unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut expanded.kind else {
+        panic!("document required");
+    };
+    document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: content.clone(),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+    }));
+    let source = put(&mut client, expanded, &source.etag, None).await;
+    for slug in ["alpha", "beta"] {
+        let mut proposed = candidate(&source, slug, 1);
+        let glossary = term_mut(&mut proposed).glossary.as_mut().unwrap();
+        let mut citation = glossary.evidence[0].clone();
+        citation.content_digest = Some(trogon_atlas_core::specification::content_digest(&content));
+        glossary.evidence = (0..32)
+            .map(|index| pb::GlossaryEvidence {
+                locator: format!("paragraph:{index}"),
+                ..citation.clone()
+            })
+            .collect();
+        put(&mut client, proposed, "", None).await;
+    }
+    store.source_reads.store(0, Ordering::SeqCst);
+    let first = list(&mut client, selection("shop", true), "", READER, None)
+        .await
+        .unwrap();
+    assert!(!first.incomplete);
+    assert_ne!(first.next_page_token, "");
+    assert_eq!(store.source_reads.load(Ordering::SeqCst), 1);
+    let repeated = list(&mut client, selection("shop", true), "", READER, None)
+        .await
+        .unwrap();
+    assert_eq!(repeated, first);
+    assert_eq!(store.source_reads.load(Ordering::SeqCst), 2);
+    let exact = pb::GetGlossaryTermRequest {
+        term: Some(pb::TermRef {
+            id: Some(id("shop", "alpha", 1)),
+        }),
+    };
+    let before = client
+        .get_glossary_definition(request(exact.clone(), READER, None))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut changed = source.entity.unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut changed.kind else {
+        panic!("document required");
+    };
+    document.title.as_mut().unwrap().value = "Updated source metadata".into();
+    put(&mut client, changed, &source.etag, None).await;
+    let after = list(&mut client, selection("shop", true), "", READER, None)
+        .await
+        .unwrap();
+    assert!(!after.incomplete);
+    assert_ne!(after.snapshot_revision, first.snapshot_revision);
+    assert_eq!(
+        list(
+            &mut client,
+            selection("shop", true),
+            &first.next_page_token,
+            READER,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::FailedPrecondition
+    );
+    let after = client
+        .get_glossary_definition(request(exact, READER, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(before.definition, after.definition);
+    assert_eq!(before.etag, after.etag);
+    assert_ne!(before.snapshot_revision, after.snapshot_revision);
+    assert!(after
+        .evidence
+        .iter()
+        .all(|item| item.state == pb::GlossaryEvidenceState::Current as i32));
+}
+
+async fn glossary_refuses_a_commit_from_another_service(
+    role: trogon_atlas_core::WriterRole,
+    branch: Option<&str>,
+) {
+    use std::sync::atomic::Ordering;
+
+    use trogon_atlas_store::Store as _;
+
+    let config = trogon_atlas_testsupport::shared().await.store_config();
+    let writer_store = trogon_atlas_store::NatsStore::connect_with(config.clone())
+        .await
+        .unwrap();
+    assert!(writer_store.is_writer());
+    let mut reader_config = config;
+    reader_config.role = role;
+    let reader_store = trogon_atlas_store::NatsStore::connect_with(reader_config)
+        .await
+        .unwrap();
+    assert!(!reader_store.is_writer());
+    let observed = Arc::new(observed_glossary_store::ObservedGlossaryStore::new(
+        reader_store,
+    ));
+    let mut writer = client_with_store(Arc::new(writer_store)).await;
+    let mut reader = client_with_store(observed.clone()).await;
+    let source = source(&mut writer, "shop", "source", None).await;
+    let original = put(&mut writer, candidate(&source, "purchase", 1), "", None).await;
+    if let Some(branch) = branch {
+        create_branch(&mut writer, branch).await;
+    }
+    observed.pause_source.store(true, Ordering::SeqCst);
+    let read_branch = branch.map(str::to_owned);
+    let read = tokio::spawn(async move {
+        reader
+            .get_glossary_term(request(
+                pb::GetGlossaryTermRequest {
+                    term: Some(pb::TermRef {
+                        id: Some(id("shop", "purchase", 1)),
+                    }),
+                },
+                READER,
+                read_branch.as_deref(),
+            ))
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        observed.reached.notified(),
+    )
+    .await
+    .unwrap();
+    let content = format!("{SOURCE} The source has a new accepted context.");
+    let mut changed_source = source.entity.unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &mut changed_source.kind else {
+        panic!("document required");
+    };
+    document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: content.clone(),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+    }));
+    let mut changed_term = original.entity.unwrap();
+    let term = term_mut(&mut changed_term);
+    term.doc = "A customer request under the newly retained context.".into();
+    term.glossary.as_mut().unwrap().evidence[0].content_digest =
+        Some(trogon_atlas_core::specification::content_digest(&content));
+    let result = writer
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: [(changed_source, source.etag), (changed_term, original.etag)]
+                    .into_iter()
+                    .map(|(entity, etag)| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(entity),
+                            if_match: etag,
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            ADMIN,
+            branch,
+        ))
+        .await;
+    observed.release.notify_one();
+    assert_eq!(
+        result.unwrap().into_inner().status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert_eq!(read.await.unwrap().unwrap_err().code(), Code::Aborted);
+}
+
+#[tokio::test]
+async fn glossary_reader_refuses_a_mixed_commit_from_another_service() {
+    glossary_refuses_a_commit_from_another_service(trogon_atlas_core::WriterRole::Reader, None)
+        .await;
+}
+
+#[tokio::test]
+async fn glossary_standby_refuses_a_mixed_commit_from_another_service() {
+    glossary_refuses_a_commit_from_another_service(trogon_atlas_core::WriterRole::Standby, None)
+        .await;
+}
+
+#[tokio::test]
+async fn glossary_reader_refuses_a_mixed_branch_commit_from_another_service() {
+    glossary_refuses_a_commit_from_another_service(
+        trogon_atlas_core::WriterRole::Reader,
+        Some("glossary-cross-service"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn glossary_reader_refreshes_cached_ownership_after_a_remote_move() {
+    let config = trogon_atlas_testsupport::shared().await.store_config();
+    let writer_store = trogon_atlas_store::NatsStore::connect_with(config.clone())
+        .await
+        .unwrap();
+    let mut reader_config = config;
+    reader_config.role = trogon_atlas_core::WriterRole::Reader;
+    let reader_store = trogon_atlas_store::NatsStore::connect_with(reader_config)
+        .await
+        .unwrap();
+    let mut writer = client_with_store(Arc::new(writer_store)).await;
+    let directory = Arc::new(
+        trogon_atlas_server::ownership::NamespaceDirectory::with_freshness(
+            trogon_atlas_server::token_reload::ReloadInterval::from_secs(0),
+        ),
+    );
+    let mut reader = client_with_store_and_directory(Arc::new(reader_store), directory).await;
+    let source = source(&mut writer, "shop", "source", None).await;
+    put(&mut writer, candidate(&source, "purchase", 1), "", None).await;
+    writer
+        .move_namespace(request(
+            pb::MoveNamespaceRequest {
+                id: "shop".into(),
+                parent: "visible".into(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let query = pb::GetGlossaryTermRequest {
+        term: Some(pb::TermRef {
+            id: Some(id("shop", "purchase", 1)),
+        }),
+    };
+    reader
+        .get_glossary_term(request(query.clone(), LIMITED, None))
+        .await
+        .unwrap();
+    writer
+        .move_namespace(request(
+            pb::MoveNamespaceRequest {
+                id: "shop".into(),
+                parent: "hidden".into(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        reader
+            .get_glossary_term(request(query, LIMITED, None))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
 }

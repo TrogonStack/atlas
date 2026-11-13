@@ -1884,3 +1884,65 @@ async fn source_store_review_recovery_and_publish_share_finalization_on_baseline
         source_store_review_history(&store, &marker).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn source_publication_serializes_batch_recovery_and_later_native_writes() {
+    let configuration = config(&trogon_atlas_testsupport::shared().await.url);
+    let store = NatsStore::connect_with(configuration).await.unwrap();
+    let publication = publication_fixture(&store, None).await;
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let publishing_store =
+        store
+            .clone()
+            .with_source_publication_observer(Arc::new(PausePublication {
+                entered: entered.clone(),
+                resume: resume.clone(),
+            }));
+    let publishing =
+        tokio::spawn(async move { publishing_store.source_publish(&publication).await });
+    entered.wait();
+    let recovering_store = store.clone();
+    let recovery = tokio::spawn(async move {
+        recovering_store
+            .recover_batches(trogon_atlas_store::recovery::RecoveryPolicy::repair_all())
+            .await
+    });
+    let writing_store = store.clone();
+    let writing = tokio::spawn(async move {
+        writing_store
+            .put(
+                pb::EntityKind::ReadModel,
+                &entity("later"),
+                false,
+                WriteContext::baseline(),
+            )
+            .await
+    });
+    resume.wait();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        assert!(matches!(
+            publishing.await.unwrap().unwrap(),
+            SourcePublicationOutcome::Committed(_)
+        ));
+        assert!(recovery.await.unwrap().unwrap().is_converged());
+        writing.await.unwrap().unwrap();
+    })
+    .await
+    .expect("source publication and recovery share the same lock order");
+    let stored = store
+        .get(
+            pb::EntityKind::ReadModel,
+            &pb::Id {
+                namespace: "fixture".into(),
+                slug: "read-model".into(),
+                version: 1,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(stored.entity.kind, Some(pb::entity::Kind::ReadModel(read_model)) if read_model.title == "later")
+    );
+}

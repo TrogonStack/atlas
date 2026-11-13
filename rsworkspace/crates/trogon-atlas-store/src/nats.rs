@@ -22,11 +22,11 @@
 //!     so it is the only place a pre-image survives the write that replaced
 //!     it.
 //!
-//!   - KV bucket (default `trogon-atlas-batches`): the journal of baseline
-//!     batches that have not finished. See `nats_journal.rs`.
+//!   - KV bucket (default `trogon-atlas-batches`): the journal of baseline and branch
+//!     batches and branch maintenance that have not finished. See `nats_journal.rs`.
 //!
 //! `batch_apply` is implemented sequentially; NATS KV does not offer
-//! multi-key transactions. A baseline batch is made recoverable instead:
+//! multi-key transactions. A batch is made recoverable instead:
 //! its journal entry carries the prior image of every key it touches, and
 //! [`Store::recover_batches`] rolls an interrupted batch back if it never
 //! committed or forward if it did. On an inline rollback failure,
@@ -500,6 +500,7 @@ pub struct NatsStore {
     lease_kv: KvStore,
     source_document_lock: Arc<tokio::sync::Mutex<()>>,
     source_native_lock: Arc<tokio::sync::RwLock<()>>,
+    native_mutation_lock: Arc<tokio::sync::Mutex<()>>,
     source_observer: Option<Arc<dyn crate::source::SourcePublicationObserver>>,
     inflight_journals: Arc<journal::InflightJournals>,
     #[cfg(test)]
@@ -771,6 +772,7 @@ impl NatsStore {
             lease_kv,
             source_document_lock: Arc::default(),
             source_native_lock: Arc::default(),
+            native_mutation_lock: Arc::default(),
             source_observer: None,
             inflight_journals: Arc::default(),
             #[cfg(test)]
@@ -1512,6 +1514,7 @@ impl NatsStore {
             let Some(entry) = live_entry(entry) else {
                 continue;
             };
+            byte_budget.charge(entry.value.len())?;
             let delta = decode_branch_delta(&entry.value)?;
             let group = (kind, id.namespace.clone(), id.slug.clone(), id.version);
             if delta.tombstone {
@@ -1522,7 +1525,6 @@ impl NatsStore {
                 merged.remove(&group);
                 continue;
             };
-            byte_budget.charge(ours.encoded_len())?;
             merged.insert(
                 group,
                 StoredEntity {
@@ -1630,212 +1632,6 @@ impl NatsStore {
         Ok(())
     }
 
-    /// Branch-scoped `batch_apply`: applies each op sequentially against the
-    /// branch's delta bucket via the same `Store::create`/`put`/`delete`
-    /// entry points used for single-entity branch writes, so the merged-view
-    /// semantics (no-op detection, base capture, tombstones) are identical
-    /// to the single-op path. On the first failure, every delta already
-    /// written by this batch is restored to its pre-batch state (or removed,
-    /// if the key had no delta before the batch started). Because branch
-    /// deltas are never observed by the change feed, there is no deferred
-    /// `record_change` phase here (unlike the baseline `batch_apply`).
-    async fn batch_apply_branch(
-        &self,
-        ops: &[MutationOp],
-        ctx: WriteContext<'_>,
-    ) -> StoreResult<Vec<MutationOutcome>> {
-        let branch = ctx.branch_name().ok_or_else(|| {
-            StoreError::InvalidArgument("batch_apply_branch: context carries no branch".into())
-        })?;
-        // Snapshot each touched key's pre-batch delta row (as raw encoded
-        // bytes + revision) so a failure can restore it exactly, the same
-        // compensating-write strategy as the baseline `batch_apply`.
-        let mut snapshot: BTreeMap<String, Option<(bytes::Bytes, u64)>> = BTreeMap::new();
-        for (i, op) in ops.iter().enumerate() {
-            let (kind, id) = match op {
-                MutationOp::Create { kind, entity } | MutationOp::Put { kind, entity, .. } => {
-                    let id = Self::validate(*kind, entity).map_err(|source| {
-                        StoreError::BatchFailed {
-                            index: i,
-                            source: Box::new(source),
-                        }
-                    })?;
-                    (*kind, id.clone())
-                }
-                MutationOp::Delete { kind, id, .. } => (*kind, id.clone()),
-            };
-            let key = branch_delta_key(branch, kind, &id);
-            if let std::collections::btree_map::Entry::Vacant(slot) = snapshot.entry(key.clone()) {
-                let prior = kv_entry_timeout(&self.branches_kv, key.clone())
-                    .await
-                    .map_err(|source| StoreError::BatchFailed {
-                        index: i,
-                        source: Box::new(source),
-                    })?;
-                slot.insert(live_entry(prior).map(|e| (e.value, e.revision)));
-            }
-        }
-
-        let rollback = |snapshot: &BTreeMap<String, Option<(bytes::Bytes, u64)>>| {
-            let snapshot = snapshot.clone();
-            let branches_kv = self.branches_kv.clone();
-            async move {
-                let mut failed_keys: Vec<String> = Vec::new();
-                for (key, prior) in snapshot {
-                    let current_rev = match kv_entry_timeout(&branches_kv, key.clone()).await {
-                        Ok(entry) => live_entry(entry).map(|e| e.revision),
-                        Err(err) => {
-                            tracing::error!(
-                                error = %err,
-                                key = %key,
-                                "batch_apply_branch rollback: kv.entry failed; branch may be partially applied"
-                            );
-                            failed_keys.push(key);
-                            continue;
-                        }
-                    };
-                    let restore_result = match (prior, current_rev) {
-                        (Some((bytes, _snapshot_rev)), Some(rev)) => tokio::time::timeout(
-                            KV_OP_TIMEOUT,
-                            branches_kv.update(&key, bytes, rev),
-                        )
-                        .await
-                        .map_err(|_| "timeout".to_string())
-                        .and_then(|r| r.map(|_| ()).map_err(|e| e.to_string())),
-                        (Some((bytes, _)), None) => {
-                            tokio::time::timeout(KV_OP_TIMEOUT, branches_kv.create(&key, bytes))
-                                .await
-                                .map_err(|_| "timeout".to_string())
-                                .and_then(|r| r.map(|_| ()).map_err(|e| e.to_string()))
-                        }
-                        (None, Some(_)) => {
-                            tokio::time::timeout(KV_OP_TIMEOUT, branches_kv.delete(&key))
-                                .await
-                                .map_err(|_| "timeout".to_string())
-                                .and_then(|r| r.map_err(|e| e.to_string()))
-                        }
-                        (None, None) => Ok(()),
-                    };
-                    if let Err(e) = restore_result {
-                        tracing::error!(
-                            error = %e,
-                            key = %key,
-                            "batch_apply_branch rollback restore failed"
-                        );
-                        failed_keys.push(key);
-                    }
-                }
-                failed_keys
-            }
-        };
-
-        let mut outcomes: Vec<MutationOutcome> = Vec::with_capacity(ops.len());
-        let mut applied_keys: BTreeSet<String> = BTreeSet::new();
-        // Each delegated write records its own revision as it lands, so an
-        // aborted batch has to unwind those rows along with the delta rows
-        // it is already compensating for. Otherwise history would keep
-        // claiming edits that were rolled back, under a changeset id the
-        // failed RPC never appended.
-        let mut applied_refs: Vec<(EntityKind, Id)> = Vec::with_capacity(ops.len());
-        for (i, op) in ops.iter().enumerate() {
-            let op_ref = match op {
-                MutationOp::Create { kind, entity } | MutationOp::Put { kind, entity, .. } => {
-                    Self::validate(*kind, entity)
-                        .ok()
-                        .map(|id| (*kind, id.clone()))
-                }
-                MutationOp::Delete { kind, id, .. } => Some((*kind, id.clone())),
-            };
-            let op_key = op_ref
-                .as_ref()
-                .map(|(kind, id)| branch_delta_key(branch, *kind, id));
-            let result: StoreResult<MutationOutcome> = match op {
-                MutationOp::Create { kind, entity } => Store::create(self, *kind, entity, ctx)
-                    .await
-                    .map(|w| MutationOutcome::Wrote {
-                        etag: w.etag,
-                        entity: w.entity,
-                    }),
-                MutationOp::Put {
-                    kind,
-                    entity,
-                    if_match,
-                    force,
-                } => match if_match {
-                    None => Store::put(self, *kind, entity, *force, ctx).await.map(|w| {
-                        if w.wrote {
-                            MutationOutcome::Wrote {
-                                etag: w.etag,
-                                entity: w.entity,
-                            }
-                        } else {
-                            MutationOutcome::Noop {
-                                etag: w.etag,
-                                entity: w.entity,
-                            }
-                        }
-                    }),
-                    Some(exp) => Store::update(self, *kind, entity, exp, *force, ctx)
-                        .await
-                        .map(|w| {
-                            if w.wrote {
-                                MutationOutcome::Wrote {
-                                    etag: w.etag,
-                                    entity: w.entity,
-                                }
-                            } else {
-                                MutationOutcome::Noop {
-                                    etag: w.etag,
-                                    entity: w.entity,
-                                }
-                            }
-                        }),
-                },
-                MutationOp::Delete { kind, id, if_match } => {
-                    Store::delete(self, *kind, id, if_match.as_deref(), ctx)
-                        .await
-                        .map(|()| MutationOutcome::Deleted)
-                }
-            };
-            match result {
-                Ok(outcome) => {
-                    if !matches!(outcome, MutationOutcome::Noop { .. }) {
-                        if let Some(key) = op_key {
-                            applied_keys.insert(key);
-                        }
-                        if let Some(entity_ref) = op_ref {
-                            applied_refs.push(entity_ref);
-                        }
-                    }
-                    outcomes.push(outcome);
-                }
-                Err(source) => {
-                    let to_rollback: BTreeMap<_, _> = snapshot
-                        .iter()
-                        .filter(|(k, _)| applied_keys.contains(k.as_str()))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    let failed_keys = rollback(&to_rollback).await;
-                    self.purge_revisions(ctx, &applied_refs).await;
-                    if !failed_keys.is_empty() {
-                        return Err(StoreError::BatchFailed {
-                            index: i,
-                            source: Box::new(StoreError::PartialApply {
-                                keys: failed_keys,
-                                journal: None,
-                            }),
-                        });
-                    }
-                    return Err(StoreError::BatchFailed {
-                        index: i,
-                        source: Box::new(source),
-                    });
-                }
-            }
-        }
-        Ok(outcomes)
-    }
-
     /// Append the revision row for one entity a write touched.
     ///
     /// A no-op for an unattributed write: the row is keyed by changeset id,
@@ -1907,9 +1703,8 @@ impl NatsStore {
         key: &str,
         latest: trogon_atlas_proto::EntityRevision,
     ) -> Result<(), String> {
-        let entry = tokio::time::timeout(KV_OP_TIMEOUT, self.revisions_kv.entry(key))
+        let entry = kv_entry_timeout(&self.revisions_kv, key.to_owned())
             .await
-            .map_err(|_| "timeout".to_string())?
             .map_err(|e| e.to_string())?;
         let Some(existing) = live_entry(entry) else {
             return Ok(());
@@ -1930,32 +1725,6 @@ impl NatsStore {
         .map_err(|_| "timeout".to_string())?
         .map(|_| ())
         .map_err(|e| e.to_string())
-    }
-
-    /// Drop the revision rows a rolled-back batch already appended.
-    ///
-    /// Best effort, in the same spirit as the delta-row rollback it runs
-    /// beside: a row that survives points at a changeset the failed RPC
-    /// never appended, so it is a phantom entry in one entity's history
-    /// rather than a corrupt one.
-    async fn purge_revisions(&self, ctx: WriteContext<'_>, applied: &[(EntityKind, Id)]) {
-        let Some(changeset) = ctx.changeset() else {
-            return;
-        };
-        for (kind, id) in applied {
-            let key = revision_key(ctx.branch_name(), *kind, id, changeset.id);
-            let purged = tokio::time::timeout(KV_OP_TIMEOUT, self.revisions_kv.delete(&key))
-                .await
-                .map_err(|_| "timeout".to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()));
-            if let Err(error) = purged {
-                tracing::error!(
-                    key = %key,
-                    error = %error,
-                    "purge_revisions failed; a rolled-back write left a revision row behind"
-                );
-            }
-        }
     }
 
     /// Count live delta rows for `branch`. Used to populate
@@ -2027,10 +1796,9 @@ fn live_entry(entry: Option<KvEntry>) -> Option<KvEntry> {
 
 /// Wraps `kv.entry` with `KV_OP_TIMEOUT`, mapping a timeout to `Backend`.
 async fn kv_entry_timeout(kv: &KvStore, key: String) -> StoreResult<Option<KvEntry>> {
-    tokio::time::timeout(KV_OP_TIMEOUT, kv.entry(key.clone()))
+    tokio::time::timeout(KV_OP_TIMEOUT, leader_read::entry(kv, key.clone()))
         .await
         .map_err(|_| StoreError::Backend(format!("kv.entry {key}: timeout")))?
-        .map_err(|e| StoreError::Backend(format!("kv.entry {key}: {e}")))
 }
 
 /// Live revision string for `EtagMismatch.found` after a CAS race. Re-reads
@@ -2977,6 +2745,10 @@ fn escape_subject_token(s: &str) -> String {
 
 #[async_trait]
 impl Store for NatsStore {
+    async fn read_marker(&self) -> StoreResult<crate::StoreReadMarker> {
+        self.capture_read_marker().await
+    }
+
     fn artifact_publication_authority(
         &self,
     ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
@@ -3087,7 +2859,7 @@ impl Store for NatsStore {
         entity: &Entity,
         ctx: WriteContext<'_>,
     ) -> StoreResult<Written> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let id = Self::validate(kind, entity)?.clone();
             if let Some(branch) = ctx.branch_name() {
@@ -3264,7 +3036,7 @@ impl Store for NatsStore {
         force: bool,
         ctx: WriteContext<'_>,
     ) -> StoreResult<Written> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let id = Self::validate(kind, entity)?.clone();
             if let Some(branch) = ctx.branch_name() {
@@ -3363,7 +3135,7 @@ impl Store for NatsStore {
         force: bool,
         ctx: WriteContext<'_>,
     ) -> StoreResult<Written> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let id = Self::validate(kind, entity)?.clone();
             if let Some(branch) = ctx.branch_name() {
@@ -3533,7 +3305,7 @@ impl Store for NatsStore {
         expected_etag: Option<&str>,
         ctx: WriteContext<'_>,
     ) -> StoreResult<()> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
         self.require_writer()?;
         if let Some(branch) = ctx.branch_name() {
             let expected_etag = expected_etag.map(str::to_string);
@@ -4171,7 +3943,7 @@ impl Store for NatsStore {
         ops: &[MutationOp],
         ctx: WriteContext<'_>,
     ) -> StoreResult<Vec<MutationOutcome>> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
         self.require_writer()?;
         if ops.len() > BATCH_APPLY_MAX_OPS {
             return Err(StoreError::InvalidArgument(format!(
@@ -4705,8 +4477,26 @@ impl Store for NatsStore {
         &self,
         policy: crate::recovery::RecoveryPolicy,
     ) -> StoreResult<crate::recovery::BatchRecoveryReport> {
-        self.source_guarded(async { self.recover_journaled_batches(policy).await })
-            .await
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| native_fence::blocked())?;
+        let (before, gate) = self.load_source_gate().await?;
+        if gate.busy {
+            return Err(native_fence::blocked());
+        }
+        let result = self
+            .mutation_scope(
+                &mutation,
+                self.source_finalize_scope(self.recover_journaled_batches(policy)),
+            )
+            .await;
+        let (after, gate) = self.load_source_gate().await?;
+        if gate.busy || before != after {
+            return Err(native_fence::blocked());
+        }
+        result
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ChangeRecord> {
@@ -4838,7 +4628,7 @@ impl Store for NatsStore {
     }
 
     async fn put_protection(&self, record: &ProtectionRecord) -> StoreResult<ProtectionRevision> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let key = crate::key::protection_key(&record.identity);
             let bytes = Bytes::from(record.to_proto().encode_to_vec());
@@ -4868,7 +4658,7 @@ impl Store for NatsStore {
         identity: &EntityIdentity,
         expected: ProtectionRevision,
     ) -> StoreResult<()> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let key = crate::key::protection_key(identity);
             match tokio::time::timeout(
@@ -5162,7 +4952,7 @@ impl Store for NatsStore {
     }
 
     async fn create_branch(&self, name: &str, doc: &str) -> StoreResult<BranchInfo> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             if crate::key::is_reserved_branch_name(name) {
                 return Err(StoreError::InvalidArgument(format!(
@@ -5202,7 +4992,7 @@ impl Store for NatsStore {
     }
 
     async fn set_branch_fork_point(&self, name: &str, fork_changeset_id: &str) -> StoreResult<()> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             validate_changeset_id(fork_changeset_id)?;
             let meta_key = branch_meta_key(name);
@@ -5272,55 +5062,54 @@ impl Store for NatsStore {
     }
 
     async fn delete_branch(&self, name: &str) -> StoreResult<()> {
-        self.source_guarded(async {
-        self.require_writer()?;
-        let meta_key = branch_meta_key(name);
-        let meta_entry = kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?;
-        if live_entry(meta_entry).is_none() {
-            return Err(StoreError::NotFound);
-        }
+        self.model_write_guarded(async {
+            self.require_writer()?;
+            let meta_key = branch_meta_key(name);
+            let meta_entry = kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?;
+            let meta_entry = live_entry(meta_entry).ok_or(StoreError::NotFound)?;
 
-        let prefix = branch_delta_prefix(name);
-        let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.keys())
-            .await
-            .map_err(|_| StoreError::Backend("branch kv.keys: timeout".into()))?
-            .map_err(|e| StoreError::Backend(format!("branch kv.keys: {e}")))?;
-        let mut delta_keys: Vec<String> = Vec::new();
-        loop {
-            let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+            let prefix = branch_delta_prefix(name);
+            let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.keys())
                 .await
-                .map_err(|_| {
-                    StoreError::Backend(
-                        "branch kv.keys stream: timeout waiting for next key".into(),
-                    )
-                })?;
-            let Some(item) = next else { break };
-            let key =
-                item.map_err(|e| StoreError::Backend(format!("branch kv.keys stream: {e}")))?;
-            if key.starts_with(&prefix) {
-                delta_keys.push(key);
+                .map_err(|_| StoreError::Backend("branch kv.keys: timeout".into()))?
+                .map_err(|e| StoreError::Backend(format!("branch kv.keys: {e}")))?;
+            let mut delta_keys: Vec<String> = Vec::new();
+            loop {
+                let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+                    .await
+                    .map_err(|_| {
+                        StoreError::Backend(
+                            "branch kv.keys stream: timeout waiting for next key".into(),
+                        )
+                    })?;
+                let Some(item) = next else { break };
+                let key =
+                    item.map_err(|e| StoreError::Backend(format!("branch kv.keys stream: {e}")))?;
+                if key.starts_with(&prefix) {
+                    delta_keys.push(key);
+                }
             }
-        }
 
-        for key in delta_keys {
-            if let Err(e) = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&key))
-                .await
-                .map_err(|_| "timeout".to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()))
-            {
-                tracing::error!(
-                    key = %key,
-                    error = %e,
-                    "delete_branch: failed to purge delta row; branch may be left with orphaned deltas"
-                );
+            let mut pending = Vec::new();
+            for key in delta_keys {
+                if let Some(entry) =
+                    live_entry(kv_entry_timeout(&self.branches_kv, key.clone()).await?)
+                {
+                    pending.push(branch_journal::BranchMutation {
+                        key,
+                        revision: entry.revision,
+                        value: None,
+                    });
+                }
             }
-        }
-        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&meta_key))
-            .await
-            .map_err(|_| StoreError::Backend(format!("branch kv.purge {meta_key}: timeout")))?
-            .map_err(|e| StoreError::Backend(format!("branch kv.purge {meta_key}: {e}")))?;
-        Ok(())
-        }).await
+            pending.push(branch_journal::BranchMutation {
+                key: meta_key,
+                revision: meta_entry.revision,
+                value: None,
+            });
+            self.apply_branch_maintenance(name, pending).await
+        })
+        .await
     }
 
     async fn list_branch_deltas(&self, branch: &str) -> StoreResult<Vec<BranchDeltaEntry>> {
@@ -5358,7 +5147,7 @@ impl Store for NatsStore {
         ops: &[BranchLandOp],
         ctx: WriteContext<'_>,
     ) -> StoreResult<Vec<MutationOutcome>> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             // Snapshot the prior baseline state of every touched key so a
             // failure partway through can be rolled back. Also verify the
@@ -5416,8 +5205,8 @@ impl Store for NatsStore {
             }
 
             let mut outcomes: Vec<MutationOutcome> = Vec::with_capacity(ops.len());
-            let mut deferred: Vec<Revision> = Vec::with_capacity(ops.len());
-            let mut landed_keys: Vec<(EntityKind, Id)> = Vec::with_capacity(ops.len());
+            let mut applied_keys = BTreeSet::new();
+            let mut changes = Vec::new();
             // The pre-image of a landing is the baseline row the merge replaced,
             // which the rollback snapshot above already holds.
             let baseline_before = |kind: EntityKind, id: &Id| -> Option<Entity> {
@@ -5449,7 +5238,51 @@ impl Store for NatsStore {
                 })
                 .collect::<StoreResult<Vec<_>>>()?;
 
+            if ops.is_empty() {
+                return Ok(Vec::new());
+            }
+            let priors: Vec<_> = snapshot
+                .iter()
+                .map(|(key, before)| {
+                    journal::JournalPrior::new(
+                        key.clone(),
+                        before.as_ref().map(|(_, revision)| *revision),
+                        before.as_ref().map(|(entity, _)| entity.clone()),
+                    )
+                })
+                .collect();
+            let mut cleanup = Vec::new();
+            for op in ops {
+                let (kind, id) = match op {
+                    BranchLandOp::Put { kind, ours, .. } => {
+                        (*kind, Self::validate(*kind, ours)?.clone())
+                    }
+                    BranchLandOp::Delete { kind, id, .. } => (*kind, id.clone()),
+                };
+                let key = branch_delta_key(branch, kind, &id);
+                if let Some(entry) =
+                    live_entry(kv_entry_timeout(&self.branches_kv, key.clone()).await?)
+                {
+                    cleanup.push(journal::BranchCleanup {
+                        key,
+                        revision: entry.revision,
+                    });
+                }
+            }
+            let mut batch_journal = self
+                .begin_scoped_journal(ctx, priors.clone(), false, cleanup)
+                .await?;
+            let faults = self.faults();
             for (i, op) in ops.iter().enumerate() {
+                if faults.crash_after_writes == Some(i) {
+                    return Err(journal::injected("crash"));
+                }
+                let op_key = match op {
+                    BranchLandOp::Put { kind, ours, .. } => {
+                        entity_key(*kind, Self::validate(*kind, ours)?)
+                    }
+                    BranchLandOp::Delete { kind, id, .. } => entity_key(*kind, id),
+                };
                 let result: StoreResult<(MutationOutcome, Revision)> = match op {
                     BranchLandOp::Put {
                         kind,
@@ -5613,21 +5446,22 @@ impl Store for NatsStore {
 
                 match result {
                     Ok((outcome, revision)) => {
-                        landed_keys.push((revision.kind, revision.id.clone()));
-                        deferred.push(revision);
+                        applied_keys.insert(op_key.clone());
+                        let etag = match &outcome {
+                            MutationOutcome::Wrote { etag, .. } => etag.parse().unwrap_or_default(),
+                            _ => 0,
+                        };
+                        changes.push(journal::JournalChange::landed(op_key, &revision, etag));
                         outcomes.push(outcome);
                     }
                     Err(source) => {
-                        let failed_keys = rollback_baseline_snapshot(&snapshot, &self.kv).await;
-                        if !failed_keys.is_empty() {
-                            return Err(StoreError::BatchFailed {
-                                index: i,
-                                source: Box::new(StoreError::PartialApply {
-                                    keys: failed_keys,
-                                    journal: None,
-                                }),
-                            });
+                        if matches!(source, StoreError::Backend(_) | StoreError::Unavailable(_)) {
+                            applied_keys.insert(op_key);
                         }
+                        let source = self
+                            .undo_batch(batch_journal, &priors, &applied_keys)
+                            .await
+                            .unwrap_or(source);
                         return Err(StoreError::BatchFailed {
                             index: i,
                             source: Box::new(source),
@@ -5636,61 +5470,22 @@ impl Store for NatsStore {
                 }
             }
 
-            // Every KV write committed. Publish ordinary baseline change events
-            // (a merge landing is an ordinary baseline write for every purpose
-            // downstream: change feed, git mirror, search index -- see
-            // docs/explanation/branching.md).
-            for revision in deferred {
-                let eref = revision.entity_ref();
-                match self
-                    .record_change(revision.change, &eref, ctx.changeset())
+            if faults.crash_after_writes == Some(ops.len()) {
+                return Err(journal::injected("crash"));
+            }
+            if let Err(error) = batch_journal.commit(changes).await {
+                return Err(self
+                    .undo_batch(batch_journal, &priors, &applied_keys)
                     .await
-                {
-                    Ok(_) => {}
-                    Err(StoreError::ChangeEventLost) => {
-                        self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                        self.config.metrics.record_change_event_lost();
-                        tracing::error!(
-                            entity_ref = ?eref,
-                            "land_branch_merge: change event lost after successful KV write"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            error = %e,
-                            entity_ref = ?eref,
-                            "land_branch_merge: unexpected error publishing change event"
-                        );
-                    }
-                }
-                // Baseline history, not branch history: `ctx` is the merge RPC's
-                // own baseline context, so the revision lands on the baseline log
-                // beside every other baseline write.
-                self.record_revision(ctx, &revision).await;
+                    .unwrap_or(error));
             }
-
-            // Purge the landed delta rows -- these keys are now ordinary
-            // baseline entities/tombstones, so the branch overlay for them must
-            // disappear. Best-effort: a failure here leaves an orphaned delta
-            // that a later diff/merge will simply see as CONVERGED (ours now
-            // equals the freshly-landed baseline) or re-detect cleanly.
-            for (kind, id) in landed_keys {
-                let delta_key = branch_delta_key(branch, kind, &id);
-                if let Err(e) =
-                    tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
-                        .await
-                        .map_err(|_| "timeout".to_string())
-                        .and_then(|r| r.map_err(|e| e.to_string()))
-                {
-                    tracing::error!(
-                        key = %delta_key,
-                        error = %e,
-                        "land_branch_merge: failed to purge landed delta row; \
-                         branch may retain a stale (now-converged) delta"
-                    );
-                }
+            if faults.crash_after_commit {
+                return Err(journal::injected("crash"));
             }
-
+            if let Err(error) = self.publish_owned_journal(batch_journal, &priors).await {
+                self.config.metrics.record_batch_pending_recovery();
+                tracing::warn!(%error, "branch merge publication remains pending recovery");
+            }
             Ok(outcomes)
         })
         .await
@@ -5701,7 +5496,7 @@ impl Store for NatsStore {
         branch: &str,
         rebases: &[(EntityKind, Id, Option<(Entity, String)>)],
     ) -> StoreResult<u32> {
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             self.require_writer()?;
             let mut pending = Vec::new();
             for (kind, id, new_base) in rebases {
@@ -5742,31 +5537,15 @@ impl Store for NatsStore {
             }
             let count = u32::try_from(pending.len())
                 .map_err(|_| StoreError::InvalidArgument("too many branch rebases".into()))?;
-            for (key, revision, bytes) in pending {
-                match bytes {
-                    Some(bytes) => {
-                        tokio::time::timeout(
-                            KV_OP_TIMEOUT,
-                            self.branches_kv.update(&key, bytes, revision),
-                        )
-                        .await
-                        .map_err(|_| {
-                            StoreError::Backend(format!("branch kv.update {key}: timeout"))
-                        })?
-                        .map_err(|e| StoreError::Backend(format!("branch kv.update {key}: {e}")))?;
-                    }
-                    None => {
-                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&key))
-                            .await
-                            .map_err(|_| {
-                                StoreError::Backend(format!("branch kv.purge {key}: timeout"))
-                            })?
-                            .map_err(|e| {
-                                StoreError::Backend(format!("branch kv.purge {key}: {e}"))
-                            })?;
-                    }
-                }
-            }
+            let pending = pending
+                .into_iter()
+                .map(|(key, revision, value)| branch_journal::BranchMutation {
+                    key,
+                    revision,
+                    value,
+                })
+                .collect();
+            self.apply_branch_maintenance(branch, pending).await?;
             Ok(count)
         })
         .await
@@ -5780,7 +5559,7 @@ impl Store for NatsStore {
         take_theirs: bool,
     ) -> StoreResult<()> {
         self.require_writer()?;
-        self.source_guarded(async {
+        self.model_write_guarded(async {
             let delta_key = branch_delta_key(branch, kind, id);
             let Some(entry) =
                 live_entry(kv_entry_timeout(&self.branches_kv, delta_key.clone()).await?)
@@ -5904,9 +5683,7 @@ impl Store for NatsStore {
                     }
                 }
             }
-            if record.branch.is_none() {
-                self.release_published_journal(&record.id).await;
-            }
+            self.release_published_journal(&record.id).await;
             Ok(())
         })
         .await
@@ -6467,6 +6244,18 @@ async fn rollback_baseline_snapshot(
 
 #[path = "nats_journal.rs"]
 mod journal;
+
+#[path = "nats_leader_read.rs"]
+mod leader_read;
+
+#[path = "nats_branch_journal.rs"]
+mod branch_journal;
+
+#[path = "nats_read_marker.rs"]
+mod read_marker;
+
+#[path = "nats_mutation.rs"]
+mod mutation;
 
 #[path = "operations.rs"]
 mod operations;

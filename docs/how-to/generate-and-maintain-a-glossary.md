@@ -31,7 +31,8 @@ steps; supplied snapshots are sufficient for this procedure.
 For a controlled starting corpus, apply the [shipping source manifests](../../examples/manifests/generated-glossary/sources.yaml)
 to an isolated or disposable store. `apply` overwrites drifted entities at these
 fixed identities. Before applying to a shared store, confirm that it holds no
-edited copies of these Documents:
+edited copies of the Project, Domain, Subdomain, BoundedContext or Document
+entities in the manifests:
 
 ```sh
 trogon-atlas apply -f examples/manifests/generated-glossary/sources.yaml

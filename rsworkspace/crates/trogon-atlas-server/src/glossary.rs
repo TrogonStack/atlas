@@ -28,7 +28,25 @@ struct Budget {
     work: usize,
     bytes: usize,
     charged_documents: HashSet<pb::EntityKey>,
-    documents: HashMap<pb::IdKey, Result<Arc<StoredEntity>, Status>>,
+    documents: HashMap<pb::IdKey, Result<Arc<ResolvedDocument>, Status>>,
+}
+
+struct ResolvedDocument {
+    stored: StoredEntity,
+    provenance: [u8; 32],
+}
+
+impl ResolvedDocument {
+    fn new(stored: StoredEntity) -> Self {
+        let mut hash = Sha256::new();
+        hash.update(b"glossary-document-v1");
+        hash.update(Sha256::digest(stored.entity.encode_to_vec()));
+        hash.update(stored.etag.as_bytes());
+        Self {
+            stored,
+            provenance: hash.finalize().into(),
+        }
+    }
 }
 
 impl Budget {
@@ -66,6 +84,7 @@ pub(super) struct GlossaryReadContext {
     pins: super::invariant_admission::Generations,
     snapshot_generation: u64,
     namespace_generation: u64,
+    store_marker: trogon_atlas_store::StoreReadMarker,
 }
 
 struct Entry {
@@ -129,13 +148,22 @@ fn today() -> String {
 }
 
 fn bounded_output<M: Message>(name: &str, message: M) -> Result<M, Status> {
+    let pool = trogon_atlas_core::transcode::TranscodePool::builtin()
+        .map_err(|_| Status::internal("native glossary descriptors are unavailable"))?;
+    bounded_output_with_pool(name, message, &pool)
+}
+
+fn bounded_output_with_pool<M: Message>(
+    name: &str,
+    message: M,
+    pool: &trogon_atlas_core::transcode::TranscodePool,
+) -> Result<M, Status> {
     if message.encoded_len() > 3 * 1024 * 1024 {
         return Err(Status::resource_exhausted(
             "glossary response exceeds 3 MiB",
         ));
     }
-    let value = trogon_atlas_core::transcode::TranscodePool::builtin()
-        .map_err(|_| Status::internal("native glossary descriptors are unavailable"))?
+    let value = pool
         .message_json_value(
             &format!("trogonatlas.api.eventmodel.v1alpha1.{name}"),
             &message,
@@ -182,7 +210,16 @@ impl EventModelServiceImpl {
         &self,
         request: &Request<T>,
     ) -> Result<GlossaryReadContext, Status> {
-        let _guard = self.lock_mutations().await;
+        let store_marker = self.store.read_marker().await.map_err(store_err)?;
+        if !Self::visibility_of(request).is_unrestricted() {
+            let mut namespace_marker = self.glossary_namespace_marker.lock().await;
+            if namespace_marker.as_ref() != Some(store_marker.namespace_marker()) {
+                self.directory.refresh(&*self.store).await?;
+                self.owner_snapshot_cache.write().await.clear();
+                self.owner_reverse_index_cache.write().await.clear();
+                *namespace_marker = Some(store_marker.namespace_marker().clone());
+            }
+        }
         let (visibility, branch) = self.glossary_context(request).await?;
         let incarnation = if let Some(branch) = branch.as_deref() {
             Some(self.require_branch(branch).await?.created_at)
@@ -193,6 +230,7 @@ impl EventModelServiceImpl {
             pins: self.invariant_pins(super::InvariantScope::of(branch.as_deref())),
             snapshot_generation: self.snapshot_generation.load(Ordering::Acquire),
             namespace_generation: self.namespace_generation.load(Ordering::Acquire),
+            store_marker,
             visibility,
             branch,
             incarnation,
@@ -204,13 +242,14 @@ impl EventModelServiceImpl {
         context: &GlossaryReadContext,
         result: Result<T, Status>,
     ) -> Result<T, Status> {
-        let _guard = self.lock_mutations().await;
         let incarnation = if let Some(branch) = context.branch.as_deref() {
             Some(self.require_branch(branch).await?.created_at)
         } else {
             None
         };
-        if incarnation != context.incarnation
+        let store_marker = self.store.read_marker().await.map_err(store_err)?;
+        if store_marker != context.store_marker
+            || incarnation != context.incarnation
             || self.invariant_pins(super::InvariantScope::of(context.branch.as_deref()))
                 != context.pins
             || self.snapshot_generation.load(Ordering::Acquire) != context.snapshot_generation
@@ -238,21 +277,23 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         visibility: &Visibility,
         budget: &mut Budget,
-    ) -> Result<Arc<StoredEntity>, Status> {
+    ) -> Result<Arc<ResolvedDocument>, Status> {
         budget.attempt()?;
         let key = pb::IdKey::new(id);
         if let Some(cached) = budget.documents.get(&key) {
             return cached.clone();
         }
-        let resolved = self
+        let resolved = match self
             .glossary_row(pb::EntityKind::Document, id, branch, visibility)
             .await
-            .map(Arc::new);
-        match &resolved {
-            Ok(row) => budget.source(&row.entity)?,
-            Err(error) if error.code() == tonic::Code::NotFound => {}
-            Err(_) => return resolved,
-        }
+        {
+            Ok(row) => {
+                budget.source(&row.entity)?;
+                Ok(Arc::new(ResolvedDocument::new(row)))
+            }
+            Err(error) if error.code() == tonic::Code::NotFound => Err(error),
+            Err(error) => return Err(error),
+        };
         budget.documents.insert(key, resolved.clone());
         resolved
     }
@@ -307,9 +348,8 @@ impl EventModelServiceImpl {
                 let (source_state, source_reason) =
                     match self.glossary_source(id, branch, visibility, budget).await {
                         Ok(row) => {
-                            hash.update(row.entity.encode_to_vec());
-                            hash.update(row.etag.as_bytes());
-                            if core::verify_evidence(selection, &row.entity).is_ok() {
+                            hash.update(row.provenance);
+                            if core::verify_evidence(selection, &row.stored.entity).is_ok() {
                                 (
                                     pb::GlossaryEvidenceState::Current,
                                     "Exact source evidence resolves",
@@ -621,7 +661,9 @@ impl EventModelServiceImpl {
         visibility: &Visibility,
     ) -> Result<pb::GetGlossaryTermResponse, Status> {
         let entry = self.glossary_read(request, branch, visibility).await?;
-        bounded_output(
+        let namespace = &super::entity_id(&entry.stored.entity)?.namespace;
+        let pool = self.transcode_pool(namespace, branch).await?;
+        bounded_output_with_pool(
             "GetGlossaryTermResponse",
             pb::GetGlossaryTermResponse {
                 entity: Some(entry.stored.entity),
@@ -630,6 +672,7 @@ impl EventModelServiceImpl {
                 evidence: entry.evidence,
                 incomplete: entry.incomplete,
             },
+            &pool,
         )
     }
 
@@ -697,7 +740,8 @@ impl EventModelServiceImpl {
             hash.update(reference.encode_to_vec());
             match self.glossary_source(id, branch, visibility, budget).await {
                 Ok(row) => {
-                    let content = core::retained_document_bytes(&row.entity).map_err(invalid)?;
+                    let content =
+                        core::retained_document_bytes(&row.stored.entity).map_err(invalid)?;
                     bytes = bytes.saturating_add(content.len());
                     if bytes > 1024 * 1024 {
                         return Err(Status::resource_exhausted(
@@ -709,12 +753,11 @@ impl EventModelServiceImpl {
                             Status::invalid_argument("glossary sources require retained UTF-8 text")
                         })?
                         .to_owned();
-                    hash.update(row.entity.encode_to_vec());
-                    hash.update(row.etag.as_bytes());
+                    hash.update(row.provenance);
                     sources.push(pb::GlossarySourceMaterial {
                         document: Some(reference),
-                        owner_uid: uid(&row.entity).into(),
-                        etag: row.etag.clone(),
+                        owner_uid: uid(&row.stored.entity).into(),
+                        etag: row.stored.etag.clone(),
                         content_digest: Some(trogon_atlas_core::specification::content_digest(
                             &text,
                         )),
@@ -1143,6 +1186,7 @@ impl EventModelServiceImpl {
         self.require_visible(visibility, &id.namespace).await?;
         if let Some(meta) = metas
             .iter()
+            .rev()
             .find(|meta| meta.kind == kind && &meta.id == id)
         {
             let mut entity = meta.entity.clone().filter(|_| meta.is_put).ok_or_else(|| {

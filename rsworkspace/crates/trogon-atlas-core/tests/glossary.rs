@@ -656,6 +656,106 @@ fn quoted_exclusions_keep_word_internal_apostrophes_inside_the_delimiters() {
 }
 
 #[test]
+fn rejected_usage_matches_do_not_skip_overlapping_valid_occurrences() {
+    for check in [glossary::check_usage, glossary::check_code_usage] {
+        for (title, text, exclusions) in [
+            ("end to end", "backend to end to end", vec![]),
+            ("é é", "pré é é", vec![]),
+            (
+                "end to end",
+                "end to end to end",
+                vec![glossary::TextRange::new(0, 1).unwrap()],
+            ),
+        ] {
+            let mut candidate = term();
+            candidate.title = title.into();
+            candidate.glossary.as_mut().unwrap().policy = Some(policy());
+            let findings = check(
+                &[candidate],
+                "customer",
+                &date("2026-11-12"),
+                text,
+                &exclusions,
+                false,
+            )
+            .unwrap();
+            assert_eq!(findings.len(), 1, "{text}");
+            assert_eq!(findings[0].range.start(), text.rfind(title).unwrap());
+            assert_eq!(findings[0].matched, title);
+        }
+    }
+}
+
+#[test]
+fn code_quote_exclusions_preserve_rust_lifetimes_and_character_literals() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    for text in [
+        "fn f<'a>(purchase: &'a str) {}",
+        "fn f<'a: 'b, 'b>(purchase: &'a str) {}",
+        "fn f<'a\u{301}>(purchase: &'a\u{301} str) {}",
+        "fn f<'r#scope>(purchase: &'r#scope str) {}",
+        "fn f(purchase: &'static str) {}",
+        "fn f(purchase: &'_ str) {}",
+        "'outer: loop { purchase(); break 'outer; }",
+        "let marker = 'p'; let purchase = \"purchase\";",
+        "let marker = 'é'; purchase();",
+        "const label = 'purchase copy'; purchase();",
+        "const label = { title: 'purchase copy' }; purchase();",
+        "const label = prefix + 'purchase copy'; purchase();",
+        "const label = 'purchase: copy'; purchase();",
+        "const label = 'purchase: loop {}'; purchase();",
+        "const label = prefix + 'purchase; copy'; purchase();",
+        "const label = { title: 'purchase, copy' }; purchase();",
+        "const label = 'purchase: loop { it\\'s valid }'; purchase();",
+        "let result = 'outer: loop { purchase(); break 'outer; };",
+        "let result = 'outer: loop { let ch = 'x'; purchase(); break 'outer; };",
+        "let result = 'outer: loop { let ch = ';'; purchase(); break 'outer; };",
+        "let result = 'outer: loop { let note = \"an ' aside\"; purchase(); break 'outer; };",
+        "type Handler = dyn Fn(purchase: &str) + 'static;",
+    ] {
+        let findings = glossary::check_code_usage(
+            std::slice::from_ref(&candidate),
+            "customer",
+            &date("2026-11-12"),
+            text,
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 1, "{text}");
+        let expected = if text.starts_with("const label") {
+            text.rfind("purchase").unwrap()
+        } else {
+            text.find("purchase").unwrap()
+        };
+        assert_eq!(findings[0].range.start(), expected);
+        assert_eq!(findings[0].matched, "purchase");
+    }
+    assert_eq!(
+        glossary::check_code_usage(
+            std::slice::from_ref(&candidate),
+            "customer",
+            &date("2026-11-12"),
+            "'static",
+            &[],
+            true,
+        )
+        .unwrap(),
+        Vec::new()
+    );
+    assert!(glossary::check_usage(
+        &[candidate],
+        "customer",
+        &date("2026-11-12"),
+        "An unmatched 'static Purchase",
+        &[],
+        true,
+    )
+    .is_err());
+}
+
+#[test]
 fn apostrophes_do_not_make_an_unclosed_single_quoted_exclusion_valid() {
     let mut candidate = term();
     candidate.glossary.as_mut().unwrap().policy = Some(policy());

@@ -3465,9 +3465,18 @@ impl McpServer {
         let mut client = self.client();
         self.ensure_can_mutate(&mut client, request.validate_only)
             .await?;
-        crate::glossary::response(
-            trogon_atlas_client::glossary::review_glossary_term(&mut client, request).await,
-        )
+        let (scope, branch) = self.scope_fields();
+        let response = trogon_atlas_client::glossary::review_glossary_term(&mut client, request)
+            .await
+            .and_then(|mut value| {
+                let fields = value
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("glossary review response is not an object"))?;
+                fields.insert("scope".into(), scope.into());
+                fields.insert("branch".into(), branch.into());
+                Ok(value)
+            });
+        crate::glossary::response(response)
     }
 
     #[tool(

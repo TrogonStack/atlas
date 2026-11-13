@@ -1,10 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{
+    collections::HashMap,
     sync::{atomic::AtomicI64, Arc},
     time::Duration,
 };
 
+use base64::Engine as _;
+use prost::Message as _;
 use rmcp::{
     model::CallToolRequestParams,
     transport::{
@@ -14,6 +17,7 @@ use rmcp::{
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
+use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 use trogon_atlas_server::{
     auth::{BearerAuth, TokenRegistry},
@@ -63,11 +67,263 @@ async fn serve() -> String {
 }
 
 async fn connect(uri: &str, token: &str) -> McpClient {
+    connect_branch(uri, token, None).await
+}
+
+async fn connect_branch(uri: &str, token: &str, branch: Option<&str>) -> McpClient {
+    let mut headers = HashMap::new();
+    if let Some(branch) = branch {
+        headers.insert(
+            "x-trogon-atlas-branch".parse().unwrap(),
+            branch.parse().unwrap(),
+        );
+    }
     ().serve(StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(uri.to_owned()).auth_header(token),
+        StreamableHttpClientTransportConfig::with_uri(uri.to_owned())
+            .auth_header(token)
+            .custom_headers(headers),
     ))
     .await
     .unwrap()
+}
+
+async fn create_branch(client: &McpClient, name: &str) {
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("create_branch").with_arguments(
+                json!({"name": name, "doc": "Controlled glossary branch"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_receipts_preserve_json_and_name_baseline_or_branch_for_preview_and_apply() {
+    let uri = serve().await;
+    let baseline = connect(&uri, REVIEWER).await;
+    let material = source(&baseline, "review-scope", SOURCE, None).await;
+    create_branch(&baseline, "reviewer/glossary-scope").await;
+    let branch = connect_branch(&uri, REVIEWER, Some("reviewer/glossary-scope")).await;
+    for (client, scope, branch_name, slug) in [
+        (&baseline, "baseline", None, "baseline-term"),
+        (
+            &branch,
+            "branch",
+            Some("reviewer/glossary-scope"),
+            "branch-term",
+        ),
+    ] {
+        let draft = candidate(
+            client,
+            "review-scope",
+            slug,
+            "Parcel",
+            "A shipment handled by fulfillment.",
+            &material,
+            json!({"usage": "GLOSSARY_USAGE_ALLOWED"}),
+        )
+        .await;
+        for preview in [true, false] {
+            let reviewed = query(
+                client,
+                "review_glossary_term",
+                json!({
+                    "term": draft["entry"]["term"], "ifMatch": draft["etag"],
+                    "disposition": "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED",
+                    "reason": "Fixture scope review uses the retained source.",
+                    "validateOnly": preview
+                }),
+            )
+            .await;
+            assert_eq!(reviewed["scope"], scope);
+            assert_eq!(reviewed["branch"], json!(branch_name));
+            assert!(reviewed.get("branch").is_some());
+            assert_eq!(
+                reviewed["entity"]["term"]["id"],
+                reference("review-scope", slug)["id"]
+            );
+            assert!(reviewed["entry"].is_object());
+            assert!(reviewed.get("binpb_base64").is_none());
+            assert!(reviewed.get("format").is_none());
+            let current = query(
+                client,
+                "get_glossary_term",
+                json!({"term": reference("review-scope", slug)}),
+            )
+            .await;
+            if preview {
+                assert_eq!(current, draft);
+                assert_ne!(reviewed["entry"]["published"], true);
+            } else {
+                assert_eq!(current["entry"]["published"], true);
+                assert_eq!(current["entity"], reviewed["entity"]);
+                assert!(reviewed["etag"].is_string());
+                assert_eq!(current["etag"], reviewed["etag"]);
+            }
+        }
+    }
+    assert!(baseline
+        .call_tool(
+            CallToolRequestParams::new("get_glossary_term").with_arguments(
+                json!({"request_json": {"term": reference("review-scope", "branch-term")}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        )
+        .await
+        .is_err());
+    branch.cancel().await.unwrap();
+    baseline.cancel().await.unwrap();
+}
+
+async fn tenant_term(client: &McpClient, namespace: &str, prefix: &str) -> Value {
+    call(
+        client,
+        "put_entity_json",
+        json!({"create_only": true, "entity_json": {"typeLibrary": {
+            "id": reference(namespace, prefix)["id"], "title": "Glossary note types",
+            "files": [{"path": "glossary/note.proto", "content": format!(
+                "syntax = \"proto3\"; package {prefix}.v1; message Note {{ string value = 1; uint64 revision = 2; }}"
+            )}]
+        }}}),
+    )
+    .await;
+    let metadata = json!({
+        "@type": format!("type.googleapis.com/{prefix}.v1.Note"),
+        "value": "A tenant-specific vocabulary note.", "revision": "9007199254740993"
+    });
+    call(
+        client,
+        "put_entity_json",
+        json!({"create_only": true, "entity_json": {"term": {
+            "id": reference(namespace, "parcel")["id"], "title": "Parcel",
+            "doc": "A retained vocabulary term with tenant metadata.", "metadata": [metadata]
+        }}}),
+    )
+    .await;
+    let ordinary = call(
+        client,
+        "get_entity_json",
+        json!({"kind": "term", "namespace": namespace, "slug": "parcel", "version": 1}),
+    )
+    .await;
+    assert_eq!(ordinary["json"]["term"]["metadata"][0], metadata);
+    metadata
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glossary_details_render_admitted_tenant_metadata_in_the_same_branch() {
+    let uri = serve().await;
+    let writer = connect(&uri, REVIEWER).await;
+    let reader = connect(&uri, READER).await;
+    let metadata = tenant_term(&writer, "tenant-glossary", "glossary.note").await;
+    let detail = query(
+        &reader,
+        "get_glossary_term",
+        json!({"term": reference("tenant-glossary", "parcel")}),
+    )
+    .await;
+    assert_eq!(detail["entity"]["term"]["metadata"][0], metadata);
+    create_branch(&writer, "reviewer/tenant-glossary").await;
+    let branch_writer = connect_branch(&uri, REVIEWER, Some("reviewer/tenant-glossary")).await;
+    let branch_reader = connect_branch(&uri, READER, Some("reviewer/tenant-glossary")).await;
+    let branch_metadata = tenant_term(
+        &branch_writer,
+        "branch-tenant-glossary",
+        "glossary.branch.note",
+    )
+    .await;
+    let branch_detail = query(
+        &branch_reader,
+        "get_glossary_term",
+        json!({"term": reference("branch-tenant-glossary", "parcel")}),
+    )
+    .await;
+    assert_eq!(
+        branch_detail["entity"]["term"]["metadata"][0],
+        branch_metadata
+    );
+    assert!(reader
+        .call_tool(
+            CallToolRequestParams::new("get_glossary_term").with_arguments(
+                json!({"request_json": {"term": reference("branch-tenant-glossary", "parcel")}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        )
+        .await
+        .is_err());
+    branch_reader.cancel().await.unwrap();
+    branch_writer.cancel().await.unwrap();
+    reader.cancel().await.unwrap();
+    writer.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn glossary_detail_refuses_unknown_metadata_without_dropping_it() {
+    let uri = serve().await;
+    let writer = connect(&uri, REVIEWER).await;
+    let reader = connect(&uri, READER).await;
+    let entity = pb::Entity {
+        kind: Some(pb::entity::Kind::Term(pb::Term {
+            id: Some(pb::Id {
+                namespace: "unknown-glossary".into(),
+                slug: "parcel".into(),
+                version: 1,
+            }),
+            title: "Parcel".into(),
+            doc: "A retained vocabulary term whose annotation type is unavailable.".into(),
+            metadata: vec![prost_types::Any {
+                type_url: "type.googleapis.com/glossary.unavailable.v1.Note".into(),
+                value: vec![10, 1, b'x'],
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    call(
+        &writer,
+        "put_entity",
+        json!({"create_only": true, "entity_b64": base64::engine::general_purpose::STANDARD.encode(entity.encode_to_vec())}),
+    )
+    .await;
+    let stored = call(
+        &reader,
+        "get_entity",
+        json!({"kind": "term", "namespace": "unknown-glossary", "slug": "parcel", "version": 1}),
+    )
+    .await;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(stored["binpb_base64"].as_str().unwrap())
+        .unwrap();
+    let read = pb::GetEntityResponse::decode(bytes.as_slice()).unwrap();
+    let Some(pb::entity::Kind::Term(actual)) = read.entity.unwrap().kind else {
+        panic!("Term required")
+    };
+    let Some(pb::entity::Kind::Term(original)) = entity.kind else {
+        panic!("Term required")
+    };
+    assert_eq!(actual.metadata, original.metadata);
+    assert!(reader
+        .call_tool(
+            CallToolRequestParams::new("get_glossary_term").with_arguments(
+                json!({"request_json": {"term": reference("unknown-glossary", "parcel")}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        )
+        .await
+        .is_err());
+    reader.cancel().await.unwrap();
+    writer.cancel().await.unwrap();
 }
 
 async fn call(client: &McpClient, name: &'static str, arguments: Value) -> Value {

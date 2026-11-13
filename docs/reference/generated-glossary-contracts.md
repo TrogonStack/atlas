@@ -101,10 +101,13 @@ policies, review records and evidence by exact reference. Pagination binds
 caller visibility, branch, selection and the read revision; a changed query or
 read set invalidates its token.
 
-Glossary reads release the mutation lock while fetching catalog and evidence
-content. Before returning, they recheck model revisions, branch identity and
-namespace visibility. A concurrent change refuses the read with ABORTED so the
-caller can retry; a deleted branch returns NOT_FOUND.
+Glossary reads capture a durable native Store marker before loading their scope,
+catalog and evidence. They use leader-backed data and recheck that marker, branch
+identity and namespace visibility before returning, including on Reader and
+Standby processes. A concurrent change refuses the read with ABORTED so the
+caller can retry; a deleted branch returns NOT_FOUND. In-flight publication or
+unresolved recovery returns UNAVAILABLE. The scan holds no global mutation lock.
+See [cross-process read consistency](../explanation/single-writer.md#cross-process-glossary-reads).
 
 For agent bootstrap, ListGlossaryPointers returns only exact Term references,
 titles, audiences and states with the same paging, visibility and freshness
@@ -232,7 +235,7 @@ separately from rule activation and review dates.
 | Boundary | Limit |
 | --- | --- |
 | Context selection | Explicit nonempty selection, at most 32 namespaces |
-| Catalog scan and page | 5,000 rows and 32 MiB scanned encoded Term content across baseline and branch overlays; page size at most 500, default 100 |
+| Catalog scan and page | 5,000 rows and 32 MiB fetched payload bytes across baseline Entities and complete branch delta records, including retained base/ours snapshots and tombstones; page size at most 500, default 100 |
 | Evidence per entry | 32 items; exact quotes at most 16,384 UTF-8 bytes each |
 | Generated title / definition | 256 / 16,384 UTF-8 bytes |
 | Generation revision / audience | 256 / 128 UTF-8 bytes on generated entries |

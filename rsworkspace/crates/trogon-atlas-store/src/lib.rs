@@ -33,6 +33,7 @@ pub use store::{
     ChangesetRef, ChangesetScope, ChangesetValidation, ClaimOutcome, EntityByteBudget,
     EntityRevisionRecord, IssueCounts, NamespaceClaim, NamespaceRecord, NamespaceTenure,
     OperationRecord, OperationStatus, ReceiptCoverage, RevisionPage, RuleCatalogDigest, Store,
-    StoredEntity, UnvalidatedReason, ValidationReceipt, WriteContext,
+    StoreNamespaceMarker, StoreReadMarker, StoredEntity, UnvalidatedReason, ValidationReceipt,
+    WriteContext,
 };
 pub use trogon_atlas_core::refs;
