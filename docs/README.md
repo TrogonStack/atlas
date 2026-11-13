@@ -23,6 +23,7 @@ Solve a specific problem:
 - [Upload and retrieve artifacts](how-to/manage-artifacts.md)
 - [Sign attested bundles](how-to/sign-attested-bundles.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
+- [Model a multi-step workflow](how-to/model-a-multi-step-workflow.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
 - [Protect a published entity](how-to/protect-a-published-entity.md)
 - [Register a type library](how-to/register-a-type-library.md)

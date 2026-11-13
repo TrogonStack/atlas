@@ -1,0 +1,47 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: order-progress
+  namespace: acme-order-workflow
+spec:
+  doc: 'The todo list for one order: the step it is on. Every automation in this workflow reads it.'
+  key:
+  - order_id
+  metadata:
+  - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation
+    doc: The tax, payment, shipping and cancellation automations each read the row for their own step.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: step
+      type:
+        string: {}
+  sourceEvents:
+  - id:
+      namespace: acme-order-workflow
+      slug: order.placed
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: tax.calculated
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: payment.captured
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: payment.failed
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: order.shipped
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: order.cancelled
+      version: '1'
+  title: Order progress

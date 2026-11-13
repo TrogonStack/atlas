@@ -1,0 +1,9 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: shopper
+  namespace: acme-order-workflow
+spec:
+  doc: A signed-in customer placing an order.
+  role: customer
+  title: Shopper

@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: checkout-page
+  namespace: acme-order-workflow
+spec:
+  doc: 'Shopper-facing: places the order.'
+  title: Checkout page

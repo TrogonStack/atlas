@@ -1,0 +1,114 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-placed-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order appears as waiting for tax.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.placed
+        version: '1'
+  title: 'Progress: order.placed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-taxed-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order moves to waiting for payment.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: tax.calculated
+        version: '1'
+  title: 'Progress: tax.calculated'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-payment-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order moves to paid or to payment failed.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.captured
+        version: '1'
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.failed
+        version: '1'
+  title: 'Progress: payment.captured, payment.failed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-shipped-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order is done.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.shipped
+        version: '1'
+  title: 'Progress: order.shipped'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-cancelled-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order is cancelled.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-order-workflow
+        slug: order.cancelled
+        version: '1'
+  title: 'Progress: order.cancelled'
