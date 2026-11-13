@@ -1,0 +1,39 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: tax-worker
+  namespace: acme-order-workflow
+spec:
+  doc: Issues calculate-tax for the step it owns.
+  docTrigger: An order waits for tax.
+  title: Tax worker
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: payment-worker
+  namespace: acme-order-workflow
+spec:
+  doc: Issues capture-payment for the step it owns.
+  docTrigger: An order waits for payment.
+  title: Payment worker
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: shipping-worker
+  namespace: acme-order-workflow
+spec:
+  doc: Issues ship-order for the step it owns.
+  docTrigger: A paid order waits for shipping.
+  title: Shipping worker
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: cancellation-worker
+  namespace: acme-order-workflow
+spec:
+  doc: Issues cancel-order for the step it owns.
+  docTrigger: An order with a failed payment waits for cancellation.
+  title: Cancellation worker
