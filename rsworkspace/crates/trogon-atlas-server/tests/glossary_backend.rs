@@ -58,13 +58,28 @@ async fn put(client: &mut Client, entity: pb::Entity, etag: &str) -> pb::PutEnti
 }
 
 async fn candidate(client: &mut Client, version: u64) -> pb::PutEntityResponse {
-    let source = put(client, pb::Entity { kind: Some(pb::entity::Kind::Document(pb::Document {
+    put(client, pb::Entity { kind: Some(pb::entity::Kind::Event(pb::Event {
+        id: Some(id("purchase-recorded", 1)), title: "Purchase recorded".into(), ..Default::default()
+    })), ..Default::default() }, "").await;
+    let existing_source = client.get_entity(request(pb::GetEntityRequest {
+        kind: pb::EntityKind::Document as i32, id: Some(id("source", 1))
+    }, "glossary-fixture-expert")).await;
+    let source = if let Ok(existing) = existing_source {
+        let source = existing.into_inner();
+        pb::PutEntityResponse { entity: source.entity, etag: source.etag, ..Default::default() }
+    } else { put(client, pb::Entity { kind: Some(pb::entity::Kind::Document(pb::Document {
         id: Some(id("source", 1)), title: Some(pb::CatalogTitle { value: "Fixture source".into() }),
+        subjects: vec![pb::SubjectAssociation { subject: Some(pb::CatalogSubject {
+            selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                kind: pb::EntityKind::Event as i32, id: Some(id("purchase-recorded", 1))
+            }))
+        }), ..Default::default() }],
         body: Some(pb::document::Body::Retained(pb::RetainedDocumentText {
             content: SOURCE.into(), media_type: Some(pb::MediaType { value: "text/plain".into() }),
+            digest: Some(trogon_atlas_core::specification::content_digest(SOURCE)),
             ..Default::default()
         })), ..Default::default()
-    })), ..Default::default() }, "").await;
+    })), ..Default::default() }, "").await };
     let source_uid = source.entity.unwrap().system.unwrap().uid;
     let entity = pb::Entity { kind: Some(pb::entity::Kind::Term(pb::Term {
         id: Some(id("purchase", version)), title: "Purchase".into(),
@@ -118,11 +133,12 @@ async fn ordinary_native_writes_cannot_forge_an_expert_review() {
     let mut entity = draft.entity.unwrap();
     let uid = entity.system.as_ref().unwrap().uid.clone();
     let Some(pb::entity::Kind::Term(term)) = &mut entity.kind else { panic!("term") };
+    let digest = trogon_atlas_core::glossary::candidate_digest(term).unwrap();
     term.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
         disposition: pb::GlossaryReviewDisposition::Accepted as i32,
         actor: "expert".into(), reviewed_at: "2026-11-12T00:00:00Z".into(),
         owner_uid: uid, reason: "forged fixture".into(),
-        content_digest: Some(trogon_atlas_core::specification::content_digest("unverified")),
+        content_digest: Some(digest),
     });
     let result = client.put_entity(request(pb::PutEntityRequest {
         entity: Some(entity), if_match: draft.etag, ..Default::default()
