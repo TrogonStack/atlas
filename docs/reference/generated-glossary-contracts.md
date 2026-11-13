@@ -101,6 +101,11 @@ policies, review records and evidence by exact reference. Pagination binds
 caller visibility, branch, selection and the read revision; a changed query or
 read set invalidates its token.
 
+Glossary reads release the mutation lock while fetching catalog and evidence
+content. Before returning, they recheck model revisions, branch identity and
+namespace visibility. A concurrent change refuses the read with ABORTED so the
+caller can retry; a deleted branch returns NOT_FOUND.
+
 For agent bootstrap, ListGlossaryPointers returns only exact Term references,
 titles, audiences and states with the same paging, visibility and freshness
 boundaries. It refuses include_unreviewed. GetGlossaryDefinition then returns
@@ -227,13 +232,13 @@ separately from rule activation and review dates.
 | Boundary | Limit |
 | --- | --- |
 | Context selection | Explicit nonempty selection, at most 32 namespaces |
-| Catalog scan and page | 5,000 rows; page size at most 500, default 100 |
+| Catalog scan and page | 5,000 rows and 32 MiB scanned encoded Term content across baseline and branch overlays; page size at most 500, default 100 |
 | Evidence per entry | 32 items; exact quotes at most 16,384 UTF-8 bytes each |
 | Generated title / definition | 256 / 16,384 UTF-8 bytes |
 | Generation revision / audience | 256 / 128 UTF-8 bytes on generated entries |
 | Encoded Term | 1 MiB |
-| Evidence traversal | 10,000 examinations and 32 MiB examined encoded content |
-| Source inspection | At most 32 exact Documents and 1 MiB total retained UTF-8 bytes |
+| Evidence traversal | 10,000 examinations and 32 MiB examined encoded content; repeated references count as examinations, while each distinct Document is fetched and charged once per request |
+| Source inspection | At most 32 exact Documents and 1 MiB total retained UTF-8 bytes, with the native 256 KiB limit per Document |
 | Derived response | At most 3 MiB encoded protobuf and JSON |
 | Review preflight | At most 2 MiB entity JSON before mutation |
 | Core comparison or usage input | At most 1,000 Terms per input and 8 MiB combined candidate bytes |

@@ -55,8 +55,9 @@ mise exec -- pnpm --filter trogon-atlas-studio run typecheck
 
 For the native browser run, create a fresh evidence directory below the repository
 `.trogonai/` directory. Set `ATLAS_NATIVE_EVIDENCE_DIR` to that absolute path and
-`ATLAS_GLOSSARY_FIXTURE_TOKEN` to the controlled fixture Reader credential through
-the child environment. Do not print or persist the credential. From
+`ATLAS_GLOSSARY_FIXTURE_TOKEN` to the `reader` principal token defined in the
+[backend fixture](../../rsworkspace/crates/trogon-atlas-server/tests/glossary_backend.rs)
+through the child environment. Do not print or persist the credential. From
 `tsworkspace/webapps/studio`:
 
 ```sh

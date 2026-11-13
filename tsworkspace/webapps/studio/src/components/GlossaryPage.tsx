@@ -173,7 +173,14 @@ export function GlossaryPage() {
                   >
                     <div className="flex items-center justify-between gap-3">
                       <h2 className="text-sm font-semibold">Vocabulary</h2>
-                      <Button variant="outline" size="sm" onClick={catalog.retry}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          catalog.retry();
+                          detail.retry();
+                        }}
+                      >
                         Reload
                       </Button>
                     </div>
@@ -192,7 +199,9 @@ export function GlossaryPage() {
                           <p className="text-xs text-muted-foreground">
                             {catalog.state.value.incomplete
                               ? 'No entries returned in this incomplete scan.'
-                              : 'No glossary entries.'}
+                              : pageToken
+                                ? 'No entries on this page.'
+                                : 'No glossary entries.'}
                           </p>
                         ) : (
                           <ul className="flex flex-col gap-2">

@@ -230,6 +230,238 @@ fn source_and_preferred_term_participate_in_reference_discovery_and_retargeting(
 }
 
 #[test]
+fn draft_evidence_retarget_repins_exact_target_without_touching_other_citations() {
+    let mut target = document();
+    let Some(entity::Kind::Document(value)) = &mut target.kind else {
+        panic!("document expected");
+    };
+    value.id = Some(id("store", "replacement-source"));
+    let content = format!("Updated context: {SOURCE}");
+    value.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+        content: content.clone(),
+        ..Default::default()
+    }));
+    target.system.as_mut().unwrap().uid = TERM_UID.into();
+    let mut candidate = term();
+    let mut second = evidence();
+    second.locator = "paragraph:2".into();
+    second.quote = "purchase".into();
+    let mut existing_target = evidence();
+    existing_target.document.as_mut().unwrap().id = Some(id("store", "replacement-source"));
+    existing_target.owner_uid = TERM_UID.into();
+    existing_target.content_digest =
+        Some(trogon_atlas_core::specification::content_digest(&content));
+    existing_target.locator = "paragraph:3".into();
+    candidate.glossary.as_mut().unwrap().evidence =
+        vec![evidence(), second, existing_target.clone()];
+    let original = candidate.clone();
+    assert_eq!(
+        glossary::retarget_evidence(&mut candidate, &id("store", "source"), &target,).unwrap(),
+        vec![
+            "glossary.evidence[0].document",
+            "glossary.evidence[1].document"
+        ]
+    );
+    for item in &candidate.glossary.as_ref().unwrap().evidence {
+        glossary::verify_evidence(item, &target).unwrap();
+    }
+    assert_eq!(
+        candidate.glossary.as_ref().unwrap().evidence[2],
+        existing_target
+    );
+    for index in 0..2 {
+        assert_eq!(
+            candidate.glossary.as_ref().unwrap().evidence[index].quote,
+            original.glossary.as_ref().unwrap().evidence[index].quote
+        );
+        assert_eq!(
+            candidate.glossary.as_ref().unwrap().evidence[index].locator,
+            original.glossary.as_ref().unwrap().evidence[index].locator
+        );
+    }
+    assert_ne!(
+        glossary::candidate_digest(&candidate).unwrap(),
+        glossary::candidate_digest(&original).unwrap()
+    );
+}
+
+#[test]
+fn evidence_retarget_refuses_missing_quote_without_partial_mutation() {
+    let mut candidate = term();
+    let mut second = evidence();
+    second.locator = "paragraph:2".into();
+    second.quote = "store.".into();
+    glossary::verify_evidence(&second, &document()).unwrap();
+    candidate.glossary.as_mut().unwrap().evidence.push(second);
+    let original = candidate.clone();
+    let mut target = document();
+    let Some(entity::Kind::Document(value)) = &mut target.kind else {
+        panic!("document expected");
+    };
+    value.id = Some(id("store", "replacement-source"));
+    let Some(pb::document::Body::Retained(body)) = &mut value.body else {
+        panic!("retained text expected");
+    };
+    body.content = SOURCE.trim_end_matches('.').into();
+    target.system.as_mut().unwrap().uid = TERM_UID.into();
+    assert_eq!(
+        glossary::retarget_evidence(&mut candidate, &id("store", "source"), &target),
+        Err(glossary::GlossaryError("evidence.quote".into()))
+    );
+    assert_eq!(candidate, original);
+}
+
+#[test]
+fn evidence_retarget_corrects_negative_review_without_changing_receipt() {
+    for disposition in [
+        pb::GlossaryReviewDisposition::Rejected,
+        pb::GlossaryReviewDisposition::NeedsChanges,
+    ] {
+        let mut candidate = term();
+        candidate.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+            disposition: disposition as i32,
+            actor: "expert".into(),
+            reviewed_at: "2026-11-12T12:00:00Z".into(),
+            content_digest: Some(glossary::candidate_digest(&candidate).unwrap()),
+            owner_uid: TERM_UID.into(),
+            reason: "The definition and source were reviewed.".into(),
+        });
+        assert!(glossary::review_is_current(&candidate, TERM_UID));
+        let review = candidate.glossary.as_ref().unwrap().review.clone();
+        let mut target = document();
+        let Some(entity::Kind::Document(value)) = &mut target.kind else {
+            panic!("document expected");
+        };
+        value.id = Some(id("store", "replacement-source"));
+        assert_eq!(
+            glossary::retarget_evidence(&mut candidate, &id("store", "source"), &target).unwrap(),
+            vec!["glossary.evidence[0].document"]
+        );
+        glossary::verify_evidence(&candidate.glossary.as_ref().unwrap().evidence[0], &target)
+            .unwrap();
+        assert_eq!(candidate.glossary.as_ref().unwrap().review, review);
+        assert!(!glossary::review_is_current(&candidate, TERM_UID));
+    }
+}
+
+#[test]
+fn evidence_retarget_refuses_accepted_meaning_even_with_stale_review_atomically() {
+    for stale in [false, true] {
+        let mut candidate = term();
+        candidate.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+            disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+            actor: "expert".into(),
+            reviewed_at: "2026-11-12T12:00:00Z".into(),
+            content_digest: Some(glossary::candidate_digest(&candidate).unwrap()),
+            owner_uid: TERM_UID.into(),
+            reason: "The definition and source were reviewed.".into(),
+        });
+        if stale {
+            candidate.doc.push_str(" A changed draft.");
+        }
+        assert_eq!(glossary::review_is_current(&candidate, TERM_UID), !stale);
+        let original = candidate.clone();
+        let mut target = document();
+        let Some(entity::Kind::Document(value)) = &mut target.kind else {
+            panic!("document expected");
+        };
+        value.id = Some(id("store", "replacement-source"));
+        assert_eq!(
+            glossary::retarget_evidence(&mut candidate, &id("store", "source"), &target),
+            Err(glossary::GlossaryError("evidence.accepted_retarget".into()))
+        );
+        assert_eq!(candidate, original);
+    }
+}
+
+#[test]
+fn evidence_retarget_refuses_invalid_target_identity_content_or_namespace_atomically() {
+    let mut replacement = document();
+    let Some(entity::Kind::Document(value)) = &mut replacement.kind else {
+        panic!("document expected");
+    };
+    value.id = Some(id("store", "replacement-source"));
+    let mut wrong_namespace = replacement.clone();
+    let Some(entity::Kind::Document(value)) = &mut wrong_namespace.kind else {
+        panic!("document expected");
+    };
+    value.id.as_mut().unwrap().namespace = "other".into();
+    let mut missing_owner = replacement.clone();
+    missing_owner.system = None;
+    let mut empty_owner = replacement.clone();
+    empty_owner.system.as_mut().unwrap().uid.clear();
+    let mut invalid_id = replacement.clone();
+    let Some(entity::Kind::Document(value)) = &mut invalid_id.kind else {
+        panic!("document expected");
+    };
+    value.id.as_mut().unwrap().version = 0;
+    let mut non_utf8 = replacement;
+    let Some(entity::Kind::Document(value)) = &mut non_utf8.kind else {
+        panic!("document expected");
+    };
+    value.body = Some(pb::document::Body::RetainedContent(pb::RetainedContent {
+        content: vec![0xff],
+        ..Default::default()
+    }));
+    for target in [
+        wrong_namespace,
+        missing_owner,
+        empty_owner,
+        invalid_id,
+        non_utf8,
+        pb::Entity {
+            kind: Some(entity::Kind::Term(term())),
+            system: document().system,
+        },
+    ] {
+        let mut candidate = term();
+        let original = candidate.clone();
+        assert!(
+            glossary::retarget_evidence(&mut candidate, &id("store", "source"), &target).is_err()
+        );
+        assert_eq!(candidate, original);
+    }
+}
+
+#[test]
+fn evidence_retarget_same_source_preserves_pins_and_accepted_receipt() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+        disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+        actor: "expert".into(),
+        reviewed_at: "2026-11-12T12:00:00Z".into(),
+        content_digest: Some(glossary::candidate_digest(&candidate).unwrap()),
+        owner_uid: TERM_UID.into(),
+        reason: "The definition and source were reviewed.".into(),
+    });
+    let original = candidate.clone();
+    let mut changed_source = document();
+    changed_source.system.as_mut().unwrap().uid = TERM_UID.into();
+    assert_eq!(
+        glossary::retarget_evidence(&mut candidate, &id("store", "source"), &changed_source,)
+            .unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(candidate, original);
+}
+
+#[test]
+fn evidence_retarget_ignores_unrelated_references() {
+    let mut candidate = term();
+    let original = candidate.clone();
+    assert_eq!(
+        glossary::retarget_evidence(
+            &mut candidate,
+            &id("store", "unrelated-source"),
+            &document(),
+        )
+        .unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(candidate, original);
+}
+
+#[test]
 fn usage_checks_preserve_utf8_spans_audience_boundaries_and_exclusions() {
     let mut candidate = term();
     candidate.title = "Café event".into();
@@ -381,6 +613,60 @@ fn source_ownership_cannot_supply_or_clear_native_glossary_fields() {
             &pb::SourceFieldOwnership {
                 policy: Some(policy)
             }
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn quoted_exclusions_keep_word_internal_apostrophes_inside_the_delimiters() {
+    let mut candidate = term();
+    candidate.title = "Consignment".into();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    for check in [glossary::check_usage, glossary::check_code_usage] {
+        for text in [
+            "'Don't use consignment' consignment",
+            "'Café's consignment' consignment",
+            r"'Don\'t use consignment' consignment",
+            "'consignment' consignment",
+            "\"Don't use consignment\" consignment",
+            "`Don't use consignment` consignment",
+            "Don't use consignment",
+        ] {
+            let findings = check(
+                std::slice::from_ref(&candidate),
+                "customer",
+                &date("2026-11-12"),
+                text,
+                &[],
+                true,
+            )
+            .unwrap();
+            assert_eq!(findings.len(), 1, "{text}");
+            assert_eq!(
+                findings[0].range.start(),
+                text.rfind("consignment").unwrap()
+            );
+            assert_eq!(
+                &text[findings[0].range.start()..findings[0].range.end()],
+                "consignment"
+            );
+        }
+    }
+}
+
+#[test]
+fn apostrophes_do_not_make_an_unclosed_single_quoted_exclusion_valid() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    for check in [glossary::check_usage, glossary::check_code_usage] {
+        assert!(check(
+            std::slice::from_ref(&candidate),
+            "customer",
+            &date("2026-11-12"),
+            "'Don't use Purchase",
+            &[],
+            true,
         )
         .is_err());
     }

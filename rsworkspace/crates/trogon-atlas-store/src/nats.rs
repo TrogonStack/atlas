@@ -75,10 +75,10 @@ use crate::{
     store::{
         BranchDeltaEntry, BranchInfo, BranchLandOp, ChangeKind, ChangeRecord, ChangesetOp,
         ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetValidation, ClaimOutcome,
-        EntityRevisionRecord, IssueCounts, ListFilter, MutationOp, MutationOutcome, NamespaceClaim,
-        NamespaceRecord, NamespaceTenure, OperationRecord, ReceiptCoverage, RevisionPage,
-        RuleCatalogDigest, Store, StoredEntity, UnvalidatedReason, ValidationReceipt, WriteContext,
-        WriterStatus, Written,
+        EntityByteBudget, EntityRevisionRecord, IssueCounts, ListFilter, MutationOp,
+        MutationOutcome, NamespaceClaim, NamespaceRecord, NamespaceTenure, OperationRecord,
+        ReceiptCoverage, RevisionPage, RuleCatalogDigest, Store, StoredEntity, UnvalidatedReason,
+        ValidationReceipt, WriteContext, WriterStatus, Written,
     },
 };
 
@@ -140,6 +140,36 @@ pub enum StoreOpenMode {
 /// claimed, which matters when auditing who owns what.
 pub const LEGACY_ADOPTION_AUTHOR: &str = "migration";
 const LIST_HARD_CAP: usize = 10_000;
+
+struct ListingBytes {
+    remaining: Option<usize>,
+}
+
+impl ListingBytes {
+    fn unbounded() -> Self {
+        Self { remaining: None }
+    }
+
+    fn bounded(budget: EntityByteBudget) -> Self {
+        Self {
+            remaining: Some(budget.max_encoded_bytes()),
+        }
+    }
+
+    fn is_bounded(&self) -> bool {
+        self.remaining.is_some()
+    }
+
+    fn charge(&mut self, bytes: usize) -> StoreResult<()> {
+        if let Some(remaining) = &mut self.remaining {
+            *remaining = remaining.checked_sub(bytes).ok_or_else(|| {
+                StoreError::ResourceExhausted("entity listing encoded byte budget exceeded".into())
+            })?;
+        }
+        Ok(())
+    }
+}
+
 const LIST_FETCH_CONCURRENCY: usize = 16;
 /// Hard cap on the number of keys accepted by `batch_get`. Prevents a single
 /// caller from scheduling LIST_HARD_CAP-sized fan-outs. Mirrors the spirit of
@@ -1211,6 +1241,192 @@ impl NatsStore {
         )))
     }
 
+    async fn list_baseline(
+        &self,
+        filter: ListFilter<'_>,
+        limit: Option<usize>,
+        byte_budget: &mut ListingBytes,
+    ) -> StoreResult<Vec<StoredEntity>> {
+        // Guard the entire key-enumeration and entry-fetch pipeline with a
+        // single wall-clock bound. Individual per-key fetches are already
+        // guarded by KV_OP_TIMEOUT, but up to LIST_HARD_CAP keys means the
+        // cumulative worst case without this bound is ~10,000 * KV_OP_TIMEOUT.
+        let kv = self.kv.clone();
+        let kinds: Vec<EntityKind> = filter.kinds.to_vec();
+        let namespaces: Vec<String> = filter.namespaces.to_vec();
+        let slug: Option<String> = filter.slug.map(str::to_owned);
+        let latest_versions_only = filter.latest_versions_only;
+        tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
+            let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
+
+            let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
+                .await
+                .map_err(|_| StoreError::Backend("kv.keys: timeout".into()))?
+                .map_err(|e| StoreError::Backend(format!("kv.keys: {e}")))?;
+
+            // Pre-compute prefixes for cheap kind/namespace filtering. Empty
+            // filters mean "no constraint" -- every key passes.
+            //
+            // When namespaces are specified but kinds are not, expand over all
+            // concrete EntityKind variants using `namespace_prefix` so we avoid
+            // a full-bucket scan and the `parse_entity_key` call it requires.
+            let prefixes: Vec<String> = if kinds.is_empty() && namespaces.is_empty() {
+                Vec::new()
+            } else if kinds.is_empty() {
+                let mut p = Vec::with_capacity(ALL_KINDS.len() * namespaces.len());
+                for &k in ALL_KINDS {
+                    for ns in &namespaces {
+                        p.push(namespace_prefix(k, ns));
+                    }
+                }
+                p
+            } else if namespaces.is_empty() {
+                kinds.iter().map(|k| kind_prefix(*k)).collect()
+            } else {
+                // One kind, one namespace and a slug name a single
+                // identity: its versions share one key prefix, so only
+                // that identity's rows are ever fetched.
+                let mut p = Vec::with_capacity(kinds.len() * namespaces.len());
+                for k in &kinds {
+                    for ns in &namespaces {
+                        p.push(match &slug {
+                            Some(slug) => slug_prefix(*k, ns, slug),
+                            None => namespace_prefix(*k, ns),
+                        });
+                    }
+                }
+                p
+            };
+
+            // Collect matching keys. Live entries are materialized up to
+            // LIST_HARD_CAP after the tombstone filter; the caller `limit`
+            // is applied only after sort + latest_versions_only. A bucket of
+            // pure tombstones (e.g., after bulk deletes) will scan matching
+            // keys up to the raw-key memory ceiling within LIST_TOTAL_TIMEOUT
+            // before returning an empty result -- the outer timeout prevents
+            // unbounded blocking in that worst case.
+            // Each step of the key stream is guarded by KV_OP_TIMEOUT to prevent
+            // a stalled NATS connection from blocking list() forever.
+            let mut matching_keys: Vec<String> = Vec::new();
+            loop {
+                let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+                    .await
+                    .map_err(|_| {
+                        StoreError::Backend("kv.keys stream: timeout waiting for next key".into())
+                    })?;
+                let Some(item) = next else { break };
+                let key = item.map_err(|e| StoreError::Backend(format!("kv.keys stream: {e}")))?;
+                if key == SCHEMA_VERSION_KEY {
+                    continue;
+                }
+                if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
+                    continue;
+                }
+                if let Some(slug) = &slug {
+                    // The prefix above already pins the slug when kinds
+                    // and namespaces are both given; otherwise the key
+                    // has to be read to know its slug.
+                    if parse_entity_key(&key).is_none_or(|(_, id)| id.slug != *slug) {
+                        continue;
+                    }
+                }
+                matching_keys.push(key);
+                // Memory ceiling for the raw key set. Callers observe the
+                // live-entry cap; this bound only keeps a pathological
+                // tombstone-heavy bucket from allocating without limit.
+                if matching_keys.len() >= LIST_HARD_CAP * 10 {
+                    tracing::warn!(
+                        raw_key_cap = LIST_HARD_CAP * 10,
+                        "list: raw key scan hit the memory ceiling; results may \
+                     undercount live entities in a tombstone-heavy bucket"
+                    );
+                    break;
+                }
+            }
+
+            // Fetch live entries concurrently up to LIST_HARD_CAP. The caller
+            // `limit` is applied only after sort + latest_versions_only so
+            // truncation cannot drop later slug groups that would survive
+            // dedup (mirrors list_branch_merged). Tombstones do not count.
+            let total_keys = matching_keys.len();
+            let mut out: Vec<StoredEntity> = if byte_budget.is_bounded() {
+                Vec::new()
+            } else {
+                Vec::with_capacity(LIST_HARD_CAP.min(total_keys))
+            };
+            let fetch_concurrency = if byte_budget.is_bounded() {
+                1
+            } else {
+                LIST_FETCH_CONCURRENCY
+            };
+            let kv2 = kv.clone();
+            let mut stream = futures::stream::iter(matching_keys.into_iter().map(move |key| {
+                let kv = kv2.clone();
+                async move {
+                    let entry = kv_entry_timeout(&kv, key.clone()).await?;
+                    Ok::<_, StoreError>((key, entry))
+                }
+            }))
+            .buffer_unordered(fetch_concurrency);
+
+            while let Some(result) = stream.next().await {
+                let (key, entry) = result?;
+                let Some(entry) = live_entry(entry) else {
+                    continue;
+                };
+                byte_budget.charge(entry.value.len())?;
+                let entity = decode_entity_logged(&entry.value, &key)?;
+                out.push(StoredEntity {
+                    entity,
+                    etag: entry.revision.to_string(),
+                });
+                if out.len() >= LIST_HARD_CAP {
+                    break;
+                }
+            }
+
+            out.sort_by(|a, b| {
+                let ka = kind_of(&a.entity).unwrap_or(EntityKind::Unspecified) as i32;
+                let kb = kind_of(&b.entity).unwrap_or(EntityKind::Unspecified) as i32;
+                let ida = entity_id(&a.entity).cloned().unwrap_or_default();
+                let idb = entity_id(&b.entity).cloned().unwrap_or_default();
+                ka.cmp(&kb)
+                    .then_with(|| ida.namespace.cmp(&idb.namespace))
+                    .then_with(|| ida.slug.cmp(&idb.slug))
+                    .then_with(|| ida.version.cmp(&idb.version))
+            });
+
+            if latest_versions_only {
+                let mut latest: BTreeMap<(EntityKind, String, String), StoredEntity> =
+                    BTreeMap::new();
+                for s in out.drain(..) {
+                    let (Some(k), Some(id)) = (kind_of(&s.entity), entity_id(&s.entity)) else {
+                        continue;
+                    };
+                    let group_key = (k, id.namespace.clone(), id.slug.clone());
+                    let keep = latest
+                        .get(&group_key)
+                        .and_then(|cur| entity_id(&cur.entity).map(|cid| cid.version < id.version))
+                        .unwrap_or(true);
+                    if keep {
+                        latest.insert(group_key, s);
+                    }
+                }
+                out = latest.into_values().collect();
+            }
+
+            out.truncate(effective_limit);
+            Ok(out)
+        })
+        .await
+        .map_err(|_| {
+            StoreError::Backend(format!(
+                "list: total timeout exceeded ({}s)",
+                LIST_TOTAL_TIMEOUT.as_secs()
+            ))
+        })?
+    }
+
     /// Merged-view `list()` for a branch: baseline entities matching `filter`,
     /// with the branch's deltas overlaid (tombstones removed, live deltas
     /// replacing/adding entries), then re-sorted and re-capped exactly like
@@ -1220,6 +1436,7 @@ impl NatsStore {
         filter: ListFilter<'_>,
         limit: Option<usize>,
         branch: &str,
+        byte_budget: &mut ListingBytes,
     ) -> StoreResult<Vec<StoredEntity>> {
         let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
         // Baseline pass: reuse the existing (untouched) baseline list() path
@@ -1228,7 +1445,9 @@ impl NatsStore {
         // LIST_HARD_CAP is the same ceiling list() itself enforces, so this
         // is at most one full baseline scan.
         let mut merged: BTreeMap<(EntityKind, String, String, u64), StoredEntity> = BTreeMap::new();
-        let baseline = Store::list(self, filter.clone(), Some(LIST_HARD_CAP), None).await?;
+        let baseline = self
+            .list_baseline(filter.clone(), Some(LIST_HARD_CAP), byte_budget)
+            .await?;
         for stored in baseline {
             let Some(kind) = kind_of(&stored.entity) else {
                 continue;
@@ -1303,6 +1522,7 @@ impl NatsStore {
                 merged.remove(&group);
                 continue;
             };
+            byte_budget.charge(ours.encoded_len())?;
             merged.insert(
                 group,
                 StoredEntity {
@@ -3726,184 +3946,33 @@ impl Store for NatsStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>> {
+        let mut byte_budget = ListingBytes::unbounded();
         self.source_guarded(async {
             if let Some(branch) = branch {
-                return self.list_branch_merged(filter, limit, branch).await;
-            }
-            // Guard the entire key-enumeration and entry-fetch pipeline with a
-            // single wall-clock bound. Individual per-key fetches are already
-            // guarded by KV_OP_TIMEOUT, but up to LIST_HARD_CAP keys means the
-            // cumulative worst case without this bound is ~10,000 * KV_OP_TIMEOUT.
-            let kv = self.kv.clone();
-            let kinds: Vec<EntityKind> = filter.kinds.to_vec();
-            let namespaces: Vec<String> = filter.namespaces.to_vec();
-            let slug: Option<String> = filter.slug.map(str::to_owned);
-            let latest_versions_only = filter.latest_versions_only;
-            tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
-                let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
-
-                let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
+                self.list_branch_merged(filter, limit, branch, &mut byte_budget)
                     .await
-                    .map_err(|_| StoreError::Backend("kv.keys: timeout".into()))?
-                    .map_err(|e| StoreError::Backend(format!("kv.keys: {e}")))?;
+            } else {
+                self.list_baseline(filter, limit, &mut byte_budget).await
+            }
+        })
+        .await
+    }
 
-                // Pre-compute prefixes for cheap kind/namespace filtering. Empty
-                // filters mean "no constraint" -- every key passes.
-                //
-                // When namespaces are specified but kinds are not, expand over all
-                // concrete EntityKind variants using `namespace_prefix` so we avoid
-                // a full-bucket scan and the `parse_entity_key` call it requires.
-                let prefixes: Vec<String> = if kinds.is_empty() && namespaces.is_empty() {
-                    Vec::new()
-                } else if kinds.is_empty() {
-                    let mut p = Vec::with_capacity(ALL_KINDS.len() * namespaces.len());
-                    for &k in ALL_KINDS {
-                        for ns in &namespaces {
-                            p.push(namespace_prefix(k, ns));
-                        }
-                    }
-                    p
-                } else if namespaces.is_empty() {
-                    kinds.iter().map(|k| kind_prefix(*k)).collect()
-                } else {
-                    // One kind, one namespace and a slug name a single
-                    // identity: its versions share one key prefix, so only
-                    // that identity's rows are ever fetched.
-                    let mut p = Vec::with_capacity(kinds.len() * namespaces.len());
-                    for k in &kinds {
-                        for ns in &namespaces {
-                            p.push(match &slug {
-                                Some(slug) => slug_prefix(*k, ns, slug),
-                                None => namespace_prefix(*k, ns),
-                            });
-                        }
-                    }
-                    p
-                };
-
-                // Collect matching keys. Live entries are materialized up to
-                // LIST_HARD_CAP after the tombstone filter; the caller `limit`
-                // is applied only after sort + latest_versions_only. A bucket of
-                // pure tombstones (e.g., after bulk deletes) will scan matching
-                // keys up to the raw-key memory ceiling within LIST_TOTAL_TIMEOUT
-                // before returning an empty result -- the outer timeout prevents
-                // unbounded blocking in that worst case.
-                // Each step of the key stream is guarded by KV_OP_TIMEOUT to prevent
-                // a stalled NATS connection from blocking list() forever.
-                let mut matching_keys: Vec<String> = Vec::new();
-                loop {
-                    let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
-                        .await
-                        .map_err(|_| {
-                            StoreError::Backend(
-                                "kv.keys stream: timeout waiting for next key".into(),
-                            )
-                        })?;
-                    let Some(item) = next else { break };
-                    let key =
-                        item.map_err(|e| StoreError::Backend(format!("kv.keys stream: {e}")))?;
-                    if key == SCHEMA_VERSION_KEY {
-                        continue;
-                    }
-                    if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
-                        continue;
-                    }
-                    if let Some(slug) = &slug {
-                        // The prefix above already pins the slug when kinds
-                        // and namespaces are both given; otherwise the key
-                        // has to be read to know its slug.
-                        if parse_entity_key(&key).is_none_or(|(_, id)| id.slug != *slug) {
-                            continue;
-                        }
-                    }
-                    matching_keys.push(key);
-                    // Memory ceiling for the raw key set. Callers observe the
-                    // live-entry cap; this bound only keeps a pathological
-                    // tombstone-heavy bucket from allocating without limit.
-                    if matching_keys.len() >= LIST_HARD_CAP * 10 {
-                        tracing::warn!(
-                            raw_key_cap = LIST_HARD_CAP * 10,
-                            "list: raw key scan hit the memory ceiling; results may \
-                         undercount live entities in a tombstone-heavy bucket"
-                        );
-                        break;
-                    }
-                }
-
-                // Fetch live entries concurrently up to LIST_HARD_CAP. The caller
-                // `limit` is applied only after sort + latest_versions_only so
-                // truncation cannot drop later slug groups that would survive
-                // dedup (mirrors list_branch_merged). Tombstones do not count.
-                let total_keys = matching_keys.len();
-                let mut out: Vec<StoredEntity> = Vec::with_capacity(LIST_HARD_CAP.min(total_keys));
-                let kv2 = kv.clone();
-                let mut stream = futures::stream::iter(matching_keys.into_iter().map(move |key| {
-                    let kv = kv2.clone();
-                    async move {
-                        let entry = kv_entry_timeout(&kv, key.clone()).await?;
-                        let Some(entry) = live_entry(entry) else {
-                            return Ok::<Option<StoredEntity>, StoreError>(None);
-                        };
-                        let entity = decode_entity_logged(&entry.value, &key)?;
-                        Ok(Some(StoredEntity {
-                            entity,
-                            etag: entry.revision.to_string(),
-                        }))
-                    }
-                }))
-                .buffer_unordered(LIST_FETCH_CONCURRENCY);
-
-                while let Some(result) = stream.next().await {
-                    if let Some(stored) = result? {
-                        out.push(stored);
-                        if out.len() >= LIST_HARD_CAP {
-                            break;
-                        }
-                    }
-                }
-
-                out.sort_by(|a, b| {
-                    let ka = kind_of(&a.entity).unwrap_or(EntityKind::Unspecified) as i32;
-                    let kb = kind_of(&b.entity).unwrap_or(EntityKind::Unspecified) as i32;
-                    let ida = entity_id(&a.entity).cloned().unwrap_or_default();
-                    let idb = entity_id(&b.entity).cloned().unwrap_or_default();
-                    ka.cmp(&kb)
-                        .then_with(|| ida.namespace.cmp(&idb.namespace))
-                        .then_with(|| ida.slug.cmp(&idb.slug))
-                        .then_with(|| ida.version.cmp(&idb.version))
-                });
-
-                if latest_versions_only {
-                    let mut latest: BTreeMap<(EntityKind, String, String), StoredEntity> =
-                        BTreeMap::new();
-                    for s in out.drain(..) {
-                        let (Some(k), Some(id)) = (kind_of(&s.entity), entity_id(&s.entity)) else {
-                            continue;
-                        };
-                        let group_key = (k, id.namespace.clone(), id.slug.clone());
-                        let keep = latest
-                            .get(&group_key)
-                            .and_then(|cur| {
-                                entity_id(&cur.entity).map(|cid| cid.version < id.version)
-                            })
-                            .unwrap_or(true);
-                        if keep {
-                            latest.insert(group_key, s);
-                        }
-                    }
-                    out = latest.into_values().collect();
-                }
-
-                out.truncate(effective_limit);
-                Ok(out)
-            })
-            .await
-            .map_err(|_| {
-                StoreError::Backend(format!(
-                    "list: total timeout exceeded ({}s)",
-                    LIST_TOTAL_TIMEOUT.as_secs()
-                ))
-            })?
+    async fn list_bounded(
+        &self,
+        filter: ListFilter<'_>,
+        limit: Option<usize>,
+        branch: Option<&str>,
+        budget: EntityByteBudget,
+    ) -> StoreResult<Vec<StoredEntity>> {
+        let mut byte_budget = ListingBytes::bounded(budget);
+        self.source_guarded(async {
+            if let Some(branch) = branch {
+                self.list_branch_merged(filter, limit, branch, &mut byte_budget)
+                    .await
+            } else {
+                self.list_baseline(filter, limit, &mut byte_budget).await
+            }
         })
         .await
     }

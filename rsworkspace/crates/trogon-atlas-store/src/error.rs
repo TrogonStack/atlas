@@ -15,6 +15,8 @@ pub enum StoreError {
     InvalidArgument(String),
     #[error("backend unavailable: {0}")]
     Unavailable(String),
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
     #[error("backend error: {0}")]
     Backend(String),
     /// Returned by `batch_apply` when the batch could not be undone in

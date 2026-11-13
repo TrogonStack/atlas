@@ -349,6 +349,69 @@ pub fn verify_evidence(evidence: &pb::GlossaryEvidence, entity: &pb::Entity) -> 
     require(content.contains(&evidence.quote), "evidence.quote")
 }
 
+pub fn retarget_evidence(
+    term: &mut pb::Term,
+    from_id: &pb::Id,
+    target: &pb::Entity,
+) -> Result<Vec<String>> {
+    validate_term(term)?;
+    let Some(glossary) = &term.glossary else {
+        return Ok(Vec::new());
+    };
+    if crate::entity_id(target) == Some(from_id)
+        || !glossary.evidence.iter().any(|evidence| {
+            evidence
+                .document
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+                == Some(from_id)
+        })
+    {
+        return Ok(Vec::new());
+    }
+    require(
+        !glossary.review.as_ref().is_some_and(|review| {
+            review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
+        }),
+        "evidence.accepted_retarget",
+    )?;
+    let to_id =
+        crate::entity_id(target).ok_or_else(|| GlossaryError("evidence.document".into()))?;
+    exact(Some(to_id), "evidence.document")?;
+    let owner_uid = target
+        .system
+        .as_ref()
+        .map(|system| system.uid.as_str())
+        .unwrap_or_default();
+    text(owner_uid, 128, "evidence.owner_uid")?;
+    let content_digest =
+        crate::document_catalog_context::bytes_content_digest(retained_document_bytes(target)?);
+    let mut updated = term.clone();
+    let mut rewritten = Vec::new();
+    if let Some(glossary) = &mut updated.glossary {
+        for (index, evidence) in glossary.evidence.iter_mut().enumerate() {
+            if evidence
+                .document
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+                != Some(from_id)
+            {
+                continue;
+            }
+            evidence.document = Some(pb::DocumentRef {
+                id: Some(to_id.clone()),
+            });
+            evidence.owner_uid = owner_uid.into();
+            evidence.content_digest = Some(content_digest.clone());
+            verify_evidence(evidence, target)?;
+            rewritten.push(format!("glossary.evidence[{index}].document"));
+        }
+    }
+    validate_term(&updated)?;
+    *term = updated;
+    Ok(rewritten)
+}
+
 pub fn policy_active(policy: &pb::GlossaryUsagePolicy, at: &AuthoredDate) -> Result<bool> {
     validate_policy(policy)?;
     let from = calendar(policy.effective_from.as_ref(), "policy.effective_from")?;
@@ -562,8 +625,10 @@ pub fn compare_glossaries(
                     "Equal term labels have different definition text; review a possible homonym.",
                 )
             } else if !same_title && same_meaning {
-                (GlossaryDifferenceKind::SameMeaning,
-                    "Different term labels have equal normalized definition text; review a possible synonym.")
+                (
+                    GlossaryDifferenceKind::SameMeaning,
+                    "Different term labels have equal normalized definition text; review a possible synonym.",
+                )
             } else {
                 continue;
             };
@@ -701,7 +766,8 @@ fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {
     let mut quote = None;
     let mut escaped = false;
     let mut previous = None;
-    for (index, character) in value.char_indices() {
+    let mut characters = value.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
         if escaped {
             escaped = false;
             previous = Some(character);
@@ -713,7 +779,12 @@ fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {
             continue;
         }
         match quote {
-            Some((delimiter, start)) if character == delimiter => {
+            Some((delimiter, start))
+                if character == delimiter
+                    && (delimiter != '\''
+                        || word_boundary(previous)
+                        || word_boundary(characters.peek().map(|(_, character)| *character))) =>
+            {
                 ranges.push(TextRange {
                     start,
                     end: index + character.len_utf8(),

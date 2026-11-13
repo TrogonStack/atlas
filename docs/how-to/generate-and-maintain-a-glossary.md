@@ -28,7 +28,10 @@ where useful. Supplied document, email, chat and audio/video transcript text use
 this retained UTF-8 boundary. Remote acquisition and transcription are upstream
 steps; supplied snapshots are sufficient for this procedure.
 
-For a controlled starting corpus, apply the [shipping source manifests](../../examples/manifests/generated-glossary/sources.yaml):
+For a controlled starting corpus, apply the [shipping source manifests](../../examples/manifests/generated-glossary/sources.yaml)
+to an isolated or disposable store. `apply` overwrites drifted entities at these
+fixed identities. Before applying to a shared store, confirm that it holds no
+edited copies of these Documents:
 
 ```sh
 trogon-atlas apply -f examples/manifests/generated-glossary/sources.yaml

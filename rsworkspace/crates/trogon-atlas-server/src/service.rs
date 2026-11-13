@@ -543,6 +543,7 @@ pub struct EventModelServiceImpl {
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
     snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
     snapshot_generation: AtomicU64,
+    namespace_generation: AtomicU64,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -728,6 +729,7 @@ impl EventModelServiceImpl {
             owner_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             snapshot_cache: tokio::sync::RwLock::new(None),
             snapshot_generation: AtomicU64::new(0),
+            namespace_generation: AtomicU64::new(0),
             snapshot_cap: MAX_PROJECTION_ENTITIES,
             reverse_index_cache: tokio::sync::RwLock::new(None),
             snapshot_load_lock: tokio::sync::Mutex::new(()),
@@ -2252,6 +2254,7 @@ impl EventModelServiceImpl {
     /// changing a single entity, so the per-owner projections go stale even
     /// though `snapshot_cache` is still perfectly valid.
     async fn invalidate_directory(&self) {
+        self.namespace_generation.fetch_add(1, Ordering::AcqRel);
         self.directory.invalidate().await;
         self.owner_snapshot_cache.write().await.clear();
         self.owner_reverse_index_cache.write().await.clear();
@@ -5048,10 +5051,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::ListGlossaryEntriesRequest>,
     ) -> Result<Response<pb::ListGlossaryPointersResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_pointers(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_pointers(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5060,10 +5065,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::GetGlossaryTermRequest>,
     ) -> Result<Response<pb::GetGlossaryDefinitionResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_definition(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_definition(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5072,27 +5079,31 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::CheckGlossaryUsageRequest>,
     ) -> Result<Response<pb::CheckGlossaryUsageResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_check(
-            input,
-            branch.as_deref(),
-            &vis,
-            trogon_atlas_core::glossary::UsageTextKind::Code,
-        )
-        .await
-        .map(Response::new)
+        let result = self
+            .glossary_check(
+                input,
+                context.branch.as_deref(),
+                &context.visibility,
+                trogon_atlas_core::glossary::UsageTextKind::Code,
+            )
+            .await;
+        self.finish_glossary_read(&context, result)
+            .await
+            .map(Response::new)
     }
 
     async fn list_glossary_entries(
         &self,
         req: Request<pb::ListGlossaryEntriesRequest>,
     ) -> Result<Response<pb::ListGlossaryEntriesResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_list(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_list(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5101,10 +5112,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::GetGlossaryTermRequest>,
     ) -> Result<Response<pb::GetGlossaryTermResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_detail(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_detail(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5113,10 +5126,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::InspectGlossarySourcesRequest>,
     ) -> Result<Response<pb::InspectGlossarySourcesResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_sources(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_sources(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5132,10 +5147,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::CompareGlossariesRequest>,
     ) -> Result<Response<pb::CompareGlossariesResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_compare(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_compare(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -5144,27 +5161,31 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::CheckGlossaryUsageRequest>,
     ) -> Result<Response<pb::CheckGlossaryUsageResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_check(
-            input,
-            branch.as_deref(),
-            &vis,
-            trogon_atlas_core::glossary::UsageTextKind::Prose,
-        )
-        .await
-        .map(Response::new)
+        let result = self
+            .glossary_check(
+                input,
+                context.branch.as_deref(),
+                &context.visibility,
+                trogon_atlas_core::glossary::UsageTextKind::Prose,
+            )
+            .await;
+        self.finish_glossary_read(&context, result)
+            .await
+            .map(Response::new)
     }
 
     async fn inspect_glossary_refresh(
         &self,
         req: Request<pb::InspectGlossaryRefreshRequest>,
     ) -> Result<Response<pb::InspectGlossaryRefreshResponse>, Status> {
-        let (vis, branch) = self.glossary_context(&req).await?;
+        let context = self.begin_glossary_read(&req).await?;
         let input = req.into_inner();
-        let _guard = self.lock_mutations().await;
-        self.glossary_refresh(input, branch.as_deref(), &vis)
+        let result = self
+            .glossary_refresh(input, context.branch.as_deref(), &context.visibility)
+            .await;
+        self.finish_glossary_read(&context, result)
             .await
             .map(Response::new)
     }
@@ -6559,6 +6580,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         // Acquire the mutation lock; concurrent batches must not interleave.
         let guard = self.lock_mutations().await;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
+        let target = self
+            .store
+            .get(to_kind, &to_id, branch.as_deref())
+            .await
+            .map_err(store_err)?;
         if branch.is_none() {
             self.invalidate_snapshot().await;
         }
@@ -6682,13 +6711,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(Status::failed_precondition("Catalog local selectors require an explicit guarded replacement using returned owner and local identities"));
             }
             let mut entity = stored.entity.clone();
-            let fields = trogon_atlas_core::refs::try_retarget_refs(
-                &mut entity,
-                from_kind,
-                &from_id,
-                &to_id,
-            )
-            .map_err(|_| graph::malformed_metadata())?;
+            let mut fields = if from_kind == pb::EntityKind::Document {
+                if let Some(pb::entity::Kind::Term(value)) = &mut entity.kind {
+                    trogon_atlas_core::glossary::retarget_evidence(value, &from_id, &target.entity)
+                        .map_err(|error| Status::failed_precondition(error.to_string()))?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            fields.extend(
+                trogon_atlas_core::refs::try_retarget_refs(
+                    &mut entity,
+                    from_kind,
+                    &from_id,
+                    &to_id,
+                )
+                .map_err(|_| graph::malformed_metadata())?,
+            );
             trogon_atlas_core::connections::renew_retargeted_connection_ids(
                 &stored.entity,
                 &mut entity,
@@ -11086,6 +11127,18 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let metas: Vec<OpMetaLike> = victims
+            .iter()
+            .map(|(kind, id)| OpMetaLike {
+                kind: *kind,
+                id: id.clone(),
+                is_put: false,
+                entity: None,
+            })
+            .collect();
+        self.validate_glossary_writes(&metas, branch.as_deref(), &vis, None)
+            .await?;
+
         let deleted: Vec<Deleted> = victims
             .iter()
             .map(|(k, id)| Deleted {
@@ -11121,15 +11174,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     kind: *k,
                     id: id.clone(),
                     if_match: None,
-                })
-                .collect();
-            let metas: Vec<OpMetaLike> = victims
-                .iter()
-                .map(|(k, id)| OpMetaLike {
-                    kind: *k,
-                    id: id.clone(),
-                    is_put: false,
-                    entity: None,
                 })
                 .collect();
             let mut changeset = PendingChangeset::mint("DeleteByQuery", &author, branch.as_deref());

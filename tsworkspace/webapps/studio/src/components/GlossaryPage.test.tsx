@@ -200,6 +200,41 @@ describe('glossary review page', () => {
       pageSize: 100,
       pageToken: 'opaque-page',
     });
+    expect(await screen.findByText('No entries on this page.')).toBeTruthy();
+    expect(screen.queryByText('No glossary entries.')).toBeNull();
+  });
+
+  it('reloads the selected exact detail along with the catalog', async () => {
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    expect(await screen.findByText('A customer request awaiting fulfillment.')).toBeTruthy();
+    vi.mocked(getGlossaryTerm).mockResolvedValue({
+      ...detail,
+      etag: 'updated-term-etag',
+      entity: { ...detail.entity, term: { ...detail.entity.term, doc: 'The reviewed definition has changed.' } },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(await screen.findByText('The reviewed definition has changed.')).toBeTruthy();
+    expect(screen.queryByText('A customer request awaiting fulfillment.')).toBeNull();
+    expect(getGlossaryTerm).toHaveBeenCalledTimes(2);
+    expect(getGlossaryTerm).toHaveBeenLastCalledWith({ term: { id } }, expect.anything());
+    expect(listGlossaryEntries).toHaveBeenCalledTimes(2);
+  });
+
+  it('rechecks freshness for the same generation revision', async () => {
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    fireEvent.click(await screen.findByText('Context refresh inspection'));
+    fireEvent.click(screen.getByRole('button', { name: 'Check freshness' }));
+    await waitFor(() => expect(inspectGlossaryRefresh).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/Generation revision changed/)).toBeTruthy();
+    vi.mocked(inspectGlossaryRefresh).mockResolvedValue({ observations: [], incomplete: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Check freshness' }));
+    expect(await screen.findByText('Refresh inspection is incomplete.')).toBeTruthy();
+    expect(inspectGlossaryRefresh).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(inspectGlossaryRefresh).mock.calls[1][0].generationRevision).toBe('extract-v1');
   });
 
   it('does not substitute another version when modeled usage inspection returns a mismatched resource', async () => {
@@ -242,6 +277,8 @@ describe('glossary review page', () => {
       },
       expect.anything(),
     );
+    fireEvent.click(screen.getByRole('button', { name: 'Compare contexts' }));
+    await waitFor(() => expect(compareGlossaries).toHaveBeenCalledTimes(2));
   });
 
   it('compares independently selected audiences and clears a superseded comparison', async () => {

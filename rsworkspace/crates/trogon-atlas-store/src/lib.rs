@@ -30,9 +30,9 @@ pub use recovery::{
 };
 pub use store::{
     ChangeKind, ChangeRecord, ChangeStreamStats, ChangesetOp, ChangesetPage, ChangesetRecord,
-    ChangesetRef, ChangesetScope, ChangesetValidation, ClaimOutcome, EntityRevisionRecord,
-    IssueCounts, NamespaceClaim, NamespaceRecord, NamespaceTenure, OperationRecord,
-    OperationStatus, ReceiptCoverage, RevisionPage, RuleCatalogDigest, Store, StoredEntity,
-    UnvalidatedReason, ValidationReceipt, WriteContext,
+    ChangesetRef, ChangesetScope, ChangesetValidation, ClaimOutcome, EntityByteBudget,
+    EntityRevisionRecord, IssueCounts, NamespaceClaim, NamespaceRecord, NamespaceTenure,
+    OperationRecord, OperationStatus, ReceiptCoverage, RevisionPage, RuleCatalogDigest, Store,
+    StoredEntity, UnvalidatedReason, ValidationReceipt, WriteContext,
 };
 pub use trogon_atlas_core::refs;

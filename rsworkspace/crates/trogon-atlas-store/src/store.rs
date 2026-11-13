@@ -810,6 +810,23 @@ pub trait Store: Send + Sync {
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
 
+    /// List with a cumulative encoded-entity byte budget enforced while fetching.
+    ///
+    /// The budget covers scanned entities before latest-version selection and
+    /// result truncation, including baseline and branch overlay entities. Return
+    /// `ResourceExhausted` rather than retaining an entity beyond the budget.
+    async fn list_bounded(
+        &self,
+        _filter: ListFilter<'_>,
+        _limit: Option<usize>,
+        _branch: Option<&str>,
+        _budget: EntityByteBudget,
+    ) -> StoreResult<Vec<StoredEntity>> {
+        Err(StoreError::Unavailable(
+            "byte-bounded entity listing is unsupported by this store".into(),
+        ))
+    }
+
     /// Requested targets explicitly referenced by entities in the merged view.
     ///
     /// Resolve all targets in one complete scan, without list() truncation.
@@ -1583,6 +1600,23 @@ pub struct ListFilter<'a> {
     /// identity out of the listing.
     pub slug: Option<&'a str>,
     pub latest_versions_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityByteBudget {
+    max_encoded_bytes: usize,
+}
+
+impl EntityByteBudget {
+    #[must_use]
+    pub const fn new(max_encoded_bytes: usize) -> Self {
+        Self { max_encoded_bytes }
+    }
+
+    #[must_use]
+    pub const fn max_encoded_bytes(self) -> usize {
+        self.max_encoded_bytes
+    }
 }
 
 // Historical home for `stamp_system`. The policy lives in

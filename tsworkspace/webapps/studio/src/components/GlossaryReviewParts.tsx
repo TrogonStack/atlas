@@ -81,7 +81,10 @@ export function GlossaryRefreshInspection({
           variant="outline"
           size="sm"
           disabled={!revision.trim()}
-          onClick={() => setSubmitted(revision)}
+          onClick={() => {
+            if (submitted === revision) refresh.retry();
+            else setSubmitted(revision);
+          }}
         >
           Check freshness
         </Button>
