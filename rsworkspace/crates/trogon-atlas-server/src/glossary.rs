@@ -177,12 +177,12 @@ impl EventModelServiceImpl {
                         hash.update(row.etag.as_bytes());
                         if core::verify_evidence(selection, &row.entity).is_ok() {
                             (
-                                pb::GlossaryEntryState::Reviewed,
+                                pb::GlossaryEvidenceState::Current,
                                 "Exact source evidence resolves",
                             )
                         } else {
                             (
-                                pb::GlossaryEntryState::SourceChanged,
+                                pb::GlossaryEvidenceState::Changed,
                                 "Source incarnation, content or quoted passage changed",
                             )
                         }
@@ -191,7 +191,7 @@ impl EventModelServiceImpl {
                         incomplete = true;
                         hash.update(b"unavailable");
                         (
-                            pb::GlossaryEntryState::SourceUnavailable,
+                            pb::GlossaryEvidenceState::Unavailable,
                             "Source is unavailable",
                         )
                     }
@@ -206,13 +206,13 @@ impl EventModelServiceImpl {
             if published {
                 if evidence
                     .iter()
-                    .any(|item| item.state == pb::GlossaryEntryState::SourceUnavailable as i32)
+                    .any(|item| item.state == pb::GlossaryEvidenceState::Unavailable as i32)
                 {
                     state = pb::GlossaryEntryState::SourceUnavailable;
                     reason = "Published definition has unavailable evidence".into();
                 } else if evidence
                     .iter()
-                    .any(|item| item.state == pb::GlossaryEntryState::SourceChanged as i32)
+                    .any(|item| item.state == pb::GlossaryEvidenceState::Changed as i32)
                 {
                     state = pb::GlossaryEntryState::SourceChanged;
                     reason = "Published definition requires source reconciliation".into();
@@ -474,7 +474,7 @@ impl EventModelServiceImpl {
                             &text,
                         )),
                         text,
-                        state: pb::GlossaryEntryState::Reviewed as i32,
+                        state: pb::GlossaryEvidenceState::Current as i32,
                     });
                 }
                 Err(error) if error.code() == tonic::Code::NotFound => {
@@ -482,7 +482,7 @@ impl EventModelServiceImpl {
                     hash.update(b"unavailable");
                     sources.push(pb::GlossarySourceMaterial {
                         document: Some(reference),
-                        state: pb::GlossaryEntryState::SourceUnavailable as i32,
+                        state: pb::GlossaryEvidenceState::Unavailable as i32,
                         ..Default::default()
                     });
                 }
