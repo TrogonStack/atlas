@@ -85,6 +85,9 @@ JSON, and write it back with put_entity_json.
 - Open questions and assumptions are first-class, not comments. An
   OpenQuestionAnnotation names something the model does not yet decide: put it
   on the entity or scenario where the gap lives, with `question` and `author`.
+  Add `owner` (a role or team) and `due` (`{"value": "YYYY-MM-DD"}`) so the
+  question has someone to answer it; a malformed `due` warns
+  (OPEN_QUESTION_DUE_INVALID), and the validator never checks it against today.
   An AssumptionAnnotation names something the design already proceeds as if
   true but nobody confirmed, with fields `statement`, optional `basis`, and
   `author`. Both attach via put_entity_json as a canonical Any ("@type":

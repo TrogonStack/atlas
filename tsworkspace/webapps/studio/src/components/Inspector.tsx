@@ -437,13 +437,18 @@ function AnnotationView({
         </div>
       );
     case 'NoteAnnotation':
-    case 'OpenQuestionAnnotation':
+    case 'OpenQuestionAnnotation': {
+      // Only open questions carry owner and due; the due date is a CalendarDate message.
+      const due = (d.due as { value?: string } | undefined)?.value;
       return (
         <div className="rounded-md border border-border px-2 py-1.5 text-xs">
           <p className="leading-snug">{String(d.text ?? d.question ?? '')}</p>
           {d.author ? <p className="mt-0.5 text-[10px] text-muted-foreground">({String(d.author)})</p> : null}
+          {d.owner ? <p className="mt-0.5 text-[10px] text-muted-foreground">Owner: {String(d.owner)}</p> : null}
+          {due ? <p className="mt-0.5 text-[10px] text-muted-foreground">Due: {due}</p> : null}
         </div>
       );
+    }
     default: {
       const entries = Object.entries(d).filter(([, v]) => v !== null && v !== undefined && v !== '');
       return (
