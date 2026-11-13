@@ -496,3 +496,13 @@ fn semantically_equal_metadata_encodings_preserve_review_identity() {
         assert!(glossary::review_is_accepted(&equivalent, TERM_UID));
     }
 }
+
+#[test]
+fn unrenderable_metadata_has_no_glossary_review_identity() {
+    let mut candidate = term();
+    candidate.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/retired.package.Gone".into(),
+        value: vec![1],
+    });
+    assert!(glossary::candidate_digest(&candidate).is_err());
+}
