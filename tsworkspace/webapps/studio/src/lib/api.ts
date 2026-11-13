@@ -3,6 +3,16 @@ import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
 import type {
+  GlossaryComparison,
+  GlossaryDocumentRef,
+  GlossaryIndex,
+  GlossaryRefresh,
+  GlossarySelection,
+  GlossarySources,
+  GlossaryTermDetail,
+  GlossaryTermRef,
+} from '@/lib/glossary';
+import type {
   AssigneeResponsibilitiesRequest,
   DirectoryRef,
   ResponsibilityAssignments,
@@ -484,6 +494,37 @@ export function getTeamContacts(team: DirectoryRef, includeMembers = false, opts
 
 function catalogQuery(query: string, request: unknown, opts: FetchOptions): Promise<CatalogInspection> {
   return getJson(`/api/catalog/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+
+export function listGlossaryEntries(
+  _request: { selection: GlossarySelection; pageSize?: number; pageToken?: string },
+  _opts: FetchOptions = {},
+): Promise<GlossaryIndex> {
+  return Promise.reject(new Error('glossary inspection unavailable'));
+}
+export function getGlossaryTerm(
+  _request: { term: GlossaryTermRef },
+  _opts: FetchOptions = {},
+): Promise<GlossaryTermDetail> {
+  return Promise.reject(new Error('glossary inspection unavailable'));
+}
+export function inspectGlossarySources(
+  _request: { documents: readonly GlossaryDocumentRef[] },
+  _opts: FetchOptions = {},
+): Promise<GlossarySources> {
+  return Promise.reject(new Error('glossary inspection unavailable'));
+}
+export function compareGlossaries(
+  _request: { left: GlossarySelection; right: GlossarySelection },
+  _opts: FetchOptions = {},
+): Promise<GlossaryComparison> {
+  return Promise.reject(new Error('glossary inspection unavailable'));
+}
+export function inspectGlossaryRefresh(
+  _request: { selection: GlossarySelection; documents: readonly GlossaryDocumentRef[]; generationRevision: string },
+  _opts: FetchOptions = {},
+): Promise<GlossaryRefresh> {
+  return Promise.reject(new Error('glossary inspection unavailable'));
 }
 export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
   return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);
