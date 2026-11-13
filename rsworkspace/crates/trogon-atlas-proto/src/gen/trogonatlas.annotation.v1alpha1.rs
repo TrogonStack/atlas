@@ -93,6 +93,13 @@ pub struct OpenQuestionAnnotation {
     pub author: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub created_at: ::prost::alloc::string::String,
+    /// Free-text role or team expected to answer, so a question has someone to ask.
+    #[prost(string, tag="4")]
+    pub owner: ::prost::alloc::string::String,
+    /// Date the answer is needed by. The validator never compares it to the
+    /// clock, so a bundle validates the same whenever it is checked.
+    #[prost(message, optional, tag="5")]
+    pub due: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
 }
 /// A belief the design relies on that nobody has confirmed. Unlike an
 /// OpenQuestionAnnotation, the model already proceeds as if it were true:

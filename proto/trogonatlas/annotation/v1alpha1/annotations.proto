@@ -74,6 +74,11 @@ message OpenQuestionAnnotation {
   string question = 1;
   string author = 2;
   string created_at = 3;
+  // Free-text role or team expected to answer, so a question has someone to ask.
+  string owner = 4;
+  // Date the answer is needed by. The validator never compares it to the
+  // clock, so a bundle validates the same whenever it is checked.
+  trogonatlas.type.v1alpha1.CalendarDate due = 5;
 }
 
 // A belief the design relies on that nobody has confirmed. Unlike an
