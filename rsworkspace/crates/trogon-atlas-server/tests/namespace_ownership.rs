@@ -1499,13 +1499,14 @@ async fn a_writer_may_not_delete_a_namespace() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
     let mut c = client().await;
-    let id = register(&mut c, "acme-probe-source").await;
+    let administration = register(&mut c, "acme-probe-source-admin").await;
+    let destination = register(&mut c, "acme-probe-source-destination").await;
     c.create_source_registration(authed(
         pb::CreateSourceRegistrationRequest {
             registration: Some(pb::SourceRegistration {
                 id: "acme-delete-ns-source".into(),
-                administration_namespace: id.clone(),
-                destination_namespaces: vec![id.clone()],
+                administration_namespace: administration.clone(),
+                destination_namespaces: vec![destination.clone()],
                 profile_revision: 1,
                 ownership_policy_revision: "policy-v1".into(),
                 deletion_policy: pb::SourceDeletionPolicy::RetainNative as i32,
@@ -1516,11 +1517,13 @@ async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
     ))
     .await
     .unwrap();
-    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
-        .await
-        .unwrap_err();
-    assert_eq!(err.code(), Code::FailedPrecondition);
-    assert!(err.message().contains("acme-delete-ns-source"), "{err}");
+    for id in [administration, destination] {
+        let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(err.message().contains("acme-delete-ns-source"), "{err}");
+    }
 }
 
 /// The registry's answers, with a release that fails until it is told not
@@ -1528,6 +1531,7 @@ async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
 #[derive(Debug)]
 struct FailingReleaseAuthorizer {
     registry: RegistryAuthorizer,
+    read_lens: Option<Lens>,
     release_fails: AtomicBool,
     releases: AtomicUsize,
 }
@@ -1539,10 +1543,16 @@ impl NamespaceAuthorizer for FailingReleaseAuthorizer {
         visibility: &Visibility,
         namespace: &NamespaceId,
     ) -> Result<bool, Status> {
+        if let Some(lens) = &self.read_lens {
+            return Ok(lens.admits(namespace.as_str()));
+        }
         self.registry.admits(visibility, namespace).await
     }
 
     async fn lens(&self, visibility: &Visibility) -> Result<Lens, Status> {
+        if let Some(lens) = &self.read_lens {
+            return Ok(lens.clone());
+        }
         self.registry.lens(visibility).await
     }
 
@@ -1580,6 +1590,7 @@ async fn a_delete_whose_release_fails_can_be_retried() {
     let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
     let authorizer = Arc::new(FailingReleaseAuthorizer {
         registry: RegistryAuthorizer::new(svc.directory(), store),
+        read_lens: None,
         release_fails: AtomicBool::new(true),
         releases: AtomicUsize::new(0),
     });
@@ -1603,4 +1614,50 @@ async fn a_delete_whose_release_fails_can_be_retried() {
     assert_eq!(authorizer.releases.load(Ordering::SeqCst), 1);
     let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
     assert!(!seen.iter().any(|(seen_id, _)| seen_id == &id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_read_visibility_does_not_authorize_namespace_deletion() {
+    use pb::event_model_service_server::EventModelService;
+    use trogon_atlas_core::NamespaceName;
+    use trogon_atlas_server::{
+        auth::{Principal, PrincipalKind, Role},
+        scope::NamespaceScope,
+    };
+
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let namespace = store
+        .register_namespace(
+            &NamespaceName::parse("acme-shared-deletion").unwrap(),
+            &OwnerId::parse("acme").unwrap(),
+            "admin",
+        )
+        .await
+        .unwrap()
+        .record
+        .id;
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(FailingReleaseAuthorizer {
+        registry: RegistryAuthorizer::new(service.directory(), store.clone()),
+        read_lens: Some(Lens::Everything),
+        release_fails: AtomicBool::new(false),
+        releases: AtomicUsize::new(0),
+    });
+    let service = service.with_authorizer(authorizer.clone());
+    let mut request = tonic::Request::new(pb::DeleteNamespaceRequest {
+        id: namespace.to_string(),
+    });
+    request.extensions_mut().insert(Principal {
+        name: Arc::from("beta-shared-viewer"),
+        role: Role::Admin,
+        kind: PrincipalKind::User,
+        is_anonymous: false,
+        namespaces: NamespaceScope::unrestricted(),
+        parent: Some(OwnerId::parse("beta").unwrap()),
+    });
+
+    let status = service.delete_namespace(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::NotFound, "{status:?}");
+    assert_eq!(authorizer.releases.load(Ordering::SeqCst), 0);
+    assert!(store.get_namespace(&namespace).await.unwrap().is_some());
 }

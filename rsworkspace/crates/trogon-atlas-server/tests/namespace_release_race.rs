@@ -192,6 +192,25 @@ fn event_id(namespace: &str, slug: &str) -> pb::Id {
     }
 }
 
+async fn await_authorization_checkpoint<T: std::fmt::Debug>(
+    authorizer: &PausingAuthorizer,
+    task: &mut tokio::task::JoinHandle<T>,
+) {
+    let checkpoint = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::select! {
+            result = &mut *task => panic!(
+                "request completed before its authorization checkpoint: {result:?}"
+            ),
+            () = authorizer.authorized.notified() => {}
+        }
+    })
+    .await;
+    if checkpoint.is_err() {
+        task.abort();
+        panic!("request did not reach its authorization checkpoint within 30 seconds");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_event_resolution_rechecks_ownership_after_waiting_for_the_lock() {
     let race = race("acme-resolve").await;
@@ -217,12 +236,7 @@ async fn an_event_resolution_rechecks_ownership_after_waiting_for_the_lock() {
     race.authorizer.armed.store(true, Ordering::SeqCst);
     let mut resolving =
         tokio::spawn(async move { resolver.resolve_branch_entry(writer(request, None)).await });
-    tokio::select! {
-        result = &mut resolving => panic!(
-            "an Event resolution must authorize its target namespace before landing: {result:?}"
-        ),
-        () = race.authorizer.authorized.notified() => {}
-    }
+    await_authorization_checkpoint(&race.authorizer, &mut resolving).await;
 
     race.service
         .move_namespace(writer_of(
@@ -363,7 +377,7 @@ async fn a_refused_revert_leaves_its_operation_id_free_to_retry() {
 
     race.authorizer.armed.store(true, Ordering::SeqCst);
     let reverting = race.service.clone();
-    let first = {
+    let mut first = {
         let revert = revert.clone();
         tokio::spawn(async move {
             reverting
@@ -371,7 +385,7 @@ async fn a_refused_revert_leaves_its_operation_id_free_to_retry() {
                 .await
         })
     };
-    race.authorizer.authorized.notified().await;
+    await_authorization_checkpoint(&race.authorizer, &mut first).await;
     race.release().await;
     race.authorizer.resume.notify_one();
     let status = first
@@ -397,7 +411,7 @@ async fn a_write_that_waited_while_another_owner_adopted_its_namespace_is_refuse
 
     race.authorizer.armed.store(true, Ordering::SeqCst);
     let writing = race.service.clone();
-    let acme_write = {
+    let mut acme_write = {
         let namespace = namespace.clone();
         tokio::spawn(async move {
             writing
@@ -405,7 +419,7 @@ async fn a_write_that_waited_while_another_owner_adopted_its_namespace_is_refuse
                 .await
         })
     };
-    race.authorizer.authorized.notified().await;
+    await_authorization_checkpoint(&race.authorizer, &mut acme_write).await;
     race.release().await;
 
     // The legacy id equals the name, so the new owner's row has the same id
@@ -477,7 +491,7 @@ async fn a_write_that_waited_while_its_namespace_was_released_is_refused() {
 
     authorizer.armed.store(true, Ordering::SeqCst);
     let writing = service.clone();
-    let baseline_write = {
+    let mut baseline_write = {
         let namespace = namespace.clone();
         tokio::spawn(async move {
             writing
@@ -485,7 +499,7 @@ async fn a_write_that_waited_while_its_namespace_was_released_is_refused() {
                 .await
         })
     };
-    authorizer.authorized.notified().await;
+    await_authorization_checkpoint(&authorizer, &mut baseline_write).await;
 
     // Baseline holds nothing in the namespace yet, so deleting the branch
     // releases its row while the authorized write is still waiting.

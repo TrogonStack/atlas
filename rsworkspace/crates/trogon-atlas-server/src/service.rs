@@ -4599,6 +4599,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::DeleteNamespaceRequest>,
     ) -> Result<Response<pb::DeleteNamespaceResponse>, Status> {
         let _guard = self.lock_mutations().await;
+        if !self.store.is_writer() {
+            let writer = self.store.writer_status();
+            return Err(store_err(trogon_atlas_store::StoreError::NotWriter {
+                role: writer.role,
+                epoch: writer.epoch,
+            }));
+        }
         let vis = Self::visibility_of(&req);
         let id = NamespaceId::parse(req.into_inner().id.trim())
             .map_err(|e| Status::invalid_argument(format!("invalid namespace id: {e}")))?;
@@ -4614,7 +4621,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // A caller bound to an owner may only delete inside its own subtree.
         // Answers like a missing row, so the id of another tenant's
         // namespace is not confirmed.
-        if !self.lens(&vis).await?.admits(id.as_str()) {
+        if vis.owner().is_some_and(|owner| owner != &record.parent)
+            || !self.lens(&vis).await?.admits(id.as_str())
+        {
             return Err(not_registered());
         }
         if record.id == NamespaceId::adopt_legacy(&record.name) {
@@ -4626,7 +4635,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
         // The caller's view is deliberately not used below: a namespace
         // another owner filled is not empty because this caller cannot see it.
-        let baseline = self.baseline_snapshot_with_truncation().await?;
+        let baseline = self.attestation_baseline().await?;
         Self::refuse_unless_empty(&id, &baseline.entities, baseline.truncated, "baseline")?;
         for branch in self.store.list_branches().await.map_err(store_err)? {
             let view = graph::load_all(&self.store, Some(&branch.name)).await?;
