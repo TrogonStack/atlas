@@ -1,5 +1,7 @@
 #[path = "channel_messages.rs"]
 mod channel_messages;
+#[path = "glossary.rs"]
+mod glossary;
 #[path = "source_integration.rs"]
 mod source_integration;
 #[path = "term_domains.rs"]
@@ -4882,53 +4884,82 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
     async fn list_glossary_entries(
         &self,
-        _req: Request<pb::ListGlossaryEntriesRequest>,
+        req: Request<pb::ListGlossaryEntriesRequest>,
     ) -> Result<Response<pb::ListGlossaryEntriesResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_list(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn get_glossary_term(
         &self,
-        _req: Request<pb::GetGlossaryTermRequest>,
+        req: Request<pb::GetGlossaryTermRequest>,
     ) -> Result<Response<pb::GetGlossaryTermResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_detail(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn inspect_glossary_sources(
         &self,
-        _req: Request<pb::InspectGlossarySourcesRequest>,
+        req: Request<pb::InspectGlossarySourcesRequest>,
     ) -> Result<Response<pb::InspectGlossarySourcesResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_sources(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn review_glossary_term(
         &self,
-        _req: Request<pb::ReviewGlossaryTermRequest>,
+        req: Request<pb::ReviewGlossaryTermRequest>,
     ) -> Result<Response<pb::GetGlossaryTermResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        self.glossary_review(req).await
     }
 
     async fn compare_glossaries(
         &self,
-        _req: Request<pb::CompareGlossariesRequest>,
+        req: Request<pb::CompareGlossariesRequest>,
     ) -> Result<Response<pb::CompareGlossariesResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_compare(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn check_glossary_usage(
         &self,
-        _req: Request<pb::CheckGlossaryUsageRequest>,
+        req: Request<pb::CheckGlossaryUsageRequest>,
     ) -> Result<Response<pb::CheckGlossaryUsageResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_check(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn inspect_glossary_refresh(
         &self,
-        _req: Request<pb::InspectGlossaryRefreshRequest>,
+        req: Request<pb::InspectGlossaryRefreshRequest>,
     ) -> Result<Response<pb::InspectGlossaryRefreshResponse>, Status> {
-        Err(Status::unimplemented("glossary workflow"))
+        let (vis, branch) = self.glossary_context(&req).await?;
+        let input = req.into_inner();
+        let _guard = self.lock_mutations().await;
+        self.glossary_refresh(input, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
-
 
     async fn list_incoming_decision_declarations(
         &self,
@@ -8125,6 +8156,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Protection can be lifted, so refusing on it is not a final answer
         // for this id: release the claim, as `PutEntity` and `BatchMutate`
         // refuse before they claim.
+        if let Err(status) = self
+            .validate_glossary_writes(
+                &[OpMetaLike {
+                    kind,
+                    id: id.clone(),
+                    is_put: false,
+                    entity: None,
+                }],
+                branch.as_deref(),
+                &vis,
+                None,
+            )
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
         if let Err(status) = self.refuse_protected([(kind, &id)]).await {
             if let Some(key) = &claim_key {
                 operation_receipts::settle_not_applied(&*self.store, key).await;
