@@ -82,6 +82,29 @@ fn today() -> String {
     Utc::now().format("%Y-%m-%d").to_string()
 }
 
+fn bounded_output<M: Message>(name: &str, message: M) -> Result<M, Status> {
+    if message.encoded_len() > 3 * 1024 * 1024 {
+        return Err(Status::resource_exhausted(
+            "glossary response exceeds 3 MiB",
+        ));
+    }
+    let value = trogon_atlas_core::transcode::TranscodePool::builtin()
+        .map_err(|_| Status::internal("native glossary descriptors are unavailable"))?
+        .message_json_value(
+            &format!("trogonatlas.api.eventmodel.v1alpha1.{name}"),
+            &message,
+        )
+        .map_err(|_| Status::internal("glossary response cannot be represented losslessly"))?;
+    let json = serde_json::to_vec(&value)
+        .map_err(|_| Status::internal("glossary response cannot be encoded"))?;
+    if json.len() > 3 * 1024 * 1024 {
+        return Err(Status::resource_exhausted(
+            "glossary JSON response exceeds 3 MiB",
+        ));
+    }
+    Ok(message)
+}
+
 fn exact(id: Option<&pb::Id>) -> Result<&pb::Id, Status> {
     let id = super::require_id(id, "exact glossary reference")?;
     if id.version == 0 {
@@ -141,10 +164,7 @@ impl EventModelServiceImpl {
         hash.update(stored.etag.as_bytes());
         if let Some(glossary) = &value.glossary {
             if let Some(review) = &glossary.review {
-                if !core::review_is_current(value, uid(&stored.entity)) {
-                    state = pb::GlossaryEntryState::StaleReview;
-                    reason = "Review does not bind this content and incarnation".into();
-                } else {
+                if core::review_is_current(value, uid(&stored.entity)) {
                     state = match pb::GlossaryReviewDisposition::try_from(review.disposition)
                         .map_err(invalid)?
                     {
@@ -158,6 +178,9 @@ impl EventModelServiceImpl {
                         }
                     };
                     reason = review.reason.clone();
+                } else {
+                    state = pb::GlossaryEntryState::StaleReview;
+                    reason = "Review does not bind this content and incarnation".into();
                 }
             }
             for (index, selection) in glossary.evidence.iter().enumerate() {
@@ -333,7 +356,14 @@ impl EventModelServiceImpl {
                         .as_ref()
                         .and_then(|value| value.id.as_ref()),
                 )?;
-                latest.insert((id.namespace.clone(), id.slug.clone()), entry);
+                latest.insert(
+                    (
+                        id.namespace.clone(),
+                        id.slug.clone(),
+                        entry.index.audience.clone(),
+                    ),
+                    entry,
+                );
             }
             entries = latest.into_values().collect();
         }
@@ -386,19 +416,22 @@ impl EventModelServiceImpl {
             request.page_size as usize
         };
         let end = offset.saturating_add(size).min(catalog.entries.len());
-        Ok(pb::ListGlossaryEntriesResponse {
-            entries: catalog.entries[offset..end]
-                .iter()
-                .map(|entry| entry.index.clone())
-                .collect(),
-            next_page_token: if end < catalog.entries.len() {
-                format!("{}:{end}", catalog.revision)
-            } else {
-                String::new()
+        bounded_output(
+            "ListGlossaryEntriesResponse",
+            pb::ListGlossaryEntriesResponse {
+                entries: catalog.entries[offset..end]
+                    .iter()
+                    .map(|entry| entry.index.clone())
+                    .collect(),
+                next_page_token: if end < catalog.entries.len() {
+                    format!("{}:{end}", catalog.revision)
+                } else {
+                    String::new()
+                },
+                incomplete: catalog.incomplete,
+                snapshot_revision: catalog.revision,
             },
-            incomplete: catalog.incomplete,
-            snapshot_revision: catalog.revision,
-        })
+        )
     }
 
     pub(super) async fn glossary_detail(
@@ -419,13 +452,16 @@ impl EventModelServiceImpl {
         let entry = self
             .glossary_entry(row, branch, visibility, &mut Budget::default())
             .await?;
-        Ok(pb::GetGlossaryTermResponse {
-            entity: Some(entry.stored.entity),
-            etag: entry.stored.etag,
-            entry: Some(entry.index),
-            evidence: entry.evidence,
-            incomplete: entry.incomplete,
-        })
+        bounded_output(
+            "GetGlossaryTermResponse",
+            pb::GetGlossaryTermResponse {
+                entity: Some(entry.stored.entity),
+                etag: entry.stored.etag,
+                entry: Some(entry.index),
+                evidence: entry.evidence,
+                incomplete: entry.incomplete,
+            },
+        )
     }
 
     pub(super) async fn glossary_sources(
@@ -489,11 +525,14 @@ impl EventModelServiceImpl {
                 Err(error) => return Err(error),
             }
         }
-        Ok(pb::InspectGlossarySourcesResponse {
-            sources,
-            incomplete,
-            snapshot_revision: hex(&hash.finalize()),
-        })
+        bounded_output(
+            "InspectGlossarySourcesResponse",
+            pb::InspectGlossarySourcesResponse {
+                sources,
+                incomplete,
+                snapshot_revision: hex(&hash.finalize()),
+            },
+        )
     }
 
     pub(super) async fn glossary_review(
@@ -649,14 +688,17 @@ impl EventModelServiceImpl {
                 explanation: difference.explanation,
             })
             .collect();
-        Ok(pb::CompareGlossariesResponse {
-            differences,
-            incomplete: left.incomplete || right.incomplete,
-            snapshot_revision: hex(&Sha256::digest(format!(
-                "{}:{}",
-                left.revision, right.revision
-            ))),
-        })
+        bounded_output(
+            "CompareGlossariesResponse",
+            pb::CompareGlossariesResponse {
+                differences,
+                incomplete: left.incomplete || right.incomplete,
+                snapshot_revision: hex(&Sha256::digest(format!(
+                    "{}:{}",
+                    left.revision, right.revision
+                ))),
+            },
+        )
     }
 
     pub(super) async fn glossary_check(
@@ -747,12 +789,15 @@ impl EventModelServiceImpl {
                 rationale: finding.rationale,
             });
         }
-        Ok(pb::CheckGlossaryUsageResponse {
-            findings,
-            text_revision: request.text_revision,
-            snapshot_revision: catalog.revision,
-            incomplete,
-        })
+        bounded_output(
+            "CheckGlossaryUsageResponse",
+            pb::CheckGlossaryUsageResponse {
+                findings,
+                text_revision: request.text_revision,
+                snapshot_revision: catalog.revision,
+                incomplete,
+            },
+        )
     }
 
     pub(super) async fn glossary_refresh(
@@ -783,10 +828,39 @@ impl EventModelServiceImpl {
                 visibility,
             )
             .await?;
+        let mut selected_sources = BTreeMap::new();
+        for source in &sources.sources {
+            let id = exact(
+                source
+                    .document
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref()),
+            )?;
+            if selected_sources
+                .insert((id.namespace.clone(), id.slug.clone()), id.version)
+                .is_some()
+            {
+                return Err(Status::invalid_argument(
+                    "select one exact source version per source family",
+                ));
+            }
+        }
         let observations = catalog
             .entries
             .into_iter()
-            .map(|entry| {
+            .map(|mut entry| {
+                if let Some(glossary) = term(&entry.stored.entity).and_then(|value| value.glossary.as_ref()) {
+                    for (index, evidence) in glossary.evidence.iter().enumerate() {
+                        if let Some(id) = evidence.document.as_ref().and_then(|reference| reference.id.as_ref()) {
+                            if selected_sources.get(&(id.namespace.clone(), id.slug.clone())).is_some_and(|version| *version != id.version) {
+                                entry.evidence[index].state = pb::GlossaryEvidenceState::Changed as i32;
+                                entry.evidence[index].reason = "The selected source revision differs from the reviewed evidence".into();
+                                entry.index.state = pb::GlossaryEntryState::SourceChanged as i32;
+                                entry.index.reason = "The selected input inventory requires reconciliation".into();
+                            }
+                        }
+                    }
+                }
                 let generation_changed = term(&entry.stored.entity)
                     .and_then(|term| term.glossary.as_ref())
                     .is_none_or(|value| value.generation_revision != request.generation_revision);
@@ -797,15 +871,18 @@ impl EventModelServiceImpl {
                 }
             })
             .collect();
-        Ok(pb::InspectGlossaryRefreshResponse {
-            observations,
-            sources: sources.sources,
-            incomplete: catalog.incomplete || sources.incomplete,
-            snapshot_revision: hex(&Sha256::digest(format!(
-                "{}:{}:{}",
-                catalog.revision, sources.snapshot_revision, request.generation_revision
-            ))),
-        })
+        bounded_output(
+            "InspectGlossaryRefreshResponse",
+            pb::InspectGlossaryRefreshResponse {
+                observations,
+                sources: sources.sources,
+                incomplete: catalog.incomplete || sources.incomplete,
+                snapshot_revision: hex(&Sha256::digest(format!(
+                    "{}:{}:{}",
+                    catalog.revision, sources.snapshot_revision, request.generation_revision
+                ))),
+            },
+        )
     }
 
     async fn glossary_proposed_target(
