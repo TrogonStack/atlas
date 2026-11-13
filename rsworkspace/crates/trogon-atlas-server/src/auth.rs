@@ -187,6 +187,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections" => {
             Role::Reader
         }
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport" => Role::Reader,
 
         // Direct lookup
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity" => Role::Reader,
