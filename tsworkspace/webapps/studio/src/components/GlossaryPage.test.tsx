@@ -67,7 +67,7 @@ const detail = {
       },
     },
   },
-  evidence: [{ evidenceIndex: 0, state: 'GLOSSARY_ENTRY_STATE_SOURCE_CHANGED', reason: 'Source digest changed.' }],
+  evidence: [{ evidenceIndex: 0, state: 'GLOSSARY_EVIDENCE_STATE_CHANGED', reason: 'Source digest changed.' }],
 };
 
 beforeEach(() => {
@@ -84,7 +84,7 @@ beforeEach(() => {
   });
   vi.mocked(getGlossaryTerm).mockResolvedValue(detail);
   vi.mocked(inspectGlossarySources).mockResolvedValue({
-    sources: [{ document: source, text: 'Current source text.', state: 'GLOSSARY_ENTRY_STATE_REVIEWED' }],
+    sources: [{ document: source, text: 'Current source text.', state: 'GLOSSARY_EVIDENCE_STATE_CURRENT' }],
   });
   vi.mocked(compareGlossaries).mockResolvedValue({
     differences: [
@@ -109,6 +109,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(navigator, 'clipboard');
 });
 
 async function chooseSales() {
@@ -134,6 +135,7 @@ describe('glossary review page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
     expect(await screen.findByText('A customer request awaiting fulfillment.')).toBeTruthy();
     expect(screen.getAllByText('Source changed').length).toBeGreaterThan(0);
+    expect(screen.getByText('Changed')).toBeTruthy();
     expect(screen.getByText('Not in published selection')).toBeTruthy();
     expect(screen.getByText('reviewer')).toBeTruthy();
     expect(screen.getByText('<script>Orders are requests.</script>')).toBeTruthy();
@@ -142,6 +144,7 @@ describe('glossary review page', () => {
     expect(screen.getByRole('link', { name: 'sales/purchase-request@7' }).getAttribute('href')).toContain('version=7');
     fireEvent.click(screen.getByRole('button', { name: 'Inspect source' }));
     expect(await screen.findByText('Current source text.')).toBeTruthy();
+    expect(screen.getByText('Current')).toBeTruthy();
     expect(inspectGlossarySources).toHaveBeenCalledWith(
       { documents: [source] },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
