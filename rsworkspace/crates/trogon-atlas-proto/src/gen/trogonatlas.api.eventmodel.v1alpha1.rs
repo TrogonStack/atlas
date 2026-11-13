@@ -6608,6 +6608,20 @@ pub struct MoveNamespaceResponse {
     #[prost(message, optional, tag="1")]
     pub namespace: ::core::option::Option<super::super::super::catalog::v1alpha1::NamespaceRecord>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteNamespaceRequest {
+    /// Namespace id, not name, as for MoveNamespace. Refused with
+    /// FAILED_PRECONDITION unless the namespace holds no entity on baseline and
+    /// on every branch.
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteNamespaceResponse {
+    /// The registry row that was removed.
+    #[prost(message, optional, tag="1")]
+    pub namespace: ::core::option::Option<super::super::super::catalog::v1alpha1::NamespaceRecord>,
+}
 // ---------- Entity protection -------------------------------------------------
 //
 // Protecting an identity freezes it on every route: no new version, no edit,

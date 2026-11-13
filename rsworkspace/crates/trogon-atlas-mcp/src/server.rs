@@ -27,15 +27,16 @@ use crate::{
         AnalysisScopeParams, ApplyManifestsParams, ArtifactRequestParams, BatchGetParams,
         BatchMutateJsonParams, BatchMutateParams, CatalogQueryParams, ClassifyImpactParams,
         CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams, DeleteByQueryParams,
-        DeleteEntityParams, DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams,
-        EntitySchemaParams, EntitySpec, EventModelProjectionParams, ExportAttestedModelParams,
-        ExportNamespaceParams, ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams,
-        GetEntityHistoryParams, GetEntityProtectionParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, GlossaryRequestParams, ImpactParams, JsonOpts,
-        ListChangesParams, ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams,
-        ListEntityProtectionsParams, ListVersionsParams, MergeBranchParams, MoveNamespaceParams,
-        ProjectionParams, ProtectEntityParams, PutEntityJsonParams, PutEntityParams,
-        ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        DeleteEntityParams, DeleteNamespaceParams, DiffBranchParams, DiffEntitiesParams,
+        DiffManifestsParams, EmptyParams, EntitySchemaParams, EntitySpec,
+        EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
+        ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        GlossaryRequestParams, ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
+        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
         ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
         SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
         UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
@@ -534,6 +535,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
         tool: "move_namespace",
         rpcs: &["MoveNamespace"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "delete_namespace",
+        rpcs: &["DeleteNamespace"],
         min_role: ToolRole::Admin,
         area: ToolArea::Administration,
     },
@@ -1817,6 +1824,29 @@ impl McpServer {
             })
             .await
             .map_err(tool_err("move_namespace"))?
+            .into_inner();
+        Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Remove an empty namespace from the registry. Admin only. Refused unless the namespace holds no entity on baseline and on every branch, and refused for a legacy namespace whose id is its name. list_namespaces reports the id.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_namespace(
+        &self,
+        Parameters(p): Parameters<DeleteNamespaceParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let mut client = self.client();
+        self.ensure_can_mutate(&mut client, false).await?;
+        let resp = client
+            .delete_namespace(pb::DeleteNamespaceRequest { id: p.id })
+            .await
+            .map_err(tool_err("delete_namespace"))?
             .into_inner();
         Ok(ok_envelope(&resp))
     }

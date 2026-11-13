@@ -1991,6 +1991,36 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
+        pub async fn delete_namespace(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteNamespaceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteNamespaceResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "DeleteNamespace",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Entity protection. Setting and lifting are admin-only and baseline-only;
  reading is open to any reader.
 */
@@ -4163,6 +4193,14 @@ pub mod event_model_service_server {
             request: tonic::Request<super::MoveNamespaceRequest>,
         ) -> std::result::Result<
             tonic::Response<super::MoveNamespaceResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn delete_namespace(
+            &self,
+            request: tonic::Request<super::DeleteNamespaceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteNamespaceResponse>,
             tonic::Status,
         >;
         /** Entity protection. Setting and lifting are admin-only and baseline-only;
@@ -7809,6 +7847,52 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = MoveNamespaceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteNamespaceSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::DeleteNamespaceRequest>
+                    for DeleteNamespaceSvc<T> {
+                        type Response = super::DeleteNamespaceResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteNamespaceRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::delete_namespace(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteNamespaceSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
