@@ -10,7 +10,7 @@ use std::{
 
 use async_nats::jetstream::{
     self, object_store,
-    stream::{Config as StreamConfig, DiscardPolicy, RetentionPolicy},
+    stream::{Config as StreamConfig, DiscardPolicy, RetentionPolicy, StorageType},
     Context,
 };
 use bytes::Bytes;
@@ -20,7 +20,7 @@ use trogon_atlas_server::artifacts::{
     config::{ArtifactBackend, ArtifactConfig},
     storage::{BlobStorage, NatsBlobStorage},
 };
-use trogon_atlas_store::Store as _;
+use trogon_atlas_store::{NatsStore, Store as _};
 
 fn configuration() -> ArtifactConfig {
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
@@ -181,6 +181,30 @@ async fn catalog_refuses_subject_transforms() {
         .err()
         .expect("catalog that redirects records away from their read subjects must be refused");
     assert!(error.to_string().contains("artifact catalog"));
+}
+
+#[tokio::test]
+async fn receipt_stream_refuses_memory_storage() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store_config = nats.store_config();
+    let context = context().await;
+    context
+        .create_key_value(async_nats::jetstream::kv::Config {
+            bucket: store_config.lease_bucket.clone(),
+            history: 1,
+            storage: StorageType::Memory,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let store = Arc::new(NatsStore::connect_with(store_config).await.unwrap());
+    let config = configuration();
+    let error = config
+        .open(&nats.url, 2 * 1024 * 1024, store)
+        .await
+        .err()
+        .expect("artifact startup must reject memory-backed receipt storage");
+    assert!(error.to_string().contains("file-backed"));
 }
 
 #[tokio::test]

@@ -50,6 +50,14 @@ its NATS identity permits it, and reuses existing compatible buckets. New
 buckets use the service's provider defaults; pre-provision them when a
 different replication policy is required.
 
+For either NATS or S3 byte storage, back up the artifact catalog, the selected
+blob store and the model store's writer-lease bucket together. The writer-lease
+bucket contains durable acceptance receipts; purging or expiring it makes
+retained files unverifiable. Quiesce upload completion and publication, wait for
+in-flight provider writes and receipt acceptance, then snapshot the coordinated
+set. The [publication and upgrade contract](../explanation/single-writer.md#artifact-publication)
+describes the required restore and rollout ordering.
+
 An artifact can be larger than a NATS message because Object Store splits its
 bytes into chunks. This does not change the existing entity-size contract or
 the NATS transport capacity required by Atlas's model store.
@@ -102,12 +110,6 @@ CLI uploads are not subject to browser CORS.
 
 The S3 backend still requires NATS for the artifact catalog and the rest of
 the Atlas service. Configuring S3 does not replace the model store.
-
-Back up the model store's writer-lease bucket with the artifact catalog and
-objects. It also holds durable acceptance receipts; purging or expiring it
-makes retained files unverifiable. The
-[publication and upgrade contract](../explanation/single-writer.md#artifact-publication)
-describes the store format change and coordinated upgrade requirements.
 
 Changing the configured backend, bucket, or endpoint does not migrate existing
 artifacts. Preserve the matching catalog and blobs, or migrate them together
@@ -293,6 +295,6 @@ continues to mean successful byte verification and catalog publication,
 independently of model attachment.
 
 Do not apply a blanket storage TTL to finalized bytes or remove final objects
-without checking model, branch, and retained-history references. Back up the
-artifact catalog together with the selected blob store. Presigned URL expiry
-does not expire an accepted artifact's identity or bytes.
+without checking model, branch, and retained-history references. Presigned URL
+expiry does not expire an accepted artifact's identity or bytes. The coordinated
+backup requirement above includes the receipt bucket for every backend.
