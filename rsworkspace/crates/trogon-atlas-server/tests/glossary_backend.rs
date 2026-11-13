@@ -24,6 +24,10 @@ fn request<T>(body: T, identity: &str) -> Request<T> {
 }
 
 async fn client() -> Client {
+    fixture_client().await.0
+}
+
+async fn fixture_client() -> (Client, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let registry = TokenRegistry::from_file_contents(
@@ -61,7 +65,8 @@ tokens = ["glossary-fixture-worker"]
             .await
             .unwrap();
     });
-    Client::connect(format!("http://{address}")).await.unwrap()
+    let endpoint = format!("http://{address}");
+    (Client::connect(endpoint.clone()).await.unwrap(), endpoint)
 }
 
 fn id(slug: &str, version: u64) -> pb::Id {
@@ -325,4 +330,273 @@ async fn generated_definition_requires_the_exact_retained_source_incarnation() {
         ))
         .await;
     assert_eq!(result.unwrap_err().code(), Code::InvalidArgument);
+}
+
+#[tokio::test]
+#[ignore = "authenticated native glossary browser fixture, bounded to ten minutes"]
+async fn glossary_native_fixture() {
+    let (mut client, endpoint) = fixture_client().await;
+    put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::BoundedContext(pb::BoundedContext {
+                id: Some(id("shop", 1)),
+                title: "Shop".into(),
+                doc: "Controlled glossary acceptance context.".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        "",
+    )
+    .await;
+    let candidate = candidate(&mut client, 1).await;
+    let published = client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("purchase", 1)),
+                }),
+                if_match: candidate.etag,
+                disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+                reason: "Controlled expert fixture review.".into(),
+                ..Default::default()
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut draft = published.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Term(term)) = &mut draft.kind {
+        term.id = Some(id("purchase", 2));
+        term.doc = "Proposed definition awaiting expert correction.".into();
+        term.glossary.as_mut().unwrap().review = None;
+    }
+    draft.system = None;
+    put(&mut client, draft, "").await;
+    let source = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("source", 1)),
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut stale_source = source.entity.unwrap();
+    stale_source.system = None;
+    if let Some(pb::entity::Kind::Document(document)) = &mut stale_source.kind {
+        document.id = Some(id("stale-source", 1));
+        for subject in &mut document.subjects {
+            subject.connection_id = None;
+        }
+    }
+    let stale_source = put(&mut client, stale_source, "").await;
+    let mut stale = published.entity.unwrap();
+    stale.system = None;
+    if let Some(pb::entity::Kind::Term(term)) = &mut stale.kind {
+        term.id = Some(id("stale", 1));
+        term.title = "Archived vocabulary".into();
+        term.glossary.as_mut().unwrap().review = None;
+        let evidence = &mut term.glossary.as_mut().unwrap().evidence[0];
+        evidence.document = Some(pb::DocumentRef {
+            id: Some(id("stale-source", 1)),
+        });
+        evidence.owner_uid = stale_source
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid
+            .clone();
+    }
+    let stale = put(&mut client, stale, "").await;
+    client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("stale", 1)),
+                }),
+                if_match: stale.etag,
+                disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+                reason: "Controlled review before source changes.".into(),
+                ..Default::default()
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap();
+    let mut changed = stale_source.entity.unwrap();
+    if let Some(pb::entity::Kind::Document(document)) = &mut changed.kind {
+        let content = "This source has changed since expert review.";
+        document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+            content: content.into(),
+            media_type: Some(pb::MediaType {
+                value: "text/plain".into(),
+            }),
+            digest: Some(trogon_atlas_core::specification::content_digest(content)),
+        }));
+    }
+    put(&mut client, changed, &stale_source.etag).await;
+    let receipt = serde_json::json!({
+        "grpc_endpoint": endpoint,
+        "namespace": "shop",
+        "published": {"namespace":"shop", "slug":"purchase", "version":"1"},
+        "draft": {"namespace":"shop", "slug":"purchase", "version":"2"},
+        "stale": {"namespace":"shop", "slug":"stale", "version":"1"}
+    });
+    let path = std::env::var("ATLAS_BROWSER_FIXTURE_FILE").expect("fixture receipt path required");
+    std::fs::write(path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    tokio::select! {
+        () = tokio::time::sleep(std::time::Duration::from_secs(600)) => {},
+        result = tokio::signal::ctrl_c() => result.unwrap(),
+    }
+}
+
+async fn reviewed(client: &mut Client) -> pb::GetGlossaryTermResponse {
+    let draft = candidate(client, 1).await;
+    client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("purchase", 1)),
+                }),
+                if_match: draft.etag,
+                disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+                reason: "Controlled expert review.".into(),
+                ..Default::default()
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+#[tokio::test]
+async fn refresh_detects_a_new_selected_source_version_without_destroying_old_publication() {
+    let mut client = client().await;
+    reviewed(&mut client).await;
+    let current = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("source", 1)),
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut next = current.entity.unwrap();
+    next.system = None;
+    if let Some(pb::entity::Kind::Document(document)) = &mut next.kind {
+        document.id = Some(id("source", 2));
+        for subject in &mut document.subjects {
+            subject.connection_id = None;
+        }
+    }
+    put(&mut client, next, "").await;
+    let refreshed = client
+        .inspect_glossary_refresh(request(
+            pb::InspectGlossaryRefreshRequest {
+                selection: Some(selection(false)),
+                documents: vec![pb::DocumentRef {
+                    id: Some(id("source", 2)),
+                }],
+                generation_revision: "fixture/prompt-v1".into(),
+            },
+            "glossary-fixture-reader",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!refreshed.incomplete);
+    assert_eq!(refreshed.observations.len(), 1);
+    assert_eq!(
+        refreshed.observations[0].evidence[0].state,
+        pb::GlossaryEvidenceState::Changed as i32
+    );
+    assert_eq!(
+        refreshed.observations[0].entry.as_ref().unwrap().state,
+        pb::GlossaryEntryState::SourceChanged as i32
+    );
+    assert!(refreshed.observations[0].entry.as_ref().unwrap().published);
+    let old = client
+        .get_glossary_term(request(
+            pb::GetGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("purchase", 1)),
+                }),
+            },
+            "glossary-fixture-reader",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(old.entry.unwrap().published);
+    assert_eq!(
+        old.evidence[0].state,
+        pb::GlossaryEvidenceState::Current as i32
+    );
+}
+
+#[tokio::test]
+async fn source_projection_refuses_oversized_json_instead_of_breaking_connected_clients() {
+    let mut client = client().await;
+    candidate(&mut client, 1).await;
+    let current = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("source", 1)),
+            },
+            "glossary-fixture-expert",
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let mut references = Vec::new();
+    for index in 0..10 {
+        let source_id = id(&format!("escaped-source-{index}"), 1);
+        let mut source = current.clone();
+        source.system = None;
+        if let Some(pb::entity::Kind::Document(document)) = &mut source.kind {
+            document.id = Some(source_id.clone());
+            for subject in &mut document.subjects {
+                subject.connection_id = None;
+            }
+            let content = "\0".repeat(60_000);
+            document.body = Some(pb::document::Body::Retained(pb::RetainedDocumentText {
+                digest: Some(trogon_atlas_core::specification::content_digest(&content)),
+                content,
+                media_type: Some(pb::MediaType {
+                    value: "text/plain".into(),
+                }),
+            }));
+        }
+        put(&mut client, source, "").await;
+        references.push(pb::DocumentRef {
+            id: Some(source_id),
+        });
+    }
+    let result = client
+        .inspect_glossary_sources(request(
+            pb::InspectGlossarySourcesRequest {
+                documents: references,
+            },
+            "glossary-fixture-reader",
+        ))
+        .await;
+    match result {
+        Err(error) => assert_eq!(error.code(), Code::ResourceExhausted),
+        Ok(_) => panic!("oversized JSON source projection must refuse before transport"),
+    }
 }
