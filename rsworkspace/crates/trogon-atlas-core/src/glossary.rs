@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use prost::Message;
-use sha2::{Digest, Sha256};
 use trogon_atlas_proto as pb;
 
 use crate::authored_date::AuthoredDate;
@@ -230,11 +229,16 @@ pub fn candidate_digest(term: &pb::Term) -> Result<pb::ContentDigest> {
     glossary.review = None;
     glossary.next_review_on = None;
     validate_term(&candidate)?;
-    let mut hash = Sha256::new();
-    hash.update(b"atlas.glossary.term.v1\0");
-    hash.update(candidate.encode_to_vec());
+    let entity = pb::Entity {
+        kind: Some(pb::entity::Kind::Term(candidate)),
+        system: None,
+    };
+    let value = crate::transcode::entity_json_value(&entity)
+        .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
+    let hash = crate::content_hash::domain_digest(b"atlas.glossary.term.v1\0", &value)
+        .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
     Ok(pb::ContentDigest {
-        sha256: crate::ContentHash::from_bytes(hash.finalize().into()).to_hex(),
+        sha256: hash.to_hex(),
     })
 }
 
