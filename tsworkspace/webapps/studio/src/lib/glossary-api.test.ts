@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   compareGlossaries,
   getGlossaryTerm,
+  getGlossaryUsage,
   inspectGlossaryRefresh,
   inspectGlossarySources,
   listGlossaryEntries,
@@ -24,6 +25,7 @@ describe('glossary read-only HTTP requests', () => {
       ['sources', { documents: [{ id }] }],
       ['compare', { left: selection, right: { namespaces: ['shipping'] } }],
       ['refresh', { selection, documents: [{ id }], generationRevision: 'extract-v1' }],
+      ['usage', { kind: 'ENTITY_KIND_COMMAND', id }],
     ] as const;
     const calls = [
       () => listGlossaryEntries(requests[0][1], options),
@@ -31,6 +33,7 @@ describe('glossary read-only HTTP requests', () => {
       () => inspectGlossarySources(requests[2][1], options),
       () => compareGlossaries(requests[3][1], options),
       () => inspectGlossaryRefresh(requests[4][1], options),
+      () => getGlossaryUsage(requests[5][1], options),
     ];
     for (const call of calls) await expect(call()).resolves.toEqual(result);
     fetch.mock.calls.forEach(([input, init], index) => {

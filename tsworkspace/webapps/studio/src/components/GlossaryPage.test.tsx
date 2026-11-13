@@ -4,16 +4,19 @@ import {
   api,
   compareGlossaries,
   getGlossaryTerm,
+  getGlossaryUsage,
   inspectGlossaryRefresh,
   inspectGlossarySources,
   listGlossaryEntries,
 } from '@/lib/api';
 import { GlossaryPage } from './GlossaryPage';
+import type { GlossaryIndexEntry, GlossaryTermDetail } from '@/lib/glossary';
 
 vi.mock('@/lib/api', () => ({
   api: { namespaces: vi.fn() },
   listGlossaryEntries: vi.fn(),
   getGlossaryTerm: vi.fn(),
+  getGlossaryUsage: vi.fn(),
   inspectGlossarySources: vi.fn(),
   compareGlossaries: vi.fn(),
   inspectGlossaryRefresh: vi.fn(),
@@ -29,7 +32,7 @@ const entry = {
   published: false,
   ownerUid: 'term-owner',
   etag: 'term-etag',
-};
+} satisfies GlossaryIndexEntry;
 const detail = {
   entry,
   etag: 'term-etag',
@@ -68,7 +71,7 @@ const detail = {
     },
   },
   evidence: [{ evidenceIndex: 0, state: 'GLOSSARY_EVIDENCE_STATE_CHANGED', reason: 'Source digest changed.' }],
-};
+} satisfies GlossaryTermDetail;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,6 +86,16 @@ beforeEach(() => {
     incomplete: false,
   });
   vi.mocked(getGlossaryTerm).mockResolvedValue(detail);
+  vi.mocked(getGlossaryUsage).mockResolvedValue({
+    entity: {
+      command: {
+        id: { namespace: 'sales', slug: 'place-order', version: '2' },
+        title: 'Place purchase request',
+        doc: 'Validate the cart before accepting the request.',
+      },
+    },
+    etag: 'command-etag',
+  });
   vi.mocked(inspectGlossarySources).mockResolvedValue({
     sources: [{ document: source, text: 'Current source text.', state: 'GLOSSARY_EVIDENCE_STATE_CURRENT' }],
   });
@@ -124,7 +137,7 @@ describe('glossary review page', () => {
     expect(screen.getByRole('combobox', { name: 'Bounded context' })).toBeTruthy();
     expect(screen.getByText('Choose a bounded context to inspect its vocabulary.')).toBeTruthy();
     expect(screen.queryByText('No glossary entries.')).toBeNull();
-    expect(screen.queryByRole('button', { name: /approve|publish|save|delete/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(approve|publish|save|delete)(?:\s|$)/i })).toBeNull();
   });
 
   it('inspects exact vocabulary, authoritative review/freshness, evidence and correction context without mutations', async () => {
@@ -141,6 +154,13 @@ describe('glossary review page', () => {
     expect(screen.getByText('<script>Orders are requests.</script>')).toBeTruthy();
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('sales/place-order@2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'sales/place-order@2' }));
+    expect(await screen.findByText('Place purchase request')).toBeTruthy();
+    expect(screen.getByText('Validate the cart before accepting the request.')).toBeTruthy();
+    expect(getGlossaryUsage).toHaveBeenCalledWith(
+      { kind: 'ENTITY_KIND_COMMAND', id: { namespace: 'sales', slug: 'place-order', version: '2' } },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(screen.getByRole('link', { name: 'sales/purchase-request@7' }).getAttribute('href')).toContain('version=7');
     fireEvent.click(screen.getByRole('button', { name: 'Inspect source' }));
     expect(await screen.findByText('Current source text.')).toBeTruthy();
@@ -155,7 +175,7 @@ describe('glossary review page', () => {
     expect(copied).toContain('sales/order@9007199254740993');
     expect(copied).toContain('term-etag');
     expect(copied).toContain('Source changed');
-    expect(screen.queryByRole('button', { name: /approve|publish|save|delete/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(approve|publish|save|delete)(?:\s|$)/i })).toBeNull();
     expect(getGlossaryTerm).toHaveBeenCalledWith({ term: { id } }, expect.anything());
   });
 
@@ -180,6 +200,20 @@ describe('glossary review page', () => {
       pageSize: 100,
       pageToken: 'opaque-page',
     });
+  });
+
+  it('does not substitute another version when modeled usage inspection returns a mismatched resource', async () => {
+    vi.mocked(getGlossaryUsage).mockResolvedValue({
+      entity: {
+        command: { id: { namespace: 'sales', slug: 'place-order', version: '3' }, title: 'Unselected latest version' },
+      },
+    });
+    render(<GlossaryPage />);
+    await chooseSales();
+    fireEvent.click(await screen.findByRole('button', { name: /^Order/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'sales/place-order@2' }));
+    expect(await screen.findByText('The response does not match the exact modeled reference.')).toBeTruthy();
+    expect(screen.queryByText('Unselected latest version')).toBeNull();
   });
 
   it('shows operational failure without an empty-catalog claim', async () => {

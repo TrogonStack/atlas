@@ -5,7 +5,7 @@ const fixture = vi.hoisted(() => ({ calls: [], result: {}, failure: null }));
 vi.mock('@grpc/grpc-js', async (importOriginal) => {
   const actual = await importOriginal();
   const client = { getServerInfo: (_req, _meta, _opts, cb) => cb(null, {}) };
-  for (const method of ['listGlossaryEntries', 'getGlossaryTerm', 'inspectGlossarySources', 'compareGlossaries', 'inspectGlossaryRefresh', 'reviewGlossaryTerm']) {
+  for (const method of ['listGlossaryEntries', 'getGlossaryTerm', 'inspectGlossarySources', 'compareGlossaries', 'inspectGlossaryRefresh', 'reviewGlossaryTerm', 'getEntity']) {
     client[method] = (input, metadata, _opts, callback) => {
       fixture.calls.push({ method, input, branch: metadata.get('x-trogon-atlas-branch')[0], authorization: metadata.get('authorization')[0] });
       callback(fixture.failure, fixture.result);
@@ -43,6 +43,7 @@ const reads = [
   ['sources', 'inspectGlossarySources', { documents: [{ id }] }],
   ['compare', 'compareGlossaries', { left: selection, right: { namespaces: ['shipping'] } }],
   ['refresh', 'inspectGlossaryRefresh', { selection, documents: [{ id }], generationRevision: 'extract-v1' }],
+  ['usage', 'getEntity', { kind: 'ENTITY_KIND_COMMAND', id }],
 ];
 
 describe('read-only glossary gateway', () => {
@@ -62,6 +63,9 @@ describe('read-only glossary gateway', () => {
     ['sources', { documents: [{ id: { ...id, version: '18446744073709551616' } }] }],
     ['compare', { left: selection, right: { namespaces: [false] } }],
     ['refresh', { selection, surprise: true }],
+    ['usage', { kind: 'ENTITY_KIND_COMMAND', id: { ...id, version: '0' } }],
+    ['usage', { kind: 'ENTITY_KIND_COMMAND' }],
+    ['usage', { kind: 'UNKNOWN_KIND', id }],
   ])('rejects malformed %s before serializer coercion', async (query, input) => {
     const result = await request(app).get(`/api/glossary/${query}`).query({ request: JSON.stringify(input) }).set('Authorization', 'Bearer fixture-reader');
     expect(result.status).toBe(400);
