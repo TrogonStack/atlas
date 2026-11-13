@@ -251,37 +251,43 @@ fn usage_checks_preserve_utf8_spans_audience_boundaries_and_exclusions() {
     );
     assert_eq!(findings[0].matched, "CAFÉ EVENT");
     assert_eq!(findings[0].preferred_term, policy().preferred_term);
-    assert!(glossary::check_usage(
-        &[candidate.clone()],
-        "internal",
-        &date("2026-11-12"),
-        source,
-        &[],
-        true
-    )
-    .unwrap()
-    .is_empty());
-    assert!(glossary::check_usage(
-        &[candidate.clone()],
-        "customer",
-        &date("2026-12-01"),
-        source,
-        &[],
-        true
-    )
-    .unwrap()
-    .is_empty());
+    assert_eq!(
+        glossary::check_usage(
+            &[candidate.clone()],
+            "internal",
+            &date("2026-11-12"),
+            source,
+            &[],
+            true
+        )
+        .unwrap(),
+        Vec::new()
+    );
+    assert_eq!(
+        glossary::check_usage(
+            &[candidate.clone()],
+            "customer",
+            &date("2026-12-01"),
+            source,
+            &[],
+            true
+        )
+        .unwrap(),
+        Vec::new()
+    );
     let excluded = TextRange::new(findings[0].range.start(), findings[0].range.end()).unwrap();
-    assert!(glossary::check_usage(
-        &[candidate],
-        "customer",
-        &date("2026-11-12"),
-        source,
-        &[excluded],
-        true
-    )
-    .unwrap()
-    .is_empty());
+    assert_eq!(
+        glossary::check_usage(
+            &[candidate],
+            "customer",
+            &date("2026-11-12"),
+            source,
+            &[excluded],
+            true
+        )
+        .unwrap(),
+        Vec::new()
+    );
 }
 
 #[test]
@@ -407,13 +413,7 @@ fn comparison_and_usage_bound_the_total_retained_candidate_bytes() {
         })
         .collect::<Vec<_>>();
     assert!(glossary::compare_glossaries(&terms, &[]).is_err());
-    assert!(glossary::check_usage(
-        &terms,
-        "customer",
-        &date("2026-11-12"),
-        "",
-        &[],
-        false,
-    )
-    .is_err());
+    assert!(
+        glossary::check_usage(&terms, "customer", &date("2026-11-12"), "", &[], false,).is_err()
+    );
 }

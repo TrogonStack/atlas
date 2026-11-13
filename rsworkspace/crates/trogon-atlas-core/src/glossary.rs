@@ -17,6 +17,7 @@ pub const MAX_TERMS: usize = 1_000;
 pub const MAX_TEXT_BYTES: usize = 262_144;
 pub const MAX_FINDINGS: usize = 1_024;
 pub const MAX_MATCH_WORK_BYTES: usize = 16_777_216;
+pub const MAX_CANDIDATE_BYTES: usize = 8_388_608;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRange {
@@ -220,6 +221,7 @@ pub fn validate_term(term: &pb::Term) -> Result<()> {
 }
 
 pub fn candidate_digest(term: &pb::Term) -> Result<pb::ContentDigest> {
+    require(term.encoded_len() <= 1_048_576, "term.encoded_bytes")?;
     let mut candidate = term.clone();
     let glossary = candidate
         .glossary
@@ -332,6 +334,7 @@ pub fn check_usage(
             && terms.len().saturating_mul(text.len()) <= MAX_MATCH_WORK_BYTES,
         "usage.limit",
     )?;
+    candidate_bytes(terms.iter())?;
     let mut ignored = exclusions.to_vec();
     for range in &ignored {
         require(
@@ -343,7 +346,19 @@ pub fn check_usage(
         )?;
     }
     if skip_quoted {
-        ignored.extend(quoted_ranges(text));
+        ignored.extend(quoted_ranges(text)?);
+    }
+    ignored.sort_by_key(|range| (range.start, range.end));
+    let mut excluded: Vec<TextRange> = Vec::new();
+    for range in ignored {
+        if let Some(previous) = excluded
+            .last_mut()
+            .filter(|previous| range.start <= previous.end)
+        {
+            previous.end = previous.end.max(range.end);
+        } else {
+            excluded.push(range);
+        }
     }
     let (folded, mapping) = folded_with_offsets(text);
     let mut findings = Vec::new();
@@ -376,9 +391,9 @@ pub fn check_usage(
             };
             if !word_boundary(text[..range.start].chars().next_back())
                 || !word_boundary(text[range.end..].chars().next())
-                || ignored
-                    .iter()
-                    .any(|ignored| range.start < ignored.end && ignored.start < range.end)
+                || excluded
+                    .get(excluded.partition_point(|ignored| ignored.end <= range.start))
+                    .is_some_and(|ignored| ignored.start < range.end)
             {
                 continue;
             }
@@ -412,6 +427,7 @@ pub fn compare_glossaries(
         left.len() <= MAX_TERMS && right.len() <= MAX_TERMS,
         "comparison.limit",
     )?;
+    candidate_bytes(left.iter().chain(right))?;
     for term in left.iter().chain(right) {
         validate_term(term)?;
         exact(term.id.as_ref(), "term.id")?;
@@ -420,11 +436,13 @@ pub fn compare_glossaries(
     }
     let mut left_matched = vec![false; left.len()];
     let mut right_matched = vec![false; right.len()];
+    let normalized_left = normalized_terms(left);
+    let normalized_right = normalized_terms(right);
     let mut differences = Vec::new();
     for (left_index, a) in left.iter().enumerate() {
         for (right_index, b) in right.iter().enumerate() {
-            let same_title = normalized(&a.title) == normalized(&b.title);
-            let same_meaning = normalized(&a.doc) == normalized(&b.doc);
+            let same_title = normalized_left[left_index].0 == normalized_right[right_index].0;
+            let same_meaning = normalized_left[left_index].1 == normalized_right[right_index].1;
             if !same_title && !same_meaning {
                 continue;
             }
@@ -489,6 +507,22 @@ pub fn compare_glossaries(
     Ok(differences)
 }
 
+fn candidate_bytes<'a>(mut terms: impl Iterator<Item = &'a pb::Term>) -> Result<()> {
+    let bytes = terms.try_fold(0usize, |total, term| {
+        let total = total.saturating_add(term.encoded_len());
+        require(total <= MAX_CANDIDATE_BYTES, "candidates.bytes_limit")?;
+        Ok(total)
+    });
+    bytes.map(|_| ())
+}
+
+fn normalized_terms(terms: &[pb::Term]) -> Vec<(String, String)> {
+    terms
+        .iter()
+        .map(|term| (normalized(&term.title), normalized(&term.doc)))
+        .collect()
+}
+
 fn normalized(value: &str) -> String {
     value
         .split_whitespace()
@@ -524,7 +558,7 @@ fn folded_with_offsets(value: &str) -> (String, Vec<TextRange>) {
     (folded, mapping)
 }
 
-fn quoted_ranges(value: &str) -> Vec<TextRange> {
+fn quoted_ranges(value: &str) -> Result<Vec<TextRange>> {
     let mut ranges = Vec::new();
     let mut quote = None;
     let mut escaped = false;
@@ -557,11 +591,6 @@ fn quoted_ranges(value: &str) -> Vec<TextRange> {
         }
         previous = Some(character);
     }
-    if let Some((_, start)) = quote {
-        ranges.push(TextRange {
-            start,
-            end: value.len(),
-        });
-    }
-    ranges
+    require(quote.is_none(), "usage.unclosed_quote")?;
+    Ok(ranges)
 }
