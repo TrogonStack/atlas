@@ -82,7 +82,7 @@ fn reference(slug: &str) -> Value {
 }
 
 fn selection() -> Value {
-    json!({"namespaces": ["glossary-cli"]})
+    json!({"namespaces": ["glossary-cli"], "audience": "internal"})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -196,4 +196,54 @@ fn cli_glossary_rejects_malformed_requests_as_input_errors() {
         .unwrap();
     assert_eq!(result.status.code(), Some(5));
     assert!(String::from_utf8_lossy(&result.stderr).contains("invalid request JSON"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn controlled_corpus_roundtrip_retains_contextual_text_and_exact_code() {
+    let endpoint = serve().await;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source-corpus.yaml");
+    std::fs::write(
+        &path,
+        include_str!("../../../../examples/manifests/generated-glossary/sources.yaml"),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let applied = command(&endpoint)
+            .args(["apply", "-f", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            applied.status.success(),
+            "{}",
+            String::from_utf8_lossy(&applied.stderr)
+        );
+    }
+    let inspected = glossary(
+        &endpoint,
+        "sources",
+        json!({"documents": [
+            {"id": {"namespace": "glossary-fulfillment", "slug": "source", "version": "1"}},
+            {"id": {"namespace": "glossary-fulfillment", "slug": "code-source", "version": "1"}},
+            {"id": {"namespace": "glossary-customer", "slug": "source", "version": "1"}}
+        ]}),
+    );
+    let sources = inspected["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 3);
+    let code = sources
+        .iter()
+        .find(|source| source["document"]["id"]["slug"] == "code-source")
+        .unwrap();
+    assert_eq!(
+        code["text"],
+        include_str!("../../../../examples/glossary/shipment.rs")
+    );
+    assert!(sources.iter().any(|source| source["text"]
+        .as_str()
+        .unwrap()
+        .contains("reserved carrier handoff slot")));
+    assert!(sources.iter().any(|source| source["text"]
+        .as_str()
+        .unwrap()
+        .contains("package a customer can track")));
 }

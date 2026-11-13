@@ -90,7 +90,7 @@ fn reference(namespace: &str, slug: &str) -> Value {
 }
 
 fn selection(namespace: &str, unreviewed: bool) -> Value {
-    json!({"namespaces": [namespace], "includeUnreviewed": unreviewed})
+    json!({"namespaces": [namespace], "audience": "internal", "includeUnreviewed": unreviewed})
 }
 
 async fn source(
@@ -269,6 +269,10 @@ async fn authenticated_mcp_glossary_authors_reviews_compares_checks_and_detects_
     assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
     assert!(listed["entries"][0].get("definition").is_none());
     assert!(!listed["snapshotRevision"].as_str().unwrap().is_empty());
+    let index_bytes = listed.to_string().len();
+    let detail_bytes = accepted.to_string().len();
+    assert!(index_bytes < detail_bytes);
+    println!("glossary payload bytes: compact={index_bytes}, definition={detail_bytes}");
 
     let legacy = candidate(
         &reviewer,
