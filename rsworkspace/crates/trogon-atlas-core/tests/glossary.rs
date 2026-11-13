@@ -417,3 +417,82 @@ fn comparison_and_usage_bound_the_total_retained_candidate_bytes() {
         glossary::check_usage(&terms, "customer", &date("2026-11-12"), "", &[], false,).is_err()
     );
 }
+
+#[test]
+fn semantically_equal_metadata_encodings_preserve_review_identity() {
+    use prost::Message;
+
+    let struct_field = |key: &str, value: &str| {
+        let mut message = prost_types::Struct::default();
+        message.fields.insert(
+            key.into(),
+            prost_types::Value {
+                kind: Some(prost_types::value::Kind::StringValue(value.into())),
+            },
+        );
+        message.encode_to_vec()
+    };
+    let mut forward_struct = struct_field("a", "1");
+    forward_struct.extend(struct_field("b", "2"));
+    let mut reversed_struct = struct_field("b", "2");
+    reversed_struct.extend(struct_field("a", "1"));
+
+    let url = pb::LinkAnnotation {
+        url: "https://example.com/vocabulary".into(),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    let title = pb::LinkAnnotation {
+        title: "Vocabulary source".into(),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    let mut forward_link = url.clone();
+    forward_link.extend(&title);
+    let mut reversed_link = title;
+    reversed_link.extend(url);
+
+    for (type_name, forward, reversed) in [
+        ("google.protobuf.Struct", forward_struct, reversed_struct),
+        (
+            "trogonatlas.annotation.v1alpha1.LinkAnnotation",
+            forward_link,
+            reversed_link,
+        ),
+    ] {
+        assert_ne!(forward, reversed);
+        let with_payload = |value| {
+            let mut candidate = term();
+            candidate.metadata.push(prost_types::Any {
+                type_url: format!("type.googleapis.com/{type_name}"),
+                value,
+            });
+            candidate
+        };
+        let original = with_payload(forward);
+        let mut equivalent = with_payload(reversed);
+        let wrap = |value| pb::Entity {
+            kind: Some(entity::Kind::Term(value)),
+            ..Default::default()
+        };
+        assert!(trogon_atlas_core::semantically_equal(
+            &wrap(original.clone()),
+            &wrap(equivalent.clone())
+        ));
+        assert_eq!(
+            trogon_atlas_core::entity_content_hash(&wrap(original.clone())).unwrap(),
+            trogon_atlas_core::entity_content_hash(&wrap(equivalent.clone())).unwrap()
+        );
+        let digest = glossary::candidate_digest(&original).unwrap();
+        assert_eq!(glossary::candidate_digest(&equivalent).unwrap(), digest);
+        equivalent.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+            disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+            actor: "expert".into(),
+            reviewed_at: "2026-11-12T12:00:00Z".into(),
+            content_digest: Some(digest),
+            owner_uid: TERM_UID.into(),
+            reason: "Exact definition and evidence reviewed.".into(),
+        });
+        assert!(glossary::review_is_accepted(&equivalent, TERM_UID));
+    }
+}
