@@ -1661,3 +1661,72 @@ async fn shared_read_visibility_does_not_authorize_namespace_deletion() {
     assert_eq!(authorizer.releases.load(Ordering::SeqCst), 0);
     assert!(store.get_namespace(&namespace).await.unwrap().is_some());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scoped_admin_cannot_delete_outside_its_namespace_allow_list() {
+    use pb::event_model_service_server::EventModelService;
+    use trogon_atlas_core::NamespaceName;
+    use trogon_atlas_server::{
+        auth::{Principal, PrincipalKind, Role},
+        scope::NamespaceScope,
+    };
+
+    for parent in [None, Some(OwnerId::parse("acme").unwrap())] {
+        let store: Arc<dyn Store> =
+            Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+        let record = store
+            .register_namespace(
+                &NamespaceName::parse("acme-scoped-deletion").unwrap(),
+                &OwnerId::parse("acme").unwrap(),
+                "admin",
+            )
+            .await
+            .unwrap()
+            .record;
+        let service =
+            EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+        let authorizer = Arc::new(FailingReleaseAuthorizer {
+            registry: RegistryAuthorizer::new(service.directory(), store.clone()),
+            read_lens: Some(Lens::Everything),
+            release_fails: AtomicBool::new(false),
+            releases: AtomicUsize::new(0),
+        });
+        let service = service.with_authorizer(authorizer.clone());
+        let request = |scope| {
+            let mut request = tonic::Request::new(pb::DeleteNamespaceRequest {
+                id: record.id.to_string(),
+            });
+            request.extensions_mut().insert(Principal {
+                name: Arc::from("scoped-admin"),
+                role: Role::Admin,
+                kind: PrincipalKind::User,
+                is_anonymous: false,
+                namespaces: scope,
+                parent: parent.clone(),
+            });
+            request
+        };
+
+        let status = service
+            .delete_namespace(request(
+                NamespaceScope::parse(&["other-namespace"]).unwrap(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+        assert_eq!(authorizer.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            store.get_namespace(&record.id).await.unwrap(),
+            Some(record.clone())
+        );
+
+        service
+            .delete_namespace(request(
+                NamespaceScope::parse(&[record.id.as_str()]).unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(authorizer.releases.load(Ordering::SeqCst), 1);
+        assert!(store.get_namespace(&record.id).await.unwrap().is_none());
+    }
+}

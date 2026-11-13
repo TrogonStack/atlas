@@ -4607,6 +4607,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }));
         }
         let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
         let id = NamespaceId::parse(req.into_inner().id.trim())
             .map_err(|e| Status::invalid_argument(format!("invalid namespace id: {e}")))?;
         let not_registered = || Status::not_found(format!("namespace {id} is not registered"));
@@ -4625,6 +4626,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             || !self.lens(&vis).await?.admits(id.as_str())
         {
             return Err(not_registered());
+        }
+        if let Some(principal) =
+            principal.filter(|principal| !principal.namespaces.admits(id.as_str()))
+        {
+            return Err(Status::permission_denied(format!(
+                "principal {} may not write namespace {:?}; its scope is {}",
+                principal.name,
+                id.as_str(),
+                principal.namespaces,
+            )));
         }
         if record.id == NamespaceId::adopt_legacy(&record.name) {
             return Err(Status::failed_precondition(format!(
