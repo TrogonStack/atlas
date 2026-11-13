@@ -527,10 +527,10 @@ export function inspectGlossaryRefresh(
   return getJson(`/api/glossary/refresh?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function getGlossaryUsage(
-  _request: { kind: string; id: EntityId },
-  _opts: FetchOptions = {},
+  request: { kind: string; id: EntityId },
+  opts: FetchOptions = {},
 ): Promise<{ entity?: WireEntityEnvelope; etag?: string }> {
-  return Promise.reject(new Error('exact modeled resource inspection unavailable'));
+  return getJson(`/api/glossary/usage?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
   return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);

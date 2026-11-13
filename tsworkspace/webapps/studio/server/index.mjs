@@ -1988,6 +1988,7 @@ const GLOSSARY_QUERIES = new Map([
   ["sources", "inspectGlossarySources"],
   ["compare", "compareGlossaries"],
   ["refresh", "inspectGlossaryRefresh"],
+  ["usage", "getEntity"],
 ]);
 
 app.get("/api/glossary/:query", branchHandler((req) => {
@@ -1999,6 +2000,7 @@ app.get("/api/glossary/:query", branchHandler((req) => {
   try { input = JSON.parse(req.query.request); } catch { return reject(); }
   const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
   try { validateSourceRequest(requestType, input); } catch { return reject(); }
+  if (method === "getEntity" && (!/^[1-9][0-9]*$/.test(String(input.id?.version ?? "")) || input.kind === "ENTITY_KIND_UNSPECIFIED" || input.kind === 0)) return reject();
   return call(method, input);
 }));
 

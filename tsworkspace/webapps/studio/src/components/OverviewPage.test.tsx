@@ -97,7 +97,9 @@ describe('OverviewPage', () => {
   it('links to glossary review while preserving the branch context', async () => {
     window.history.replaceState(null, '', '/?branch=review');
     render(<OverviewPage />);
-    expect((await screen.findByRole('link', { name: 'Glossary' })).getAttribute('href')).toBe('/glossary?branch=review');
+    expect((await screen.findByRole('link', { name: 'Glossary' })).getAttribute('href')).toBe(
+      '/glossary?branch=review',
+    );
   });
 
   describe('search debounce', () => {

@@ -49,12 +49,15 @@ describe('App routing', () => {
     });
   });
 
-  it.each(['/glossary', '/glossary/?namespace=sales&slug=order&version=7'])('renders glossary review on %s', async (url) => {
-    window.history.replaceState(null, '', url);
-    renderApp();
-    expect(await screen.findByTestId('glossary-page')).toBeDefined();
-    expect(screen.queryByTestId('overview-page')).toBeNull();
-  });
+  it.each(['/glossary', '/glossary/?namespace=sales&slug=order&version=7'])(
+    'renders glossary review on %s',
+    async (url) => {
+      window.history.replaceState(null, '', url);
+      renderApp();
+      expect(await screen.findByTestId('glossary-page')).toBeDefined();
+      expect(screen.queryByTestId('overview-page')).toBeNull();
+    },
+  );
 
   it('does not route a deeper glossary path to the review page', async () => {
     window.history.replaceState(null, '', '/glossary/unrecognized');

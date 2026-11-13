@@ -3,7 +3,7 @@ import { CopyContextButton } from '@/components/CopyContextButton';
 import { GlossaryFailure, GlossaryRefreshInspection, GlossaryTermLink } from '@/components/GlossaryReviewParts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { inspectGlossarySources } from '@/lib/api';
+import { getGlossaryUsage, inspectGlossarySources } from '@/lib/api';
 import {
   exactGlossaryId,
   glossaryEvidenceLabel,
@@ -15,7 +15,7 @@ import {
   type GlossarySelection,
   type GlossaryTermDetail,
 } from '@/lib/glossary';
-import type { EntityId } from '@/lib/model';
+import { buildModel, wireKind, type EntityId } from '@/lib/model';
 import { useGlossaryRead } from '@/lib/useGlossaryRead';
 
 function valueText(value: unknown): string {
@@ -93,6 +93,66 @@ function EvidenceSource({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ModeledUsage({ reference, branch }: { reference: Record<string, unknown>; branch?: string }) {
+  const target = exactGlossaryId(reference.id);
+  const kind = glossaryText(reference.kind);
+  const expectedKind = wireKind(kind);
+  const [opened, setOpened] = useState(false);
+  const load = useCallback(
+    (signal: AbortSignal) => {
+      const id = exactGlossaryId(reference.id);
+      if (!id) return Promise.reject(new Error('Exact modeled reference unavailable'));
+      return getGlossaryUsage({ kind: glossaryText(reference.kind), id }, { signal, branch });
+    },
+    [reference, branch],
+  );
+  const resource = useGlossaryRead(
+    opened && target && expectedKind ? JSON.stringify([kind, target, branch]) : null,
+    load,
+  );
+  const entity =
+    resource.state.status === 'ready' && resource.state.value.entity
+      ? buildModel([resource.state.value.entity]).entities[0]
+      : undefined;
+  const matches = entity?.kind === expectedKind && sameGlossaryId(entity?.id, target);
+  return (
+    <li className="flex flex-col gap-3 rounded-md border border-border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-muted-foreground">
+          {kind.replace('ENTITY_KIND_', '').toLowerCase().replaceAll('_', ' ')}
+        </span>
+        {target && expectedKind ? (
+          <button
+            type="button"
+            className="break-all text-left font-mono underline underline-offset-2"
+            onClick={() => setOpened(true)}
+          >
+            {glossaryIdLabel(target)}
+          </button>
+        ) : (
+          <span>Exact reference unavailable</span>
+        )}
+      </div>
+      {resource.state.status === 'loading' ? <output>Loading exact modeled resource…</output> : null}
+      {resource.state.status === 'failed' ? (
+        <GlossaryFailure message={resource.state.error} retry={resource.retry} />
+      ) : null}
+      {resource.state.status === 'ready' ? (
+        !entity ? (
+          <p>Modeled resource unavailable.</p>
+        ) : !matches ? (
+          <p role="alert">The response does not match the exact modeled reference.</p>
+        ) : (
+          <section aria-label="Exact modeled resource" className="flex flex-col gap-2 border-t border-border pt-3">
+            <h4 className="text-sm font-semibold">{entity.title}</h4>
+            <p className="whitespace-pre-wrap text-xs">{entity.doc || 'No documentation recorded.'}</p>
+          </section>
+        )
+      ) : null}
+    </li>
   );
 }
 
@@ -209,17 +269,9 @@ export function GlossaryTermPanel({
           <p className="text-xs text-muted-foreground">No modeled usage declared.</p>
         ) : (
           <ul className="flex flex-col gap-2 text-xs">
-            {usages.map((reference) => {
-              const target = exactGlossaryId(reference.id);
-              return (
-                <li key={JSON.stringify(reference)} className="flex flex-wrap gap-2">
-                  <span className="text-muted-foreground">
-                    {glossaryText(reference.kind).replace('ENTITY_KIND_', '').toLowerCase().replaceAll('_', ' ')}
-                  </span>
-                  <code>{target ? glossaryIdLabel(target) : 'Exact reference unavailable'}</code>
-                </li>
-              );
-            })}
+            {usages.map((reference) => (
+              <ModeledUsage key={JSON.stringify(reference)} reference={reference} branch={branch} />
+            ))}
           </ul>
         )}
       </section>
