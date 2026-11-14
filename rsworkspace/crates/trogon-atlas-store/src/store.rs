@@ -321,6 +321,14 @@ impl<'a> WriteContext<'a> {
     }
 
     #[must_use]
+    pub(crate) fn without_changeset(self) -> Self {
+        Self {
+            changeset: None,
+            ..self
+        }
+    }
+
+    #[must_use]
     pub fn with_branch_merge_base(mut self, base: &'a Entity) -> Self {
         self.connection_admission = ConnectionAdmission::BranchMerge { base };
         self

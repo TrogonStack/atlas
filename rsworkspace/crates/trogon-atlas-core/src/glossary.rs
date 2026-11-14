@@ -1092,6 +1092,37 @@ fn rust_lifetime_at(value: &str, index: usize) -> bool {
         || (prefix.is_empty() && suffix.is_empty())
 }
 
+#[derive(Clone, Copy)]
+enum Quote {
+    Escaped { delimiter: char, start: usize },
+    RustRaw { hashes: usize, start: usize },
+}
+
+fn rust_raw_quote_at(value: &str, index: usize) -> Option<Quote> {
+    let hashes = value[..index]
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'#')
+        .count();
+    let marker = index.checked_sub(hashes + 1)?;
+    if value.as_bytes()[marker] != b'r' {
+        return None;
+    }
+    let start = if marker > 0 && matches!(value.as_bytes()[marker - 1], b'b' | b'c') {
+        marker - 1
+    } else {
+        marker
+    };
+    if value[..start]
+        .chars()
+        .next_back()
+        .is_some_and(unicode_ident::is_xid_continue)
+    {
+        return None;
+    }
+    Some(Quote::RustRaw { hashes, start })
+}
+
 fn quoted_ranges(value: &str, kind: UsageTextKind) -> Result<Vec<TextRange>> {
     let mut ranges = Vec::new();
     let mut quote = None;
@@ -1099,6 +1130,23 @@ fn quoted_ranges(value: &str, kind: UsageTextKind) -> Result<Vec<TextRange>> {
     let mut previous = None;
     let mut characters = value.char_indices().peekable();
     while let Some((index, character)) = characters.next() {
+        if let Some(Quote::RustRaw { hashes, start }) = quote {
+            let end = index + 1 + hashes;
+            if character == '"'
+                && value
+                    .as_bytes()
+                    .get(index + 1..end)
+                    .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+            {
+                ranges.push(TextRange { start, end });
+                quote = None;
+                for _ in 0..hashes {
+                    characters.next();
+                }
+            }
+            previous = Some(character);
+            continue;
+        }
         if escaped {
             escaped = false;
             previous = Some(character);
@@ -1118,7 +1166,7 @@ fn quoted_ranges(value: &str, kind: UsageTextKind) -> Result<Vec<TextRange>> {
             continue;
         }
         match quote {
-            Some((delimiter, start))
+            Some(Quote::Escaped { delimiter, start })
                 if character == delimiter
                     && (delimiter != '\''
                         || word_boundary(previous)
@@ -1133,7 +1181,15 @@ fn quoted_ranges(value: &str, kind: UsageTextKind) -> Result<Vec<TextRange>> {
             None if matches!(character, '"' | '`')
                 || (character == '\'' && word_boundary(previous)) =>
             {
-                quote = Some((character, index));
+                let raw_quote = if kind == UsageTextKind::Code && character == '"' {
+                    rust_raw_quote_at(value, index)
+                } else {
+                    None
+                };
+                quote = Some(raw_quote.unwrap_or(Quote::Escaped {
+                    delimiter: character,
+                    start: index,
+                }));
             }
             _ => {}
         }

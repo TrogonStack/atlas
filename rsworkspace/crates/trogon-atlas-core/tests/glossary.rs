@@ -853,6 +853,72 @@ fn code_quote_exclusions_preserve_rust_lifetimes_and_character_literals() {
 }
 
 #[test]
+fn code_quote_exclusions_preserve_rust_raw_string_delimiters() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    for text in [
+        r##"let data = r#"{"label":"purchase"}"#; purchase();"##,
+        r###"let data = r##"before "# purchase "##; purchase();"###,
+        r##"let data = r#"purchase \"#; purchase();"##,
+        r#"let data = r"purchase\"; purchase();"#,
+        r##"let data = br#"purchase \"#; purchase();"##,
+        r###"let data = cr##"purchase "# copy "##; purchase();"###,
+        r####"let data = r###"café ' ` "## purchase"###; purchase();"####,
+    ] {
+        let findings = glossary::check_code_usage(
+            std::slice::from_ref(&candidate),
+            "customer",
+            &date("2026-11-12"),
+            text,
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 1, "{text}");
+        assert_eq!(findings[0].range.start(), text.rfind("purchase").unwrap());
+        assert_eq!(findings[0].matched, "purchase");
+        assert_eq!(
+            glossary::check_code_usage(
+                std::slice::from_ref(&candidate),
+                "customer",
+                &date("2026-11-12"),
+                text,
+                &[],
+                false,
+            )
+            .unwrap()
+            .len(),
+            2,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn code_quote_exclusions_refuse_unclosed_rust_raw_strings() {
+    let mut candidate = term();
+    candidate.glossary.as_mut().unwrap().policy = Some(policy());
+    for text in [
+        r##"let data = r##"purchase "#; purchase();"##,
+        r##"let data = br##"purchase "#; purchase();"##,
+        r###"let data = cr###"purchase "##; purchase();"###,
+    ] {
+        assert!(
+            glossary::check_code_usage(
+                std::slice::from_ref(&candidate),
+                "customer",
+                &date("2026-11-12"),
+                text,
+                &[],
+                true,
+            )
+            .is_err(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn apostrophes_do_not_make_an_unclosed_single_quoted_exclusion_valid() {
     let mut candidate = term();
     candidate.glossary.as_mut().unwrap().policy = Some(policy());

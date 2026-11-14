@@ -282,6 +282,184 @@ fn clear_faults(store: &NatsStore) {
     *store.faults.lock() = super::journal::FaultPlan::default();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_batch_history_keeps_its_initial_preimage_after_a_revision_failure() {
+    for fail_first in [false, true] {
+        let store = isolated_store().await;
+        let scenario = seed_branch_batch(&store).await;
+        let before = store
+            .get(EntityKind::Event, &event_id(UPDATED), Some(RECOVERY_BRANCH))
+            .await
+            .unwrap();
+        let ops = ["intermediate", "final"].map(|title| MutationOp::Put {
+            kind: EntityKind::Event,
+            entity: event(UPDATED, title),
+            if_match: None,
+            force: false,
+        });
+        store.faults.lock().fail_revision_writes = usize::from(fail_first);
+        store
+            .batch_apply(
+                &ops,
+                WriteContext::branch(RECOVERY_BRANCH).attributed(scenario.changeset()),
+            )
+            .await
+            .unwrap();
+        let after = store
+            .get(EntityKind::Event, &event_id(UPDATED), Some(RECOVERY_BRANCH))
+            .await
+            .unwrap();
+        assert_eq!(title_of(&after.entity), "final");
+        clear_faults(&store);
+        repair(&store).await;
+        let revisions = store
+            .list_entity_revisions(
+                EntityKind::Event,
+                &event_id(UPDATED),
+                RevisionPage {
+                    before: None,
+                    limit: 100,
+                    branch: Some(RECOVERY_BRANCH),
+                },
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|revision| revision.changeset_id == scenario.changeset_id)
+            .collect::<Vec<_>>();
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].before.as_ref(), Some(&before.entity));
+        assert_eq!(revisions[0].after.as_ref(), Some(&after.entity));
+        assert_eq!(revisions[0].branch.as_deref(), Some(RECOVERY_BRANCH));
+        assert_eq!(
+            Scenario::title(&store, UPDATED).await.as_deref(),
+            Some("before")
+        );
+        assert_eq!(
+            scenario.notifications(&store).await,
+            Vec::<(String, bool)>::new()
+        );
+        assert_journal_empty(&store).await;
+        store.read_marker().await.unwrap();
+    }
+}
+
+async fn merge_put_timeout_rolls_back(create: bool, failed_rollback: bool) {
+    let store = isolated_store().await;
+    let scenario = seed_branch_batch(&store).await;
+    let target = if create { CREATED_FIRST } else { DELETED };
+    store
+        .put(
+            EntityKind::Event,
+            &event(target, "merge target"),
+            false,
+            WriteContext::branch(RECOVERY_BRANCH),
+        )
+        .await
+        .unwrap();
+    let branch_before = raw_branch_rows(&store).await;
+    let mut baseline_before = Vec::new();
+    let mut ops = Vec::new();
+    for slug in [UPDATED, target] {
+        let baseline = match store.get(EntityKind::Event, &event_id(slug), None).await {
+            Ok(stored) => Some(stored),
+            Err(StoreError::NotFound) => None,
+            Err(error) => panic!("baseline {slug}: {error}"),
+        };
+        ops.push(crate::store::BranchLandOp::Put {
+            kind: EntityKind::Event,
+            ours: Box::new(
+                store
+                    .get(EntityKind::Event, &event_id(slug), Some(RECOVERY_BRANCH))
+                    .await
+                    .unwrap()
+                    .entity,
+            ),
+            base: None,
+            expected_baseline_etag: baseline.as_ref().map(|stored| stored.etag.clone()),
+        });
+        baseline_before.push((slug, baseline.map(|stored| stored.entity)));
+    }
+    {
+        let mut faults = store.faults.lock();
+        faults.timeout_merge_write_at = Some(1);
+        faults.fail_rollback = failed_rollback;
+    }
+    let error = store
+        .land_branch_merge(
+            RECOVERY_BRANCH,
+            &ops,
+            WriteContext::baseline().attributed(scenario.changeset()),
+        )
+        .await
+        .expect_err("the merge write's response times out after its KV write lands");
+    assert_eq!(store.faults.lock().timed_out_merge_writes, 1);
+    clear_faults(&store);
+    if failed_rollback {
+        assert!(
+            matches!(&error, StoreError::BatchFailed { index: 1, source } if matches!(source.as_ref(), StoreError::PartialApply { journal: Some(_), .. })),
+            "rollback failure must retain its recovery journal: {error}"
+        );
+        assert!(matches!(
+            store.read_marker().await,
+            Err(StoreError::Unavailable(_))
+        ));
+        repair(&store).await;
+    }
+    for (slug, before) in baseline_before {
+        let after = match store.get(EntityKind::Event, &event_id(slug), None).await {
+            Ok(stored) => Some(stored.entity),
+            Err(StoreError::NotFound) => None,
+            Err(error) => panic!("baseline {slug}: {error}"),
+        };
+        assert_eq!(after, before, "merge timeout left {slug} applied");
+        assert_eq!(scenario.revision_count(&store, slug).await, 0);
+    }
+    if !failed_rollback {
+        assert!(
+            matches!(error, StoreError::BatchFailed { index: 1, source } if matches!(*source, StoreError::Backend(_))),
+            "timeout must be reported as a failed batch operation"
+        );
+    }
+    assert_eq!(raw_branch_rows(&store).await, branch_before);
+    assert_eq!(
+        scenario.notifications(&store).await,
+        Vec::<(String, bool)>::new()
+    );
+    assert!(matches!(
+        store.get_changeset(&scenario.changeset_id).await,
+        Err(StoreError::NotFound)
+    ));
+    assert_journal_empty(&store).await;
+    store.read_marker().await.unwrap();
+    store
+        .create(
+            EntityKind::Event,
+            &event("after-timeout", "later write"),
+            WriteContext::baseline(),
+        )
+        .await
+        .expect("successful rollback must allow a later model write");
+    assert_eq!(
+        Scenario::title(&store, "after-timeout").await.as_deref(),
+        Some("later write")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_update_request_timeouts_roll_back_or_report_partial_apply() {
+    for failed_rollback in [false, true] {
+        merge_put_timeout_rolls_back(false, failed_rollback).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_create_request_timeouts_roll_back_or_report_partial_apply() {
+    for failed_rollback in [false, true] {
+        merge_put_timeout_rolls_back(true, failed_rollback).await;
+    }
+}
+
 const RECOVERY_BRANCH: &str = "journal-recovery";
 
 async fn seed_branch_batch(store: &NatsStore) -> Scenario {

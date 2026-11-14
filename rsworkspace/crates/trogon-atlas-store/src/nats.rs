@@ -1669,6 +1669,14 @@ impl NatsStore {
         let Some(changeset) = ctx.changeset() else {
             return Ok(());
         };
+        #[cfg(test)]
+        {
+            let mut faults = self.faults.lock();
+            if faults.fail_revision_writes > 0 {
+                faults.fail_revision_writes -= 1;
+                return Err("injected revision write failure".into());
+            }
+        }
         let key = revision_key(ctx.branch_name(), revision.kind, &revision.id, changeset.id);
         let proto = entity_revision_proto(changeset, ctx.branch_name(), revision);
         let bytes = Bytes::from(proto.encode_to_vec());
@@ -5308,48 +5316,61 @@ impl Store for NatsStore {
                         let bytes = encode_entity(&prepared);
                         let cas_result = match expected_baseline_etag {
                             Some(exp) => match exp.parse::<u64>() {
-                                Ok(rev) => tokio::time::timeout(
-                                    KV_OP_TIMEOUT,
-                                    self.kv.update(&key, bytes, rev),
-                                )
+                                Ok(rev) => tokio::time::timeout(KV_OP_TIMEOUT, async {
+                                    let result = self.kv.update(&key, bytes, rev).await;
+                                    #[cfg(test)]
+                                    if result.is_ok() && faults.timeout_merge_write_at == Some(i) {
+                                        self.faults.lock().timed_out_merge_writes += 1;
+                                        std::future::pending::<()>().await;
+                                    }
+                                    result
+                                })
                                 .await
                                 .map_err(|_| {
                                     StoreError::Backend(format!("kv.update {key}: timeout"))
-                                })?
-                                .map_err(|e| {
-                                    use async_nats::jetstream::kv::UpdateErrorKind;
-                                    if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
-                                        StoreError::EtagMismatch {
-                                            expected: rev.to_string(),
-                                            found: String::new(),
+                                })
+                                .and_then(|result| {
+                                    result.map_err(|e| {
+                                        use async_nats::jetstream::kv::UpdateErrorKind;
+                                        if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
+                                            StoreError::EtagMismatch {
+                                                expected: rev.to_string(),
+                                                found: String::new(),
+                                            }
+                                        } else {
+                                            StoreError::Backend(format!("kv.update {key}: {e}"))
                                         }
-                                    } else {
-                                        StoreError::Backend(format!("kv.update {key}: {e}"))
-                                    }
+                                    })
                                 }),
                                 Err(_) => Err(StoreError::EtagMismatch {
                                     expected: exp.clone(),
                                     found: String::new(),
                                 }),
                             },
-                            None => {
-                                tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes))
-                                    .await
-                                    .map_err(|_| {
-                                        StoreError::Backend(format!("kv.create {key}: timeout"))
-                                    })?
-                                    .map_err(|e| {
-                                        use async_nats::jetstream::kv::CreateErrorKind;
-                                        if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
-                                            StoreError::EtagMismatch {
-                                                expected: "absent".into(),
-                                                found: "present".into(),
-                                            }
-                                        } else {
-                                            StoreError::Backend(format!("kv.create {key}: {e}"))
+                            None => tokio::time::timeout(KV_OP_TIMEOUT, async {
+                                let result = self.kv.create(&key, bytes).await;
+                                #[cfg(test)]
+                                if result.is_ok() && faults.timeout_merge_write_at == Some(i) {
+                                    self.faults.lock().timed_out_merge_writes += 1;
+                                    std::future::pending::<()>().await;
+                                }
+                                result
+                            })
+                            .await
+                            .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))
+                            .and_then(|result| {
+                                result.map_err(|e| {
+                                    use async_nats::jetstream::kv::CreateErrorKind;
+                                    if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
+                                        StoreError::EtagMismatch {
+                                            expected: "absent".into(),
+                                            found: "present".into(),
                                         }
-                                    })
-                            }
+                                    } else {
+                                        StoreError::Backend(format!("kv.create {key}: {e}"))
+                                    }
+                                })
+                            }),
                         };
                         match cas_result {
                             Ok(rev) => Ok((

@@ -325,6 +325,12 @@ pub(super) struct FaultPlan {
     pub(super) fail_branch_post_write_read_at: Option<usize>,
     pub(super) fail_commit: bool,
     pub(super) crash_during_publish_finalize: bool,
+    #[cfg(test)]
+    pub(super) fail_revision_writes: usize,
+    #[cfg(test)]
+    pub(super) timeout_merge_write_at: Option<usize>,
+    #[cfg(test)]
+    pub(super) timed_out_merge_writes: usize,
 }
 
 pub(super) fn injected(point: &str) -> StoreError {

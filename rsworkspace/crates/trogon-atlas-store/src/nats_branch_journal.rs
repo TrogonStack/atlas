@@ -52,6 +52,7 @@ impl NatsStore {
             priors.push(journal::JournalPrior::branch(key, entry, before));
         }
         let mut journal = self.begin_journal(ctx, priors.clone()).await?;
+        let write_ctx = ctx.without_changeset();
         let mut outcomes = Vec::with_capacity(ops.len());
         let mut changes = Vec::new();
         let mut applied = BTreeSet::new();
@@ -71,12 +72,14 @@ impl NatsStore {
                 Err(journal::injected("write"))
             } else {
                 match op {
-                    MutationOp::Create { kind, entity } => Store::create(self, *kind, entity, ctx)
-                        .await
-                        .map(|written| MutationOutcome::Wrote {
-                            etag: written.etag,
-                            entity: written.entity,
-                        }),
+                    MutationOp::Create { kind, entity } => {
+                        Store::create(self, *kind, entity, write_ctx)
+                            .await
+                            .map(|written| MutationOutcome::Wrote {
+                                etag: written.etag,
+                                entity: written.entity,
+                            })
+                    }
                     MutationOp::Put {
                         kind,
                         entity,
@@ -85,9 +88,9 @@ impl NatsStore {
                     } => {
                         let written = match if_match {
                             Some(etag) => {
-                                Store::update(self, *kind, entity, etag, *force, ctx).await
+                                Store::update(self, *kind, entity, etag, *force, write_ctx).await
                             }
-                            None => Store::put(self, *kind, entity, *force, ctx).await,
+                            None => Store::put(self, *kind, entity, *force, write_ctx).await,
                         };
                         written.map(|written| {
                             if written.wrote {
@@ -104,7 +107,7 @@ impl NatsStore {
                         })
                     }
                     MutationOp::Delete { kind, id, if_match } => {
-                        Store::delete(self, *kind, id, if_match.as_deref(), ctx)
+                        Store::delete(self, *kind, id, if_match.as_deref(), write_ctx)
                             .await
                             .map(|()| MutationOutcome::Deleted)
                     }
