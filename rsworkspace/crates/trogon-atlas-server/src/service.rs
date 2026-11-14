@@ -9,6 +9,8 @@ mod term_domains;
 
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
+#[path = "backing_report.rs"]
+mod backing_report;
 #[path = "business_admission.rs"]
 mod business_admission;
 #[cfg(test)]
@@ -4945,6 +4947,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }),
             identity_version: trogon_atlas_core::SNAPSHOT_IDENTITY_VERSION,
         }))
+    }
+
+    async fn get_backing_report(
+        &self,
+        req: Request<pb::GetBackingReportRequest>,
+    ) -> Result<Response<pb::GetBackingReportResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.backing_report(req.into_inner(), branch, &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn list_subject_decisions(

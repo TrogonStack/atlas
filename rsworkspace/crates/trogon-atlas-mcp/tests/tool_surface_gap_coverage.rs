@@ -1101,3 +1101,66 @@ async fn mcp_get_snapshot_id_detects_change() {
 
     mcp_service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_get_backing_report_binds_snapshot_and_reports_unbacked() {
+    let (client, mcp_service, grpc_endpoint) = start_mcp_client().await;
+    let mut grpc =
+        trogon_atlas_proto::event_model_service_client::EventModelServiceClient::connect(
+            grpc_endpoint.clone(),
+        )
+        .await
+        .unwrap();
+    let ns = "mcp-backing";
+    grpc.put_entity(put_req(event_entity(ns, "bare", 1, "Bare"), true))
+        .await
+        .unwrap();
+
+    let call = |args: Vec<(&'static str, serde_json::Value)>| {
+        let client = &client;
+        async move {
+            let result = client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("get_backing_report")
+                        .with_arguments(args_obj(&args)),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error.unwrap_or(false), "{result:?}");
+            call_tool_result_text(&result)
+        }
+    };
+
+    let body = call(vec![
+        ("namespaces", serde_json::json!([ns])),
+        ("include_unbacked_findings", serde_json::json!(true)),
+    ])
+    .await;
+    let raw = base64_decode(body["binpb_base64"].as_str().unwrap());
+    let report = pb::GetBackingReportResponse::decode(raw.as_slice()).unwrap();
+    let totals = report.totals.unwrap();
+    assert_eq!((totals.total, totals.unbacked), (1, 1));
+    assert_eq!(totals.unbacked_rate, Some(1.0));
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].code, "ENTITY_UNBACKED");
+
+    let snapshot = grpc
+        .get_snapshot_id(pb::GetSnapshotIdRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(report.snapshot_id, snapshot.snapshot_id);
+
+    let body = call(vec![
+        ("namespaces", serde_json::json!([ns])),
+        ("json", serde_json::json!(true)),
+    ])
+    .await;
+    let json: serde_json::Value = serde_json::from_str(body["json"].as_str().unwrap()).unwrap();
+    assert_eq!(json["snapshotId"], serde_json::json!(snapshot.snapshot_id));
+    assert_eq!(json["totals"]["unbacked"], serde_json::json!(1));
+    assert_eq!(json["totals"]["unbackedRate"], serde_json::json!(1.0));
+    assert!(json.get("findings").is_none(), "findings are opt-in");
+
+    mcp_service.cancel().await.unwrap();
+}

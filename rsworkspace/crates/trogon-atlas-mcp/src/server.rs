@@ -30,13 +30,13 @@ use crate::{
         DeleteEntityParams, DeleteNamespaceParams, DiffBranchParams, DiffEntitiesParams,
         DiffManifestsParams, EmptyParams, EntitySchemaParams, EntitySpec,
         EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
-        ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
-        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
-        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
-        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
-        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
-        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
-        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        ExportOpensloParams, ExtractSubgraphParams, GetBackingReportParams, GetChangesetParams,
+        GetEntityHistoryParams, GetEntityProtectionParams, GetLatestVersionParams,
+        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
+        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams,
+        ListEntityProtectionsParams, ListVersionsParams, MergeBranchParams, MoveNamespaceParams,
+        ProjectionParams, ProtectEntityParams, PutEntityJsonParams, PutEntityParams,
+        ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
         ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
         SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
         UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
@@ -571,6 +571,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
         tool: "get_snapshot_id",
         rpcs: &["GetSnapshotId"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_backing_report",
+        rpcs: &["GetBackingReport"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
@@ -2045,6 +2051,35 @@ impl McpServer {
             .map_err(tool_err("get_snapshot_id"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Which visible entities carry an accepted Decision, a Document or a complete code reference naming them exactly, with per-kind totals and an unbacked rate. Presence only: it never judges whether the evidence is right. Subjects the caller's view cannot settle (hidden namespaces, a truncated snapshot, an unreadable annotation) count as unknown, and the rate is omitted unless every subject was settled. The report carries the snapshot_id, branch and visibility it was computed under.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_backing_report(
+        &self,
+        Parameters(p): Parameters<GetBackingReportParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let mut client = self.client();
+        let resp = client
+            .get_backing_report(pb::GetBackingReportRequest {
+                namespaces: p.namespaces.unwrap_or_default(),
+                include_unbacked_findings: p.include_unbacked_findings,
+            })
+            .await
+            .map_err(tool_err("get_backing_report"))?
+            .into_inner();
+        Ok(ok_response(
+            "trogonatlas.api.eventmodel.v1alpha1.GetBackingReportResponse",
+            &resp,
+            p.json.unwrap_or(false),
+        ))
     }
 
     #[tool(

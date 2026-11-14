@@ -11,6 +11,7 @@
 pub mod apply;
 pub mod artifacts;
 pub mod attested;
+pub mod backing;
 pub mod branch;
 pub mod channel_messages;
 pub mod client;
