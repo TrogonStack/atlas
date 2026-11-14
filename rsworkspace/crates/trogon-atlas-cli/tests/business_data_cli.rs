@@ -276,8 +276,9 @@ fn authed_ok(endpoint: &str, token: &str, args: &[&str]) -> serde_json::Value {
     let output = authed(endpoint, token, args);
     assert!(
         output.status.success(),
-        "{args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "{args:?}: {}{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
     );
     serde_json::from_slice(&output.stdout).unwrap()
 }
@@ -532,6 +533,57 @@ async fn authenticated_cli_absent_aggregate_reapply_isolates_versions() {
     );
     assert_eq!(read(&mut native, 1).await, edited_v1);
     assert_eq!(read(&mut native, 2).await, before_v2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_cli_apply_adopts_stored_ids_for_an_idless_edit() {
+    use serde_json::json;
+
+    let endpoint = authenticated_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("schema.yaml");
+    let product = json!({
+        "apiVersion": trogon_atlas_client::manifest::API_VERSION,
+        "kind": "Schema",
+        "metadata": {"namespace": "cli-adopt", "name": "product"},
+        "spec": {"title": "Product", "fields": [{"name": "sku", "type": {"string": {}}}]}
+    });
+    std::fs::write(&path, product.to_string()).unwrap();
+    authed_ok(&endpoint, WRITER, &["apply", "-f", path.to_str().unwrap()]);
+    let order = json!({
+        "apiVersion": trogon_atlas_client::manifest::API_VERSION,
+        "kind": "Schema",
+        "metadata": {"namespace": "cli-adopt", "name": "order"},
+        "spec": {
+            "title": "Order",
+            "fields": [{"name": "product_ref", "type": {"ref": {"ref": {"schema": "product"}}}}],
+            "propertyRelationships": [{
+                "source": {"segments": [{"name": "product_ref", "repeated": false}]},
+                "targetEntity": "product",
+                "label": {"value": "hasMany"}
+            }]
+        }
+    });
+    std::fs::write(&path, order.to_string()).unwrap();
+    authed_ok(&endpoint, WRITER, &["apply", "-f", path.to_str().unwrap()]);
+
+    let address = "schema/cli-adopt/order@1";
+    let stored = authed_ok(&endpoint, READER, &["get", address])["data"]["manifest"].clone();
+    let stored_id = stored["spec"]["propertyRelationships"][0]["connectionId"]["value"].clone();
+    assert!(stored_id.is_string(), "{stored}");
+
+    let mut edited = stored;
+    strip_connection_ids(&mut edited);
+    edited["spec"]["title"] = json!("Order, edited");
+    std::fs::write(&path, edited.to_string()).unwrap();
+    authed_ok(&endpoint, WRITER, &["apply", "-f", path.to_str().unwrap()]);
+
+    let after = authed_ok(&endpoint, READER, &["get", address])["data"]["manifest"].clone();
+    assert_eq!(after["spec"]["title"], "Order, edited");
+    assert_eq!(
+        after["spec"]["propertyRelationships"][0]["connectionId"]["value"],
+        stored_id
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
