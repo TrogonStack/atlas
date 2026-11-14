@@ -3938,6 +3938,135 @@ impl SystemActorDirection {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryEvidence {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<DocumentRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub content_digest: ::core::option::Option<ContentDigest>,
+    #[prost(string, tag="4")]
+    pub locator: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub quote: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsagePolicy {
+    #[prost(enumeration="GlossaryUsage", tag="1")]
+    pub usage: i32,
+    #[prost(message, optional, tag="2")]
+    pub preferred_term: ::core::option::Option<TermRef>,
+    #[prost(string, tag="3")]
+    pub rationale: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub effective_from: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="5")]
+    pub effective_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsagePeriod {
+    #[prost(message, optional, tag="1")]
+    pub valid_from: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="2")]
+    pub valid_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryReview {
+    #[prost(enumeration="GlossaryReviewDisposition", tag="1")]
+    pub disposition: i32,
+    #[prost(string, tag="2")]
+    pub actor: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub reviewed_at: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub content_digest: ::core::option::Option<ContentDigest>,
+    #[prost(string, tag="5")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub reason: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GlossaryEntry {
+    #[prost(message, repeated, tag="1")]
+    pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidence>,
+    #[prost(string, tag="2")]
+    pub generation_revision: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub next_review_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="5")]
+    pub policy: ::core::option::Option<GlossaryUsagePolicy>,
+    #[prost(message, optional, tag="6")]
+    pub review: ::core::option::Option<GlossaryReview>,
+    #[prost(message, optional, tag="7")]
+    pub usage_period: ::core::option::Option<GlossaryUsagePeriod>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryUsage {
+    Unspecified = 0,
+    Allowed = 1,
+    Deprecated = 2,
+    Prohibited = 3,
+}
+impl GlossaryUsage {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_USAGE_UNSPECIFIED",
+            Self::Allowed => "GLOSSARY_USAGE_ALLOWED",
+            Self::Deprecated => "GLOSSARY_USAGE_DEPRECATED",
+            Self::Prohibited => "GLOSSARY_USAGE_PROHIBITED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_USAGE_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_USAGE_ALLOWED" => Some(Self::Allowed),
+            "GLOSSARY_USAGE_DEPRECATED" => Some(Self::Deprecated),
+            "GLOSSARY_USAGE_PROHIBITED" => Some(Self::Prohibited),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryReviewDisposition {
+    Unspecified = 0,
+    Accepted = 1,
+    Rejected = 2,
+    NeedsChanges = 3,
+}
+impl GlossaryReviewDisposition {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED",
+            Self::Accepted => "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED",
+            Self::Rejected => "GLOSSARY_REVIEW_DISPOSITION_REJECTED",
+            Self::NeedsChanges => "GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED" => Some(Self::Accepted),
+            "GLOSSARY_REVIEW_DISPOSITION_REJECTED" => Some(Self::Rejected),
+            "GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES" => Some(Self::NeedsChanges),
+            _ => None,
+        }
+    }
+}
 /// The bounded context itself, as data (Decision #27): one per namespace,
 /// identified BY the namespace (id.slug == id.namespace). Carries the
 /// context charter -- what this boundary owns, its links and metadata.
@@ -4114,6 +4243,8 @@ pub struct Term {
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
     #[prost(message, optional, tag="7")]
     pub owning_domain: ::core::option::Option<DomainRef>,
+    #[prost(message, optional, tag="8")]
+    pub glossary: ::core::option::Option<GlossaryEntry>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ambiguity {

@@ -3,6 +3,16 @@ import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
 import type {
+  GlossaryComparison,
+  GlossaryDocumentRef,
+  GlossaryIndex,
+  GlossaryRefresh,
+  GlossarySelection,
+  GlossarySources,
+  GlossaryTermDetail,
+  GlossaryTermRef,
+} from '@/lib/glossary';
+import type {
   AssigneeResponsibilitiesRequest,
   DirectoryRef,
   ResponsibilityAssignments,
@@ -484,6 +494,43 @@ export function getTeamContacts(team: DirectoryRef, includeMembers = false, opts
 
 function catalogQuery(query: string, request: unknown, opts: FetchOptions): Promise<CatalogInspection> {
   return getJson(`/api/catalog/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+
+export function listGlossaryEntries(
+  request: { selection: GlossarySelection; pageSize?: number; pageToken?: string },
+  opts: FetchOptions = {},
+): Promise<GlossaryIndex> {
+  return getJson(`/api/glossary/entries?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function getGlossaryTerm(
+  request: { term: GlossaryTermRef },
+  opts: FetchOptions = {},
+): Promise<GlossaryTermDetail> {
+  return getJson(`/api/glossary/term?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function inspectGlossarySources(
+  request: { documents: readonly GlossaryDocumentRef[] },
+  opts: FetchOptions = {},
+): Promise<GlossarySources> {
+  return getJson(`/api/glossary/sources?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function compareGlossaries(
+  request: { left: GlossarySelection; right: GlossarySelection },
+  opts: FetchOptions = {},
+): Promise<GlossaryComparison> {
+  return getJson(`/api/glossary/compare?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function inspectGlossaryRefresh(
+  request: { selection: GlossarySelection; documents: readonly GlossaryDocumentRef[]; generationRevision: string },
+  opts: FetchOptions = {},
+): Promise<GlossaryRefresh> {
+  return getJson(`/api/glossary/refresh?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function getGlossaryUsage(
+  request: { kind: string; id: EntityId },
+  opts: FetchOptions = {},
+): Promise<{ entity?: WireEntityEnvelope; etag?: string }> {
+  return getJson(`/api/glossary/usage?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
   return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);

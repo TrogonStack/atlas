@@ -63,6 +63,12 @@ ownership can coexist; this declaration does not change strategic realization
 rules or enforce a new namespace hierarchy. A Term without doc remains legal
 under existing admission; completeness of its definition is a separate finding.
 
+The optional [generated glossary profile](generated-glossary-contracts.md) adds
+source evidence, revision-bound review, compact retrieval, refresh and terminology
+policy. Its [delivery coverage](generated-glossary-gaps.md) and
+[acceptance](generated-glossary-acceptance.md) describe the implemented workflow.
+Terms without the profile retain the generic vocabulary contract above.
+
 ## Document classification and content
 
 `purpose` is a proto3 optional enum with GENERAL, EXAMPLE, DIAGRAM, ATTACHMENT, CHANGELOG. Preserve absent separately from present GENERAL.

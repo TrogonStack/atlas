@@ -59,6 +59,22 @@ struct JournalHeader {
     /// it settles such a receipt not-applied and lets a retry finish it.
     #[prost(bool, tag = "11")]
     settlement_deferred: bool,
+    #[prost(uint32, tag = "12")]
+    format_version: u32,
+    #[prost(string, tag = "13")]
+    branch: String,
+    #[prost(bool, tag = "14")]
+    maintenance: bool,
+    #[prost(message, repeated, tag = "15")]
+    cleanup: Vec<BranchCleanup>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub(super) struct BranchCleanup {
+    #[prost(string, tag = "1")]
+    pub(super) key: String,
+    #[prost(uint64, tag = "2")]
+    pub(super) revision: u64,
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -83,6 +99,10 @@ pub(super) struct JournalPrior {
     revision: Option<u64>,
     #[prost(message, optional, tag = "3")]
     entity: Option<Entity>,
+    #[prost(bytes = "bytes", optional, tag = "4")]
+    raw_payload: Option<Bytes>,
+    #[prost(uint32, tag = "5")]
+    bucket: u32,
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -97,6 +117,20 @@ impl JournalPrior {
             key,
             revision,
             entity,
+            raw_payload: None,
+            bucket: 0,
+        }
+    }
+
+    pub(super) fn branch(key: String, entry: Option<KvEntry>, before: Option<Entity>) -> Self {
+        let entry = live_entry(entry);
+        let entity = if entry.is_none() { before } else { None };
+        Self {
+            key,
+            revision: entry.as_ref().map(|entry| entry.revision),
+            entity,
+            raw_payload: entry.map(|entry| entry.value),
+            bucket: 1,
         }
     }
 
@@ -107,11 +141,28 @@ impl JournalPrior {
         if current.as_ref().map(|entry| entry.revision) == self.revision {
             return false;
         }
+        if self.bucket == 1 {
+            return match (self.raw_payload.as_ref(), live_entry(current)) {
+                (None, None) => false,
+                (Some(prior), Some(live)) => prior.as_ref() != live.value.as_ref(),
+                _ => true,
+            };
+        }
         match (self.entity.as_ref(), live_entry(current)) {
             (None, None) => false,
             (Some(prior), Some(live)) => decode_entity(&live.value).ok().as_ref() != Some(prior),
             _ => true,
         }
+    }
+
+    fn before(&self) -> Result<Option<Entity>, String> {
+        if self.bucket == 1 {
+            if let Some(bytes) = &self.raw_payload {
+                let delta = super::decode_branch_delta(bytes).map_err(|error| error.to_string())?;
+                return Ok((!delta.tombstone).then_some(delta.ours).flatten());
+            }
+        }
+        Ok(self.entity.clone())
     }
 }
 
@@ -146,26 +197,45 @@ impl JournalChange {
     }
 }
 
-fn phase_code(phase: JournalPhase) -> i32 {
-    match phase {
+fn phase_code(phase: JournalPhase, extended: bool) -> i32 {
+    let code = match phase {
         JournalPhase::Planned => 1,
         JournalPhase::Aborted => 2,
         JournalPhase::Committed => 3,
         JournalPhase::Published => 4,
-    }
+    };
+    // Old readers reject unknown phases before loading any prior images.
+    code + if extended { 100 } else { 0 }
 }
 
 fn phase_of(code: i32) -> Option<JournalPhase> {
     match code {
-        1 => Some(JournalPhase::Planned),
-        2 => Some(JournalPhase::Aborted),
-        3 => Some(JournalPhase::Committed),
-        4 => Some(JournalPhase::Published),
+        1 | 101 => Some(JournalPhase::Planned),
+        2 | 102 => Some(JournalPhase::Aborted),
+        3 | 103 => Some(JournalPhase::Committed),
+        4 | 104 => Some(JournalPhase::Published),
         _ => None,
     }
 }
 
 impl JournalHeader {
+    fn branch(&self) -> Option<&str> {
+        (!self.branch.is_empty()).then_some(self.branch.as_str())
+    }
+
+    fn format_supported(&self) -> bool {
+        match self.format_version {
+            0 => {
+                (1..=4).contains(&self.phase)
+                    && self.branch.is_empty()
+                    && !self.maintenance
+                    && self.cleanup.is_empty()
+            }
+            1 => (101..=104).contains(&self.phase),
+            _ => false,
+        }
+    }
+
     fn attribution(&self) -> Option<ChangesetRef<'_>> {
         if self.changeset_id.is_empty() {
             return None;
@@ -177,6 +247,34 @@ impl JournalHeader {
             operation_id: (!self.operation_id.is_empty()).then_some(self.operation_id.as_str()),
         })
     }
+}
+
+fn validate_priors(header: &JournalHeader, priors: &[JournalPrior]) -> Result<(), String> {
+    for prior in priors {
+        let valid = match prior.bucket {
+            0 => {
+                header.branch().is_none()
+                    && prior.raw_payload.is_none()
+                    && (prior.entity.is_none() || prior.revision.is_some())
+                    && crate::key::parse_entity_key(&prior.key).is_some()
+            }
+            1 => {
+                header.format_version == 1
+                    && prior.revision.is_some() == prior.raw_payload.is_some()
+                    && (prior.raw_payload.is_none() || prior.entity.is_none())
+                    && header.branch().is_some_and(|branch| {
+                        crate::key::parse_branch_delta_key(branch, &prior.key).is_some()
+                            || (header.maintenance
+                                && prior.key == crate::key::branch_meta_key(branch))
+                    })
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err("journal contains invalid prior routing".into());
+        }
+    }
+    Ok(())
 }
 
 fn chunk_key(id: &BatchJournalId, index: u32) -> String {
@@ -224,6 +322,15 @@ pub(super) struct FaultPlan {
     pub(super) fail_publish: bool,
     pub(super) fail_changeset_append: bool,
     pub(super) fail_rollback: bool,
+    pub(super) fail_branch_post_write_read_at: Option<usize>,
+    pub(super) fail_commit: bool,
+    pub(super) crash_during_publish_finalize: bool,
+    #[cfg(test)]
+    pub(super) fail_revision_writes: usize,
+    #[cfg(test)]
+    pub(super) timeout_merge_write_at: Option<usize>,
+    #[cfg(test)]
+    pub(super) timed_out_merge_writes: usize,
 }
 
 pub(super) fn injected(point: &str) -> StoreError {
@@ -236,6 +343,8 @@ pub(super) struct Journal {
     id: BatchJournalId,
     header: JournalHeader,
     _inflight: InflightGuard,
+    crash_during_publish_finalize: bool,
+    fail_commit: bool,
 }
 
 impl Journal {
@@ -244,7 +353,7 @@ impl Journal {
     }
 
     async fn write_header(&mut self, phase: JournalPhase) -> StoreResult<()> {
-        self.header.phase = phase_code(phase);
+        self.header.phase = phase_code(phase, self.header.format_version != 0);
         self.header.updated_at_micros = now_micros();
         let bytes = Bytes::from(self.header.encode_to_vec());
         tokio::time::timeout(KV_OP_TIMEOUT, self.kv.put(self.id.as_str(), bytes))
@@ -260,6 +369,9 @@ impl Journal {
 
     pub(super) async fn commit(&mut self, changes: Vec<JournalChange>) -> StoreResult<()> {
         self.header.changes = changes;
+        if self.fail_commit {
+            return Err(injected("journal commit"));
+        }
         self.write_header(JournalPhase::Committed).await
     }
 
@@ -269,9 +381,12 @@ impl Journal {
         if self.header.attribution().is_none() {
             return self.finish().await;
         }
-        purge_chunks(&self.kv, &self.id).await?;
         self.header.chunk_count = 0;
-        self.write_header(JournalPhase::Published).await
+        self.write_header(JournalPhase::Published).await?;
+        if self.crash_during_publish_finalize {
+            return Err(injected("publish finalization"));
+        }
+        purge_chunks(&self.kv, &self.id).await
     }
 
     pub(super) async fn finish(self) -> StoreResult<()> {
@@ -344,6 +459,14 @@ async fn load_priors(
             .map_err(|e| StoreError::Backend(format!("decode journal chunk {key}: {e}")))?;
         priors.extend(chunk.priors);
     }
+    if priors
+        .iter()
+        .any(|prior| prior.bucket > 1 || (prior.bucket == 0 && prior.raw_payload.is_some()))
+    {
+        return Err(StoreError::Backend(
+            "unsupported batch journal prior format".into(),
+        ));
+    }
     Ok(Some(priors))
 }
 
@@ -368,6 +491,51 @@ async fn list_journal_ids(kv: &KvStore) -> StoreResult<Vec<BatchJournalId>> {
 }
 
 impl NatsStore {
+    pub(super) async fn journal_writes_ready(&self) -> StoreResult<()> {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let info = self
+                .batches_kv
+                .stream
+                .get_info()
+                .await
+                .map_err(|_| StoreError::Unavailable("batch journal unavailable".into()))?;
+            if info.state.messages == 0 {
+                return Ok(());
+            }
+            let mut keys = self
+                .batches_kv
+                .keys()
+                .await
+                .map_err(|_| StoreError::Unavailable("batch journal unavailable".into()))?;
+            while let Some(key) = keys.next().await {
+                let key =
+                    key.map_err(|_| StoreError::Unavailable("batch journal unavailable".into()))?;
+                if key.contains('.') {
+                    continue;
+                }
+                let id = BatchJournalId::new(key);
+                let Some(header) = load_header(&self.batches_kv, &id).await? else {
+                    continue;
+                };
+                if !header.format_supported()
+                    || matches!(
+                        phase_of(header.phase),
+                        Some(JournalPhase::Planned | JournalPhase::Aborted) | None
+                    )
+                    || (phase_of(header.phase) == Some(JournalPhase::Committed)
+                        && !header.cleanup.is_empty())
+                {
+                    return Err(StoreError::Unavailable(
+                        "model writes require batch recovery".into(),
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| StoreError::Unavailable("batch journal probe timed out".into()))?
+    }
+
     #[cfg(test)]
     pub(super) fn faults(&self) -> FaultPlan {
         self.faults.lock().clone()
@@ -386,6 +554,17 @@ impl NatsStore {
         ctx: WriteContext<'_>,
         priors: Vec<JournalPrior>,
     ) -> StoreResult<Journal> {
+        self.begin_scoped_journal(ctx, priors, false, Vec::new())
+            .await
+    }
+
+    pub(super) async fn begin_scoped_journal(
+        &self,
+        ctx: WriteContext<'_>,
+        priors: Vec<JournalPrior>,
+        maintenance: bool,
+        cleanup: Vec<BranchCleanup>,
+    ) -> StoreResult<Journal> {
         let attribution = ctx
             .changeset()
             .filter(|changeset| validate_changeset_id(changeset.id).is_ok());
@@ -395,9 +574,15 @@ impl NatsStore {
         let inflight = self.inflight_journals.claim(&id).ok_or_else(|| {
             StoreError::Unavailable(format!("batch journal {id} is already in flight"))
         })?;
+        let extended = ctx.branch_name().is_some()
+            || maintenance
+            || !cleanup.is_empty()
+            || priors
+                .iter()
+                .any(|prior| prior.bucket != 0 || prior.raw_payload.is_some());
         let chunks = pack(priors);
         let header = JournalHeader {
-            phase: phase_code(JournalPhase::Planned),
+            phase: phase_code(JournalPhase::Planned, extended),
             changeset_id: attribution.map(|c| c.id.to_owned()).unwrap_or_default(),
             author: attribution.map(|c| c.author.to_owned()).unwrap_or_default(),
             rpc: attribution.map(|c| c.rpc.to_owned()).unwrap_or_default(),
@@ -411,6 +596,10 @@ impl NatsStore {
                 .unwrap_or_default()
                 .to_owned(),
             settlement_deferred: ctx.settlement_deferred(),
+            format_version: u32::from(extended),
+            branch: ctx.branch_name().unwrap_or_default().into(),
+            maintenance,
+            cleanup,
         };
         let created = tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -434,6 +623,8 @@ impl NatsStore {
             id,
             header,
             _inflight: inflight,
+            crash_during_publish_finalize: self.faults().crash_during_publish_finalize,
+            fail_commit: self.faults().fail_commit,
         };
         for (index, chunk) in (0u32..).zip(chunks.iter()) {
             let key = chunk_key(&journal.id, index);
@@ -482,6 +673,16 @@ impl NatsStore {
             .collect();
         let failed = self.roll_back_priors(&undo).await;
         if failed.is_empty() {
+            if let Err(error) = self
+                .purge_branch_journal_revisions(&journal.header, priors)
+                .await
+            {
+                tracing::warn!(%error, "branch rollback history cleanup remains pending");
+                return Some(StoreError::PartialApply {
+                    keys: undo.iter().map(|prior| prior.key.clone()).collect(),
+                    journal: Some(journal.id.clone()),
+                });
+            }
             let id = journal.id.clone();
             if let Err(error) = journal.finish().await {
                 tracing::warn!(
@@ -513,9 +714,40 @@ impl NatsStore {
         let mut failed = Vec::new();
         let mut moved = std::collections::BTreeMap::new();
         for prior in priors {
-            match kv_entry_timeout(&self.kv, prior.key.clone()).await {
+            let kv = if prior.bucket == 1 {
+                &self.branches_kv
+            } else {
+                &self.kv
+            };
+            match kv_entry_timeout(kv, prior.key.clone()).await {
                 Ok(entry) => {
-                    if prior.differs_from(entry) {
+                    if prior.bucket == 1 {
+                        if prior.differs_from(entry.clone()) {
+                            let restore = tokio::time::timeout(KV_OP_TIMEOUT, async {
+                                match (prior.raw_payload.as_ref(), live_entry(entry)) {
+                                    (Some(bytes), Some(current)) => kv
+                                        .update(&prior.key, bytes.clone(), current.revision)
+                                        .await
+                                        .map(|_| ())
+                                        .map_err(|error| error.to_string()),
+                                    (Some(bytes), None) => kv
+                                        .create(&prior.key, bytes.clone())
+                                        .await
+                                        .map(|_| ())
+                                        .map_err(|error| error.to_string()),
+                                    (None, Some(current)) => kv
+                                        .delete_expect_revision(&prior.key, Some(current.revision))
+                                        .await
+                                        .map_err(|error| error.to_string()),
+                                    (None, None) => Ok(()),
+                                }
+                            })
+                            .await;
+                            if !matches!(restore, Ok(Ok(()))) {
+                                failed.push(prior.key.clone());
+                            }
+                        }
+                    } else if prior.differs_from(entry) {
                         moved.insert(
                             prior.key.clone(),
                             prior
@@ -538,12 +770,85 @@ impl NatsStore {
     async fn landed_keys(&self, priors: &[JournalPrior]) -> StoreResult<Vec<String>> {
         let mut landed = Vec::new();
         for prior in priors {
-            let entry = kv_entry_timeout(&self.kv, prior.key.clone()).await?;
+            let kv = if prior.bucket == 1 {
+                &self.branches_kv
+            } else {
+                &self.kv
+            };
+            let entry = kv_entry_timeout(kv, prior.key.clone()).await?;
             if prior.differs_from(entry) {
                 landed.push(prior.key.clone());
             }
         }
         Ok(landed)
+    }
+
+    async fn purge_branch_journal_revisions(
+        &self,
+        header: &JournalHeader,
+        priors: &[JournalPrior],
+    ) -> StoreResult<()> {
+        let (Some(branch), Some(changeset)) = (header.branch(), header.attribution()) else {
+            return Ok(());
+        };
+        if header.maintenance {
+            return Ok(());
+        }
+        for prior in priors {
+            let Some((kind, id)) = crate::key::parse_branch_delta_key(branch, &prior.key) else {
+                continue;
+            };
+            let key = crate::key::revision_key(Some(branch), kind, &id, changeset.id);
+            tokio::time::timeout(KV_OP_TIMEOUT, self.revisions_kv.delete(&key))
+                .await
+                .map_err(|_| StoreError::Unavailable("branch revision cleanup timed out".into()))?
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn cleanup_journal_branches(
+        &self,
+        cleanup: &[BranchCleanup],
+    ) -> StoreResult<()> {
+        for item in cleanup {
+            let Some(entry) =
+                live_entry(kv_entry_timeout(&self.branches_kv, item.key.clone()).await?)
+            else {
+                continue;
+            };
+            if entry.revision != item.revision {
+                continue;
+            }
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.branches_kv
+                    .purge_expect_revision(&item.key, Some(item.revision)),
+            )
+            .await
+            .map_err(|_| StoreError::Unavailable("branch cleanup timed out".into()))?
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn publish_owned_journal(
+        &self,
+        journal: Journal,
+        priors: &[JournalPrior],
+    ) -> StoreResult<()> {
+        self.publish_journaled_changes(
+            &journal.id,
+            journal.header.attribution(),
+            &journal.header.changes,
+            priors,
+            journal.header.branch(),
+        )
+        .await
+        .map_err(StoreError::Backend)?;
+        self.cleanup_journal_branches(&journal.header.cleanup)
+            .await?;
+        journal.published().await
     }
 
     /// Publish every change and write every revision a committed batch
@@ -554,9 +859,10 @@ impl NatsStore {
         changeset: Option<ChangesetRef<'_>>,
         changes: &[JournalChange],
         priors: &[JournalPrior],
+        branch: Option<&str>,
     ) -> Result<Vec<String>, String> {
         let mut superseded = Vec::new();
-        for (index, change) in changes.iter().enumerate() {
+        for (index, change) in changes.iter().enumerate().filter(|_| branch.is_none()) {
             self.publish_change(
                 change.change_kind(),
                 &change.entity_ref(),
@@ -581,21 +887,46 @@ impl NatsStore {
             let before = priors
                 .iter()
                 .find(|p| p.key == key)
-                .and_then(|p| p.entity.clone());
-            let current = kv_entry_timeout(&self.kv, key.to_owned())
+                .map(JournalPrior::before)
+                .transpose()?
+                .flatten();
+            let kv = if branch.is_some() {
+                &self.branches_kv
+            } else {
+                &self.kv
+            };
+            let current = kv_entry_timeout(kv, key.to_owned())
                 .await
                 .map_err(|e| format!("read {key}: {e}"))?;
             let after = if change.deleted {
-                if live_entry(current).is_some() {
+                let still_present = if branch.is_some() {
+                    live_entry(current)
+                        .map(|entry| super::decode_branch_delta(&entry.value))
+                        .transpose()
+                        .map_err(|error| error.to_string())?
+                        .is_some_and(|delta| !delta.tombstone && delta.ours.is_some())
+                } else {
+                    live_entry(current).is_some()
+                };
+                if still_present {
                     superseded.push(key.to_owned());
                     continue;
                 }
                 None
             } else {
                 match live_entry(current) {
-                    Some(entry) if entry.revision == change.etag => Some(
-                        decode_entity(&entry.value).map_err(|e| format!("decode {key}: {e}"))?,
-                    ),
+                    Some(entry) if entry.revision == change.etag => {
+                        if branch.is_some() {
+                            super::decode_branch_delta(&entry.value)
+                                .map_err(|error| error.to_string())?
+                                .ours
+                        } else {
+                            Some(
+                                decode_entity(&entry.value)
+                                    .map_err(|e| format!("decode {key}: {e}"))?,
+                            )
+                        }
+                    }
                     _ => {
                         superseded.push(key.to_owned());
                         continue;
@@ -609,7 +940,10 @@ impl NatsStore {
                 before,
                 after,
             };
-            self.try_record_revision(WriteContext::baseline().attributed(changeset), &revision)
+            let ctx = branch
+                .map_or_else(WriteContext::baseline, WriteContext::branch)
+                .attributed(changeset);
+            self.try_record_revision(ctx, &revision)
                 .await
                 .map_err(|e| format!("revision {key}: {e}"))?;
         }
@@ -625,7 +959,10 @@ impl NatsStore {
         };
         let released = async {
             match load_header(&self.batches_kv, &id).await? {
-                Some(header) if phase_of(header.phase) == Some(JournalPhase::Published) => {
+                Some(header)
+                    if header.format_supported()
+                        && phase_of(header.phase) == Some(JournalPhase::Published) =>
+                {
                     purge_journal(&self.batches_kv, &id).await
                 }
                 _ => Ok(()),
@@ -672,7 +1009,7 @@ impl NatsStore {
         header: JournalHeader,
         mode: RecoveryMode,
     ) -> BatchRecovery {
-        let Some(phase) = phase_of(header.phase) else {
+        let Some(phase) = phase_of(header.phase).filter(|_| header.format_supported()) else {
             return BatchRecovery {
                 journal: id,
                 phase: JournalPhase::Planned,
@@ -704,7 +1041,12 @@ impl NatsStore {
                 batch.keys = changed_keys(&header.changes);
                 match mode {
                     RecoveryMode::Report => Ok(()),
-                    RecoveryMode::Repair => self.ensure_changeset(&header).await,
+                    RecoveryMode::Repair => {
+                        match self.cleanup_journal_branches(&header.cleanup).await {
+                            Ok(()) => self.ensure_changeset(&header).await,
+                            Err(error) => Err(error.to_string()),
+                        }
+                    }
                 }
             }
         };
@@ -786,17 +1128,21 @@ impl NatsStore {
         else {
             return Ok(());
         };
+        validate_priors(header, &priors)?;
         batch.keys = self.landed_keys(&priors).await.map_err(|e| e.to_string())?;
         if mode == RecoveryMode::Report {
             return Ok(());
         }
         let moved: Vec<JournalPrior> = priors
-            .into_iter()
+            .iter()
             .filter(|prior| batch.keys.contains(&prior.key))
+            .cloned()
             .collect();
         let failed = self.roll_back_priors(&moved).await;
         if failed.is_empty() {
-            Ok(())
+            self.purge_branch_journal_revisions(header, &priors)
+                .await
+                .map_err(|error| error.to_string())
         } else {
             Err(format!("could not restore {failed:?}"))
         }
@@ -813,6 +1159,7 @@ impl NatsStore {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "committed journal is missing its prior images".to_owned())?;
+        validate_priors(header, &priors)?;
         if mode == RecoveryMode::Report {
             return Ok(());
         }
@@ -822,8 +1169,12 @@ impl NatsStore {
                 header.attribution(),
                 &header.changes,
                 &priors,
+                header.branch(),
             )
             .await?;
+        self.cleanup_journal_branches(&header.cleanup)
+            .await
+            .map_err(|error| error.to_string())?;
         self.ensure_changeset(header).await
     }
 
@@ -848,7 +1199,7 @@ impl NatsStore {
                 header.changes.len()
             ),
             rpc: changeset.rpc.to_owned(),
-            branch: None,
+            branch: header.branch().map(str::to_owned),
             operation_id: changeset.operation_id.map(str::to_owned),
             validation: ChangesetValidation::Unvalidated(UnvalidatedReason::Recovered),
             ops: header
@@ -869,4 +1220,107 @@ impl NatsStore {
 fn changed_keys(changes: &[JournalChange]) -> Vec<String> {
     let keys: BTreeSet<&str> = changes.iter().map(|c| c.key.as_str()).collect();
     keys.into_iter().map(str::to_owned).collect()
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct LegacyPhase {
+        #[prost(int32, tag = "1")]
+        phase: i32,
+    }
+
+    #[test]
+    fn extended_journal_phases_are_rejected_by_legacy_readers_before_priors() {
+        for phase in [
+            JournalPhase::Planned,
+            JournalPhase::Aborted,
+            JournalPhase::Committed,
+            JournalPhase::Published,
+        ] {
+            let extended = JournalHeader {
+                phase: phase_code(phase, true),
+                format_version: 1,
+                branch: "review".into(),
+                ..Default::default()
+            };
+            let legacy = LegacyPhase::decode(extended.encode_to_vec().as_slice()).unwrap();
+            let legacy_action = match legacy.phase {
+                1 => Some(JournalPhase::Planned),
+                2 => Some(JournalPhase::Aborted),
+                3 => Some(JournalPhase::Committed),
+                4 => Some(JournalPhase::Published),
+                _ => None,
+            };
+            assert_eq!(legacy_action, None);
+            assert_eq!(phase_of(extended.phase), Some(phase));
+            assert!(extended.format_supported());
+            let baseline = JournalHeader {
+                phase: phase_code(phase, false),
+                ..Default::default()
+            };
+            assert!(baseline.format_supported());
+            assert_eq!(
+                LegacyPhase::decode(baseline.encode_to_vec().as_slice())
+                    .unwrap()
+                    .phase,
+                phase_code(phase, false)
+            );
+        }
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unknown_headers_and_invalid_prior_routes_remain_unresolved_without_writes() {
+        for (phase, version, bucket) in [(999, 2, 0), (1, 0, 1), (101, 1, 9)] {
+            let store = super::super::recovery_tests::isolated_store().await;
+            let id = BatchJournalId::new(uuid::Uuid::now_v7().to_string());
+            let header = JournalHeader {
+                phase,
+                format_version: version,
+                chunk_count: 1,
+                ..Default::default()
+            };
+            let chunk = JournalChunk {
+                priors: vec![JournalPrior {
+                    key: "event.recovery.untouched.1".into(),
+                    bucket,
+                    ..Default::default()
+                }],
+            };
+            store
+                .batches_kv
+                .put(id.as_str(), Bytes::from(header.encode_to_vec()))
+                .await
+                .unwrap();
+            store
+                .batches_kv
+                .put(chunk_key(&id, 0), Bytes::from(chunk.encode_to_vec()))
+                .await
+                .unwrap();
+            for policy in [RecoveryPolicy::report_all(), RecoveryPolicy::repair_all()] {
+                let report = store.recover_batches(policy).await.unwrap();
+                assert_eq!(report.batches.len(), 1);
+                assert!(matches!(
+                    report.batches[0].result,
+                    RecoveryResult::Unresolved { .. }
+                ));
+                assert!(
+                    kv_entry_timeout(&store.kv, "event.recovery.untouched.1".into())
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(kv_entry_timeout(&store.batches_kv, id.as_str().into())
+                    .await
+                    .unwrap()
+                    .is_some());
+                assert!(matches!(
+                    store.read_marker().await,
+                    Err(StoreError::Unavailable(_))
+                ));
+            }
+        }
+    }
 }

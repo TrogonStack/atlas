@@ -436,6 +436,7 @@ pub fn store_err(err: StoreError) -> Status {
             with_reason(Code::InvalidArgument, msg, reason::VALIDATION_FAILED)
         }
         StoreError::Unavailable(msg) => with_reason(Code::Unavailable, msg, reason::UNAVAILABLE),
+        StoreError::ResourceExhausted(msg) => Status::resource_exhausted(msg),
         StoreError::Backend(msg) => {
             // Backend messages can carry NATS cluster addresses, bucket
             // names, or filesystem paths -- log full detail server-side and

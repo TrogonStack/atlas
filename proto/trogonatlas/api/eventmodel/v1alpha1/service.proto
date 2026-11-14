@@ -27,6 +27,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/backing.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/glossary.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
@@ -1400,6 +1401,16 @@ service EventModelService {
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
+  rpc ListGlossaryPointers(ListGlossaryEntriesRequest) returns (ListGlossaryPointersResponse);
+  rpc GetGlossaryDefinition(GetGlossaryTermRequest) returns (GetGlossaryDefinitionResponse);
+  rpc CheckGlossaryCodeUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc ListGlossaryEntries(ListGlossaryEntriesRequest) returns (ListGlossaryEntriesResponse);
+  rpc GetGlossaryTerm(GetGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc InspectGlossarySources(InspectGlossarySourcesRequest) returns (InspectGlossarySourcesResponse);
+  rpc ReviewGlossaryTerm(ReviewGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc CompareGlossaries(CompareGlossariesRequest) returns (CompareGlossariesResponse);
+  rpc CheckGlossaryUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc InspectGlossaryRefresh(InspectGlossaryRefreshRequest) returns (InspectGlossaryRefreshResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
   // Evidence presence across the visible model, bound to its snapshot id.

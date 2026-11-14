@@ -63,7 +63,7 @@ pub struct TypeLibraryChanges {
 #[derive(Debug, Clone)]
 enum Change {
     Put(Box<pb::TypeLibrary>),
-    Delete(LibraryVersion),
+    Delete(pb::Id),
 }
 
 impl TypeLibraryChanges {
@@ -85,7 +85,7 @@ impl TypeLibraryChanges {
             self.by_namespace
                 .entry(id.namespace.clone())
                 .or_default()
-                .push(Change::Delete(LibraryVersion::of(id)));
+                .push(Change::Delete(id.clone()));
         }
     }
 
@@ -218,12 +218,17 @@ impl TypeLibraryGate {
                             );
                         }
                     }
-                    Change::Delete(key) => {
-                        after.remove(key);
+                    Change::Delete(id) => {
+                        let key = LibraryVersion::of(id);
+                        after.remove(&key);
                         deleted.push(key);
                     }
                 }
             }
+            let deleted: Vec<_> = deleted
+                .iter()
+                .filter(|key| !after.contains_key(*key))
+                .collect();
             reject_dependents(&deleted, &after)?;
             for change in namespace_changes {
                 if let Change::Put(library) = change {
@@ -509,6 +514,30 @@ impl TypeLibraryGate {
             .filter(|file| !self.is_builtin(file))
             .collect();
         Ok(file_closure(files).file)
+    }
+
+    pub(crate) async fn tenant_files_after_changes(
+        &self,
+        store: &dyn Store,
+        namespace: &str,
+        changes: &TypeLibraryChanges,
+        branch: Option<&str>,
+    ) -> Result<Vec<prost_types::FileDescriptorProto>, Status> {
+        let changes: Vec<_> = changes
+            .by_namespace
+            .get(namespace)
+            .into_iter()
+            .flatten()
+            .map(|change| match change {
+                Change::Put(library) => LibraryChange::Put(library),
+                Change::Delete(id) => LibraryChange::Remove(id),
+            })
+            .collect();
+        let live = self
+            .live_pool(store, namespace, &changes, branch)
+            .await
+            .map_err(PoolLookup::status)?;
+        Ok(file_closure(live.pool.files().filter(|file| !self.is_builtin(file))).file)
     }
 
     /// Checks that the payload type an Event, Command or ReadModel names is

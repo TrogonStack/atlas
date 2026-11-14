@@ -77,6 +77,43 @@ The batch journal header carries the epoch the writer held when it started
 the batch (`writer_epoch`), so a recovered batch is attributable to the
 lease holder that wrote it, even across a takeover.
 
+## Cross-process glossary reads
+
+Enable these readers after all writers and recovery tools use the current
+journal implementation, with earlier processes quiesced, drained and stopped.
+
+A Reader or Standby does not share the writer's mutation lock or cache
+generations. Glossary reads therefore bracket their work with durable Store
+markers. The marker observes the native model, branch, namespace, source and
+journal streams through the stream leader. It also pins the writer holder and
+epoch; a renewal by the same holder does not change the model being read.
+The payload reads use the leader-backed API too, so unchanged markers cannot
+certify values obtained from a lagging follower.
+
+Revisions alone cannot identify a read that starts and finishes while a writer
+has paused between updates. Native batches and branch maintenance retain a
+journal before their first write and through publication and cleanup. Branch
+records preserve exact raw prior deltas, including their baseline snapshots and
+tombstones. Recovery rolls back uncommitted work or completes committed history,
+changesets and cleanup in their recorded scope. A branch write does not
+publish a baseline change notification.
+
+Marker acquisition refuses active source publication and unresolved journals,
+and checks for publication changes while sampling the stream revisions. Before
+returning a glossary result, the server compares the marker again and rechecks
+the branch. A changed marker aborts the read. An unavailable marker remains an
+operational error; it cannot establish that vocabulary is absent.
+
+Namespace ownership needs its own cache refresh when the durable namespace
+revision changes. That refresh and the glossary scan run outside the global
+mutation lock. This lets the writer make progress while the reader returns a
+stable result or an explicit refusal.
+
+Extended branch and maintenance journals use phase codes that older recovery
+tools report as unsupported before reading prior images. Current recovery also
+accepts the previous baseline journal format. Upgrade recovery tools with the
+server and retain the existing writer-lease and manual-recovery boundary above.
+
 ## Artifact publication
 
 File verification can outlast a lease or overlap a writer takeover. A local

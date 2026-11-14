@@ -666,6 +666,33 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if let Some(glossary) = &x.glossary {
+                for (i, evidence) in glossary.evidence.iter().enumerate() {
+                    if let Some(id) = evidence
+                        .document
+                        .as_ref()
+                        .and_then(|value| value.id.as_ref())
+                    {
+                        out.push(OutboundRef {
+                            to_kind: Some(EntityKind::Document),
+                            to_id: id.clone(),
+                            from_field: format!("glossary.evidence[{i}].document"),
+                        });
+                    }
+                }
+                if let Some(id) = glossary
+                    .policy
+                    .as_ref()
+                    .and_then(|value| value.preferred_term.as_ref())
+                    .and_then(|value| value.id.as_ref())
+                {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::Term),
+                        to_id: id.clone(),
+                        from_field: "glossary.policy.preferred_term".into(),
+                    });
+                }
+            }
             if let Some(id) = x
                 .owning_domain
                 .as_ref()
@@ -1957,6 +1984,30 @@ pub fn retarget_refs(
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if let Some(glossary) = &mut x.glossary {
+                if from_kind == EntityKind::Document {
+                    for (i, evidence) in glossary.evidence.iter_mut().enumerate() {
+                        if let Some(reference) = evidence.document.as_mut() {
+                            if reference.id.as_ref() == Some(from_id) {
+                                reference.id = Some(to_id.clone());
+                                rewritten.push(format!("glossary.evidence[{i}].document"));
+                            }
+                        }
+                    }
+                }
+                if from_kind == EntityKind::Term {
+                    if let Some(reference) = glossary
+                        .policy
+                        .as_mut()
+                        .and_then(|value| value.preferred_term.as_mut())
+                    {
+                        if reference.id.as_ref() == Some(from_id) {
+                            reference.id = Some(to_id.clone());
+                            rewritten.push("glossary.policy.preferred_term".into());
+                        }
+                    }
+                }
+            }
             if from_kind == EntityKind::Domain {
                 if let Some(reference) = x.owning_domain.as_mut() {
                     if reference.id.as_ref() == Some(from_id) {

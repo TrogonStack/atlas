@@ -1,5 +1,6 @@
 pub mod caller;
 pub mod error;
+mod glossary;
 pub mod profile;
 pub mod prompts;
 pub mod reference;
