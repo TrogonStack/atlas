@@ -167,6 +167,20 @@ and a finding missing from an after-scan whose suite did not complete is
 reported as unknown, never as resolved, unless its subject or origin was
 removed, in which case it is reported as subject removed.
 
+## References outside the caller's visibility
+
+A caller whose lens covers only some namespaces validates against a snapshot
+that omits every other namespace. A reference into an omitted namespace looks
+exactly like a reference to something that does not exist, so calling it
+`DANGLING_REF`, `MEMBER_NOT_FOUND` or `UI_TRANSITION_DANGLING` would assert a defect the caller has no evidence for. `ValidateEventModel` and `ValidateProject` instead report such a reference as `REF_OUTSIDE_VISIBLE_SCOPE` at Info severity: the target was not resolved, not found missing.
+
+The classification looks only at the target's namespace, never at whether the
+target exists. Checking existence on the caller's behalf would reveal the
+contents of a namespace the caller cannot read. A reference inside the visible
+namespaces still resolves or dangles as before, and a caller with full
+visibility never sees the new code. To settle an unresolved reference,
+validate with a caller that can read the target namespace.
+
 ## Where the code lives
 
 - Catalogue and model/hygiene passes:

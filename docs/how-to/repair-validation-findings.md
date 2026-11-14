@@ -37,6 +37,11 @@ clarification. A new rule or unclear result can require inspection of its
 validator implementation; the catalog and tool contracts are the starting
 point.
 
+Do not repair a `REF_OUTSIDE_VISIBLE_SCOPE` finding by editing the reference.
+It means your key cannot read the target's namespace, not that the target is
+missing. Rerun validation with a key that can read that namespace; only a
+`DANGLING_REF`, `MEMBER_NOT_FOUND` or `UI_TRANSITION_DANGLING` from that run is a defect to repair.
+
 To survey a whole namespace instead, run `validate_project` with `namespace`
 set to it and `json: true`: every EventModel in the namespace is validated in
 one call. Filter its findings on a code to list what needs work, for example
