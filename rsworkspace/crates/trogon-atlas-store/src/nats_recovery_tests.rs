@@ -358,6 +358,11 @@ async fn merge_put_timeout_rolls_back(create: bool, failed_rollback: bool) {
         .await
         .unwrap();
     let branch_before = raw_branch_rows(&store).await;
+    assert!(branch_before.contains_key(&super::branch_delta_key(
+        RECOVERY_BRANCH,
+        EntityKind::Event,
+        &event_id(target)
+    )));
     let mut baseline_before = Vec::new();
     let mut ops = Vec::new();
     for slug in [UPDATED, target] {
@@ -934,6 +939,7 @@ async fn raw_branch_rows(store: &NatsStore) -> std::collections::BTreeMap<String
         super::branch_meta_key(RECOVERY_BRANCH),
         super::branch_delta_key(RECOVERY_BRANCH, EntityKind::Event, &event_id(UPDATED)),
         super::branch_delta_key(RECOVERY_BRANCH, EntityKind::Event, &event_id(DELETED)),
+        super::branch_delta_key(RECOVERY_BRANCH, EntityKind::Event, &event_id(CREATED_FIRST)),
     ] {
         if let Some(entry) = super::live_entry(
             super::kv_entry_timeout(&store.branches_kv, key.clone())

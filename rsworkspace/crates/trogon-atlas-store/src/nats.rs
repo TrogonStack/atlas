@@ -5162,6 +5162,7 @@ impl Store for NatsStore {
         ops: &[BranchLandOp],
         ctx: WriteContext<'_>,
     ) -> StoreResult<Vec<MutationOutcome>> {
+        let ctx = ctx.without_branch();
         self.model_write_guarded(async {
             self.require_writer()?;
             // Snapshot the prior baseline state of every touched key so a
