@@ -112,8 +112,9 @@ endpoints match. The returned/stored entity is authoritative: clients preserve
 its IDs on subsequent edits. A caller cannot introduce an arbitrary supplied ID
 on an existing owner, even if it has valid UUID syntax. A raw write that strips
 IDs from retained connections is rejected. The server does not rematch them by
-list index or endpoint. To change the reference of a connection with a raw
-write, remove it in one write and add it again in a second write.
+list index or endpoint. To change a connection to a different reference with a
+raw write, omit its ID in one write. To replace a connection with the same
+reference, remove it in one write and add it again in a second write.
 
 The `apply` and `diff` commands, and the matching MCP tools, accept manifests
 without connection IDs. For each occurrence without an ID, the client copies
