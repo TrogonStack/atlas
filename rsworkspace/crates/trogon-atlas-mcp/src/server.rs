@@ -4059,6 +4059,7 @@ impl McpServer {
             filter_kinds,
             page_size: 0,
             page_token: String::new(),
+            include_containers: p.include_containers,
         };
         let mut client = self.client();
         let resp = client
