@@ -322,6 +322,13 @@ impl NamespaceDirectory {
         self.view_at(store, Instant::now()).await
     }
 
+    /// Prevents an older in-flight fill from republishing a superseded
+    /// ownership view after a durable registry revision changed.
+    pub async fn refresh(&self, store: &dyn Store) -> Result<Arc<DirectoryView>, Status> {
+        let _guard = self.load_lock.lock().await;
+        self.load_at(store, Instant::now()).await
+    }
+
     async fn view_at(&self, store: &dyn Store, now: Instant) -> Result<Arc<DirectoryView>, Status> {
         if let Some(cached) = self.cache.read().await.clone() {
             if cached.is_fresh(self.freshness, now) {
@@ -334,6 +341,10 @@ impl NamespaceDirectory {
                 return Ok(cached.view);
             }
         }
+        self.load_at(store, now).await
+    }
+
+    async fn load_at(&self, store: &dyn Store, now: Instant) -> Result<Arc<DirectoryView>, Status> {
         let records = store
             .list_namespaces()
             .await

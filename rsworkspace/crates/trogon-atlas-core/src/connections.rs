@@ -286,13 +286,15 @@ fn entity_target(
         })
 }
 
-fn visit(
+// Keep endpoint processing off recursive frames to leave stack space for nested schemas.
+#[inline(never)]
+fn visit_connection(
     message: &mut DynamicMessage,
     path: &str,
     role: &str,
     predecessor: &[u8],
     callback: &mut impl FnMut(&mut DynamicMessage, ConnectionOccurrence) -> Result<(), ConnectionError>,
-) -> Result<(), ConnectionError> {
+) -> Result<bool, ConnectionError> {
     let descriptor = message.descriptor();
     if descriptor.full_name() == "google.protobuf.Any" {
         let mut any = prost_types::Any::decode(message.encode_to_vec().as_slice())
@@ -313,7 +315,7 @@ fn visit(
                         .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
             }
         }
-        return Ok(());
+        return Ok(true);
     }
     if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" {
         callback(
@@ -442,7 +444,7 @@ fn visit(
             signature,
         };
         callback(message, occurrence)?;
-        return Ok(());
+        return Ok(true);
     }
     if let Some((field, kind)) = wrapper_target(descriptor.full_name()) {
         let endpoint = message.get_field_by_name(field);
@@ -480,8 +482,22 @@ fn visit(
             signature,
         };
         callback(message, occurrence)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn visit(
+    message: &mut DynamicMessage,
+    path: &str,
+    role: &str,
+    predecessor: &[u8],
+    callback: &mut impl FnMut(&mut DynamicMessage, ConnectionOccurrence) -> Result<(), ConnectionError>,
+) -> Result<(), ConnectionError> {
+    if visit_connection(message, path, role, predecessor, callback)? {
         return Ok(());
     }
+    let descriptor = message.descriptor();
     let after = if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Swimlane.Transition" {
         message
             .get_field_by_name("after")

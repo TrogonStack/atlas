@@ -11,6 +11,7 @@
 pub mod apply;
 pub mod artifacts;
 pub mod attested;
+pub mod backing;
 pub mod branch;
 pub mod channel_messages;
 pub mod client;
@@ -21,6 +22,7 @@ pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;
+pub mod glossary;
 pub mod human_interaction;
 pub mod impact;
 pub mod manifest;

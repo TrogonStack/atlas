@@ -1123,6 +1123,7 @@ fn term(ns: &str, slug: &str, embodies: Vec<pb::EntityRef>) -> pb::Entity {
             metadata: vec![],
             supersedes: None,
             owning_domain: None,
+            glossary: None,
         })),
     }
 }

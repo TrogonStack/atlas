@@ -5,6 +5,7 @@ pub mod as_of;
 pub mod assessment;
 pub mod attested_signing;
 pub mod auth;
+mod backing;
 pub mod batch_recovery;
 pub mod change_cursor;
 pub mod changeset_receipt;

@@ -158,6 +158,7 @@ describe('buildDomainChart', () => {
       field: 'realizes',
       ruleTitle: '',
       ruleCategory: 'strategic',
+      acknowledged: false,
       subject: { kind: 'boundedContext', id: { namespace: slug, slug, version: '1' } },
     });
 
@@ -239,6 +240,7 @@ function strategicIssue(overrides: Partial<Issue> = {}): Issue {
     field: '',
     ruleTitle: '',
     ruleCategory: 'strategic',
+    acknowledged: false,
     subject: { kind: 'domain', id: { namespace: 'accounts', slug: 'accounts', version: '1' } },
     ...overrides,
   };

@@ -45,6 +45,18 @@ struct ObservedStorage {
     release: Notify,
 }
 
+fn record_read_entry(entered: &watch::Sender<usize>, count: usize) {
+    entered.send_modify(|observed| *observed = (*observed).max(count));
+}
+
+#[test]
+fn provider_entry_notifications_remain_monotonic_when_reads_reorder() {
+    let (entered, _) = watch::channel(0);
+    record_read_entry(&entered, 2);
+    record_read_entry(&entered, 1);
+    assert_eq!(*entered.borrow(), 2);
+}
+
 #[async_trait]
 impl BlobStorage for ObservedStorage {
     fn backend_name(&self) -> &'static str {
@@ -58,7 +70,7 @@ impl BlobStorage for ObservedStorage {
     async fn get(&self, key: &str, max_bytes: usize) -> Result<Bytes, Status> {
         self.last_limit.store(max_bytes, Ordering::SeqCst);
         let count = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
-        self.entered.send_replace(count);
+        record_read_entry(&self.entered, count);
         if self
             .block_next
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
@@ -338,13 +350,25 @@ async fn cancelling_a_blocked_provider_read_releases_its_reserved_capacity() {
             .clone()
             .oneshot(fixture.request(&fixture.large)),
     );
-    fixture
-        .storage
-        .entered
-        .subscribe()
-        .wait_for(|count| *count >= 2)
-        .await
-        .unwrap();
+    let entered = tokio::time::timeout(Duration::from_secs(10), async {
+        fixture
+            .storage
+            .entered
+            .subscribe()
+            .wait_for(|count| *count >= 2)
+            .await
+            .map(|_| ())
+    })
+    .await;
+    if !matches!(entered, Ok(Ok(()))) {
+        let reads = fixture.storage.reads.load(Ordering::SeqCst);
+        let notified = *fixture.storage.entered.borrow();
+        let finished = (first.is_finished(), second.is_finished());
+        first.abort();
+        second.abort();
+        let _ = tokio::join!(first, second);
+        panic!("provider entry checkpoint stalled: reads={reads}, notified={notified}, finished={finished:?}");
+    }
     let third =
         tokio::time::timeout(Duration::from_secs(10), fixture.response(&fixture.large)).await;
     let rejected = third

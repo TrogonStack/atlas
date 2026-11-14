@@ -397,6 +397,8 @@ impl EventModelServiceImpl {
         vis: &Visibility,
         landing: Option<&[BranchLandOp]>,
     ) -> Result<(), Status> {
+        self.validate_glossary_writes(metas, branch, vis, landing)
+            .await?;
         self.validate_native_group_targets(metas, branch, vis, landing)
             .await?;
         let resources: Vec<_> = metas
