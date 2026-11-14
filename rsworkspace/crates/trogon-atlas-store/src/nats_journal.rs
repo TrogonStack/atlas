@@ -255,7 +255,7 @@ fn validate_priors(header: &JournalHeader, priors: &[JournalPrior]) -> Result<()
             0 => {
                 header.branch().is_none()
                     && prior.raw_payload.is_none()
-                    && prior.revision.is_some() == prior.entity.is_some()
+                    && (prior.entity.is_none() || prior.revision.is_some())
                     && crate::key::parse_entity_key(&prior.key).is_some()
             }
             1 => {
@@ -322,6 +322,8 @@ pub(super) struct FaultPlan {
     pub(super) fail_publish: bool,
     pub(super) fail_changeset_append: bool,
     pub(super) fail_rollback: bool,
+    pub(super) fail_branch_post_write_read_at: Option<usize>,
+    pub(super) fail_commit: bool,
     pub(super) crash_during_publish_finalize: bool,
 }
 
@@ -336,6 +338,7 @@ pub(super) struct Journal {
     header: JournalHeader,
     _inflight: InflightGuard,
     crash_during_publish_finalize: bool,
+    fail_commit: bool,
 }
 
 impl Journal {
@@ -360,6 +363,9 @@ impl Journal {
 
     pub(super) async fn commit(&mut self, changes: Vec<JournalChange>) -> StoreResult<()> {
         self.header.changes = changes;
+        if self.fail_commit {
+            return Err(injected("journal commit"));
+        }
         self.write_header(JournalPhase::Committed).await
     }
 
@@ -612,6 +618,7 @@ impl NatsStore {
             header,
             _inflight: inflight,
             crash_during_publish_finalize: self.faults().crash_during_publish_finalize,
+            fail_commit: self.faults().fail_commit,
         };
         for (index, chunk) in (0u32..).zip(chunks.iter()) {
             let key = chunk_key(&journal.id, index);

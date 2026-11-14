@@ -1885,6 +1885,17 @@ async fn source_store_review_recovery_and_publish_share_finalization_on_baseline
     }
 }
 
+struct ObserveRecovery(Arc<tokio::sync::Notify>);
+impl SourcePublicationObserver for ObserveRecovery {
+    fn reached(&self, _: SourcePublicationPoint) -> StoreResult<()> {
+        Ok(())
+    }
+    fn batch_recovery_waiting(&self) -> StoreResult<()> {
+        self.0.notify_one();
+        Ok(())
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn source_publication_serializes_batch_recovery_and_later_native_writes() {
     let configuration = config(&trogon_atlas_testsupport::shared().await.url);
@@ -1902,7 +1913,10 @@ async fn source_publication_serializes_batch_recovery_and_later_native_writes() 
     let publishing =
         tokio::spawn(async move { publishing_store.source_publish(&publication).await });
     entered.wait();
-    let recovering_store = store.clone();
+    let recovery_waiting = Arc::new(tokio::sync::Notify::new());
+    let recovering_store = store
+        .clone()
+        .with_source_publication_observer(Arc::new(ObserveRecovery(recovery_waiting.clone())));
     let recovery = tokio::spawn(async move {
         recovering_store
             .recover_batches(trogon_atlas_store::recovery::RecoveryPolicy::repair_all())
@@ -1919,6 +1933,11 @@ async fn source_publication_serializes_batch_recovery_and_later_native_writes() 
             )
             .await
     });
+    let contended = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        recovery_waiting.notified(),
+    )
+    .await;
     resume.wait();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         assert!(matches!(
@@ -1930,6 +1949,9 @@ async fn source_publication_serializes_batch_recovery_and_later_native_writes() 
     })
     .await
     .expect("source publication and recovery share the same lock order");
+    contended.expect(
+        "recovery must reach the contended native mutation lock before publication resumes",
+    );
     let stored = store
         .get(
             pb::EntityKind::ReadModel,

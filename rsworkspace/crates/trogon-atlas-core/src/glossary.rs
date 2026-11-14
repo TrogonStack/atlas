@@ -1,9 +1,14 @@
 use std::collections::HashSet;
 
-use prost::Message;
+use prost::{
+    bytes::{Buf as _, Bytes},
+    encoding::{decode_key, decode_varint, skip_field, DecodeContext, WireType},
+    Message,
+};
+use prost_reflect::{DynamicMessage, Kind, MessageDescriptor, ReflectMessage as _, Value};
 use trogon_atlas_proto as pb;
 
-use crate::authored_date::AuthoredDate;
+use crate::{authored_date::AuthoredDate, transcode::TranscodePool};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid glossary value at {0}")]
@@ -17,6 +22,10 @@ pub const MAX_TEXT_BYTES: usize = 262_144;
 pub const MAX_FINDINGS: usize = 1_024;
 pub const MAX_MATCH_WORK_BYTES: usize = 16_777_216;
 pub const MAX_CANDIDATE_BYTES: usize = 8_388_608;
+
+const MAX_METADATA_DEPTH: usize = 32;
+const MAX_METADATA_DECODE_BYTES: usize = 4_194_304;
+const MAX_METADATA_MESSAGES: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRange {
@@ -256,6 +265,15 @@ pub fn validate_term(term: &pb::Term) -> Result<()> {
 }
 
 pub fn candidate_digest(term: &pb::Term) -> Result<pb::ContentDigest> {
+    let pool = TranscodePool::builtin()
+        .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
+    candidate_digest_with_pool(term, &pool)
+}
+
+pub fn candidate_digest_with_pool(
+    term: &pb::Term,
+    pool: &TranscodePool,
+) -> Result<pb::ContentDigest> {
     require(term.encoded_len() <= 1_048_576, "term.encoded_bytes")?;
     let mut candidate = term.clone();
     let glossary = candidate
@@ -265,11 +283,13 @@ pub fn candidate_digest(term: &pb::Term) -> Result<pb::ContentDigest> {
     glossary.review = None;
     glossary.next_review_on = None;
     validate_term(&candidate)?;
+    verify_metadata_identity(&candidate, pool)?;
     let entity = pb::Entity {
         kind: Some(pb::entity::Kind::Term(candidate)),
         system: None,
     };
-    let value = crate::transcode::entity_json_value(&entity)
+    let value = pool
+        .entity_json_value(&entity)
         .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
     let hash = crate::content_hash::domain_digest(b"atlas.glossary.term.v1\0", &value)
         .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
@@ -278,8 +298,187 @@ pub fn candidate_digest(term: &pb::Term) -> Result<pb::ContentDigest> {
     })
 }
 
+struct ReviewMetadata<'a> {
+    pool: &'a TranscodePool,
+    pending: Vec<(MessageDescriptor, Bytes, usize)>,
+    payloads: Vec<(String, Bytes, usize)>,
+    decoded_bytes: usize,
+    messages: usize,
+}
+
+impl ReviewMetadata<'_> {
+    fn push(&mut self, descriptor: MessageDescriptor, bytes: Bytes, depth: usize) -> Result<()> {
+        require(
+            depth <= MAX_METADATA_DEPTH && self.messages < MAX_METADATA_MESSAGES,
+            "candidate.metadata_limit",
+        )?;
+        self.messages += 1;
+        self.pending.push((descriptor, bytes, depth));
+        Ok(())
+    }
+
+    fn decode(&mut self, type_url: &str, bytes: Bytes, depth: usize) -> Result<()> {
+        let decoded_bytes = self.decoded_bytes.saturating_add(bytes.len());
+        require(
+            depth <= MAX_METADATA_DEPTH && decoded_bytes <= MAX_METADATA_DECODE_BYTES,
+            "candidate.metadata_limit",
+        )?;
+        self.decoded_bytes = decoded_bytes;
+        let descriptor = self
+            .pool
+            .message_descriptor(type_url.rsplit('/').next().unwrap_or_default())
+            .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
+        self.push(descriptor.clone(), bytes.clone(), depth)?;
+        while let Some((descriptor, bytes, depth)) = self.pending.pop() {
+            self.visit(&descriptor, bytes, depth)?;
+        }
+        let message = DynamicMessage::decode(descriptor, bytes)
+            .map_err(|_| GlossaryError("candidate.canonical_content".into()))?;
+        self.queue_payloads(message, depth)
+    }
+
+    fn visit(
+        &mut self,
+        descriptor: &MessageDescriptor,
+        mut bytes: Bytes,
+        depth: usize,
+    ) -> Result<()> {
+        let invalid = || GlossaryError("candidate.canonical_content".into());
+        // Inspect occurrences before decoding can discard map-entry fields or overwritten values.
+        while bytes.has_remaining() {
+            let (tag, wire) = decode_key(&mut bytes).map_err(|_| invalid())?;
+            let kind = descriptor
+                .get_field(tag)
+                .map(|field| field.kind())
+                .or_else(|| descriptor.get_extension(tag).map(|field| field.kind()))
+                .ok_or_else(invalid)?;
+            if let Kind::Message(child) = kind {
+                let value = match wire {
+                    WireType::LengthDelimited => {
+                        let len = decode_varint(&mut bytes).map_err(|_| invalid())?;
+                        let len = usize::try_from(len).map_err(|_| invalid())?;
+                        require(len <= bytes.len(), "candidate.canonical_content")?;
+                        bytes.split_to(len)
+                    }
+                    WireType::StartGroup => metadata_group(tag, &mut bytes, depth + 1)?,
+                    _ => return Err(invalid()),
+                };
+                self.push(child, value, depth + 1)?;
+            } else {
+                require(wire != WireType::StartGroup, "candidate.canonical_content")?;
+                skip_field(wire, tag, &mut bytes, DecodeContext::default())
+                    .map_err(|_| invalid())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_payloads(&mut self, message: DynamicMessage, depth: usize) -> Result<()> {
+        let invalid = || GlossaryError("candidate.canonical_content".into());
+        let mut pending = vec![(message, depth)];
+        // Singular message fragments must merge before their Any payload gets an interpretation.
+        while let Some((mut message, depth)) = pending.pop() {
+            require(depth <= MAX_METADATA_DEPTH, "candidate.metadata_limit")?;
+            if message.descriptor().full_name() == "google.protobuf.Any" {
+                let Some(Value::String(type_url)) = message.take_field_by_name("type_url") else {
+                    return Err(invalid());
+                };
+                let value = match message.take_field_by_name("value") {
+                    Some(Value::Bytes(value)) => value,
+                    None => Bytes::new(),
+                    _ => return Err(invalid()),
+                };
+                self.payloads.push((type_url, value, depth + 1));
+            } else {
+                for (_, value) in message.take_fields() {
+                    metadata_children(&mut pending, value, depth + 1);
+                }
+                for (_, value) in message.take_extensions() {
+                    metadata_children(&mut pending, value, depth + 1);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn metadata_children(pending: &mut Vec<(DynamicMessage, usize)>, value: Value, depth: usize) {
+    match value {
+        Value::Message(message) => pending.push((message, depth)),
+        Value::List(values) => {
+            for value in values {
+                if let Value::Message(message) = value {
+                    pending.push((message, depth));
+                }
+            }
+        }
+        Value::Map(values) => {
+            for value in values.into_values() {
+                if let Value::Message(message) = value {
+                    pending.push((message, depth));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn metadata_group(tag: u32, bytes: &mut Bytes, depth: usize) -> Result<Bytes> {
+    let invalid = || GlossaryError("candidate.canonical_content".into());
+    let original = bytes.clone();
+    let mut groups = vec![tag];
+    require(depth <= MAX_METADATA_DEPTH, "candidate.metadata_limit")?;
+    while bytes.has_remaining() {
+        let end = original.len() - bytes.len();
+        let (tag, wire) = decode_key(bytes).map_err(|_| invalid())?;
+        match wire {
+            WireType::EndGroup => {
+                require(groups.pop() == Some(tag), "candidate.canonical_content")?;
+                if groups.is_empty() {
+                    return Ok(original.slice(..end));
+                }
+            }
+            WireType::StartGroup => {
+                require(
+                    depth + groups.len() <= MAX_METADATA_DEPTH,
+                    "candidate.metadata_limit",
+                )?;
+                groups.push(tag);
+            }
+            _ => skip_field(wire, tag, bytes, DecodeContext::default()).map_err(|_| invalid())?,
+        }
+    }
+    Err(invalid())
+}
+
+fn verify_metadata_identity(term: &pb::Term, pool: &TranscodePool) -> Result<()> {
+    let mut work = ReviewMetadata {
+        pool,
+        pending: Vec::new(),
+        payloads: Vec::new(),
+        decoded_bytes: 0,
+        messages: 0,
+    };
+    for metadata in &term.metadata {
+        work.decode(
+            &metadata.type_url,
+            Bytes::copy_from_slice(&metadata.value),
+            0,
+        )?;
+    }
+    while let Some((type_url, bytes, depth)) = work.payloads.pop() {
+        work.decode(&type_url, bytes, depth)?;
+    }
+    Ok(())
+}
+
 #[must_use]
 pub fn review_is_current(term: &pb::Term, owner_uid: &str) -> bool {
+    TranscodePool::builtin().is_ok_and(|pool| review_is_current_with_pool(term, owner_uid, &pool))
+}
+
+#[must_use]
+pub fn review_is_current_with_pool(term: &pb::Term, owner_uid: &str, pool: &TranscodePool) -> bool {
     let Some(review) = term
         .glossary
         .as_ref()
@@ -290,17 +489,26 @@ pub fn review_is_current(term: &pb::Term, owner_uid: &str) -> bool {
     !owner_uid.is_empty()
         && review.owner_uid == owner_uid
         && validate_term(term).is_ok()
-        && candidate_digest(term).ok().as_ref() == review.content_digest.as_ref()
+        && candidate_digest_with_pool(term, pool).ok().as_ref() == review.content_digest.as_ref()
 }
 
 #[must_use]
 pub fn review_is_accepted(term: &pb::Term, owner_uid: &str) -> bool {
+    TranscodePool::builtin().is_ok_and(|pool| review_is_accepted_with_pool(term, owner_uid, &pool))
+}
+
+#[must_use]
+pub fn review_is_accepted_with_pool(
+    term: &pb::Term,
+    owner_uid: &str,
+    pool: &TranscodePool,
+) -> bool {
     term.glossary
         .as_ref()
         .and_then(|value| value.review.as_ref())
         .is_some_and(|review| {
             review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
-                && review_is_current(term, owner_uid)
+                && review_is_current_with_pool(term, owner_uid, pool)
         })
 }
 
@@ -320,7 +528,45 @@ pub fn retained_document_bytes(entity: &pb::Entity) -> Result<&[u8]> {
     Ok(bytes)
 }
 
-pub fn verify_evidence(evidence: &pb::GlossaryEvidence, entity: &pb::Entity) -> Result<()> {
+/// Owns the immutable source so its computed digest stays bound to every citation check.
+#[derive(Debug)]
+pub struct EvidenceDocument {
+    entity: pb::Entity,
+    content_digest: Result<pb::ContentDigest>,
+}
+
+impl EvidenceDocument {
+    #[must_use]
+    pub fn new(entity: pb::Entity) -> Self {
+        let content_digest = retained_document_bytes(&entity)
+            .map(crate::document_catalog_context::bytes_content_digest);
+        Self {
+            entity,
+            content_digest,
+        }
+    }
+
+    #[must_use]
+    pub fn entity(&self) -> &pb::Entity {
+        &self.entity
+    }
+
+    pub fn content_digest(&self) -> Result<&pb::ContentDigest> {
+        self.content_digest.as_ref().map_err(Clone::clone)
+    }
+
+    pub fn verify(&self, evidence: &pb::GlossaryEvidence) -> Result<()> {
+        verify_evidence_identity(evidence, &self.entity)?;
+        let content_digest = self.content_digest()?;
+        verify_evidence_content(
+            evidence,
+            retained_document_bytes(&self.entity)?,
+            content_digest,
+        )
+    }
+}
+
+fn verify_evidence_identity(evidence: &pb::GlossaryEvidence, entity: &pb::Entity) -> Result<()> {
     validate_evidence(evidence)?;
     require(
         evidence
@@ -337,16 +583,27 @@ pub fn verify_evidence(evidence: &pb::GlossaryEvidence, entity: &pb::Entity) -> 
             .is_some_and(|system| system.uid == evidence.owner_uid),
         "evidence.owner_uid",
     )?;
-    let bytes = retained_document_bytes(entity)?;
+    Ok(())
+}
+
+fn verify_evidence_content(
+    evidence: &pb::GlossaryEvidence,
+    bytes: &[u8],
+    content_digest: &pb::ContentDigest,
+) -> Result<()> {
     require(
-        evidence.content_digest.as_ref()
-            == Some(&crate::document_catalog_context::bytes_content_digest(
-                bytes,
-            )),
+        evidence.content_digest.as_ref() == Some(content_digest),
         "evidence.content_digest",
     )?;
     let content = std::str::from_utf8(bytes).map_err(|_| GlossaryError("evidence.utf8".into()))?;
     require(content.contains(&evidence.quote), "evidence.quote")
+}
+
+pub fn verify_evidence(evidence: &pb::GlossaryEvidence, entity: &pb::Entity) -> Result<()> {
+    verify_evidence_identity(evidence, entity)?;
+    let bytes = retained_document_bytes(entity)?;
+    let digest = crate::document_catalog_context::bytes_content_digest(bytes);
+    verify_evidence_content(evidence, bytes, &digest)
 }
 
 pub fn retarget_evidence(

@@ -4477,7 +4477,14 @@ impl Store for NatsStore {
         &self,
         policy: crate::recovery::RecoveryPolicy,
     ) -> StoreResult<crate::recovery::BatchRecoveryReport> {
-        let mutation = self.lock_native_mutation().await?;
+        let mutation = if let Ok(guard) = self.native_mutation_lock.try_lock() {
+            guard
+        } else {
+            if let Some(observer) = &self.source_observer {
+                observer.batch_recovery_waiting()?;
+            }
+            self.lock_native_mutation().await?
+        };
         let _native =
             tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
                 .await

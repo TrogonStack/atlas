@@ -15,7 +15,9 @@ use trogon_atlas_store::{
 pub struct ObservedGlossaryStore {
     pub inner: NatsStore,
     pub source_reads: AtomicUsize,
+    pub library_reads: AtomicUsize,
     pub pause_source: AtomicBool,
+    pub pause_libraries: AtomicBool,
     pub reached: tokio::sync::Notify,
     pub release: tokio::sync::Notify,
 }
@@ -24,7 +26,9 @@ impl ObservedGlossaryStore {
         Self {
             inner,
             source_reads: AtomicUsize::new(0),
+            library_reads: AtomicUsize::new(0),
             pause_source: AtomicBool::new(false),
+            pause_libraries: AtomicBool::new(false),
             reached: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
         }
@@ -242,7 +246,16 @@ impl Store for ObservedGlossaryStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
-        self.inner.list(filter, limit, branch).await
+        let libraries = filter.kinds == [pb::EntityKind::TypeLibrary];
+        if libraries {
+            self.library_reads.fetch_add(1, Ordering::SeqCst);
+        }
+        let rows = self.inner.list(filter, limit, branch).await?;
+        if libraries && self.pause_libraries.swap(false, Ordering::SeqCst) {
+            self.reached.notify_one();
+            self.release.notified().await;
+        }
+        Ok(rows)
     }
 
     async fn list_bounded(

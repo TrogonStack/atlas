@@ -7,7 +7,7 @@ use chrono::Utc;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tonic::{Request, Response};
-use trogon_atlas_core::{authored_date::AuthoredDate, glossary as core};
+use trogon_atlas_core::{authored_date::AuthoredDate, glossary as core, transcode::TranscodePool};
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
@@ -29,10 +29,12 @@ struct Budget {
     bytes: usize,
     charged_documents: HashSet<pb::EntityKey>,
     documents: HashMap<pb::IdKey, Result<Arc<ResolvedDocument>, Status>>,
+    pools: HashMap<String, TranscodePool>,
 }
 
 struct ResolvedDocument {
-    stored: StoredEntity,
+    source: core::EvidenceDocument,
+    etag: String,
     provenance: [u8; 32],
 }
 
@@ -43,7 +45,8 @@ impl ResolvedDocument {
         hash.update(Sha256::digest(stored.entity.encode_to_vec()));
         hash.update(stored.etag.as_bytes());
         Self {
-            stored,
+            source: core::EvidenceDocument::new(stored.entity),
+            etag: stored.etag,
             provenance: hash.finalize().into(),
         }
     }
@@ -190,6 +193,23 @@ fn exact(id: Option<&pb::Id>) -> Result<&pb::Id, Status> {
 }
 
 impl EventModelServiceImpl {
+    async fn glossary_pool(
+        &self,
+        namespace: &str,
+        changes: &crate::type_libraries::TypeLibraryChanges,
+        branch: Option<&str>,
+        budget: &mut Budget,
+    ) -> Result<TranscodePool, Status> {
+        if let Some(pool) = budget.pools.get(namespace) {
+            return Ok(pool.clone());
+        }
+        let pool = self
+            .transcode_pool_after_changes(namespace, changes, branch)
+            .await?;
+        budget.pools.insert(namespace.into(), pool.clone());
+        Ok(pool)
+    }
+
     pub(super) async fn glossary_context<T>(
         &self,
         request: &Request<T>,
@@ -311,7 +331,29 @@ impl EventModelServiceImpl {
             .map_err(|_| Status::internal("stored glossary values are invalid"))?;
         let mut state = pb::GlossaryEntryState::Draft;
         let mut reason = "No current expert review".to_owned();
-        let published = core::review_is_accepted(value, uid(&stored.entity));
+        let review_current = if value.metadata.is_empty() {
+            core::review_is_current(value, uid(&stored.entity))
+        } else if value
+            .glossary
+            .as_ref()
+            .is_some_and(|entry| entry.review.is_some())
+        {
+            let namespace = &exact(value.id.as_ref())?.namespace;
+            let pool = self
+                .glossary_pool(namespace, &Default::default(), branch, budget)
+                .await?;
+            core::review_is_current_with_pool(value, uid(&stored.entity), &pool)
+        } else {
+            false
+        };
+        let published = review_current
+            && value
+                .glossary
+                .as_ref()
+                .and_then(|entry| entry.review.as_ref())
+                .is_some_and(|review| {
+                    review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
+                });
         let mut incomplete = false;
         let mut evidence = Vec::new();
         let mut hash = Sha256::new();
@@ -319,7 +361,7 @@ impl EventModelServiceImpl {
         hash.update(stored.etag.as_bytes());
         if let Some(glossary) = &value.glossary {
             if let Some(review) = &glossary.review {
-                if core::review_is_current(value, uid(&stored.entity)) {
+                if review_current {
                     state = match pb::GlossaryReviewDisposition::try_from(review.disposition)
                         .map_err(invalid)?
                     {
@@ -349,7 +391,7 @@ impl EventModelServiceImpl {
                     match self.glossary_source(id, branch, visibility, budget).await {
                         Ok(row) => {
                             hash.update(row.provenance);
-                            if core::verify_evidence(selection, &row.stored.entity).is_ok() {
+                            if row.source.verify(selection).is_ok() {
                                 (
                                     pb::GlossaryEvidenceState::Current,
                                     "Exact source evidence resolves",
@@ -741,7 +783,7 @@ impl EventModelServiceImpl {
             match self.glossary_source(id, branch, visibility, budget).await {
                 Ok(row) => {
                     let content =
-                        core::retained_document_bytes(&row.stored.entity).map_err(invalid)?;
+                        core::retained_document_bytes(row.source.entity()).map_err(invalid)?;
                     bytes = bytes.saturating_add(content.len());
                     if bytes > 1024 * 1024 {
                         return Err(Status::resource_exhausted(
@@ -756,11 +798,9 @@ impl EventModelServiceImpl {
                     hash.update(row.provenance);
                     sources.push(pb::GlossarySourceMaterial {
                         document: Some(reference),
-                        owner_uid: uid(&row.stored.entity).into(),
-                        etag: row.stored.etag.clone(),
-                        content_digest: Some(trogon_atlas_core::specification::content_digest(
-                            &text,
-                        )),
+                        owner_uid: uid(row.source.entity()).into(),
+                        etag: row.etag.clone(),
+                        content_digest: Some(row.source.content_digest().map_err(invalid)?.clone()),
                         text,
                         state: pb::GlossaryEvidenceState::Current as i32,
                     });
@@ -829,12 +869,18 @@ impl EventModelServiceImpl {
             ));
         }
         let mut entity = current.entity;
+        let pool = if term(&entity).is_some_and(|value| value.metadata.is_empty()) {
+            TranscodePool::builtin().map_err(invalid)?
+        } else {
+            self.transcode_pool(&id.namespace, branch.as_deref())
+                .await?
+        };
         let owner_uid = uid(&entity).to_owned();
         let Some(pb::entity::Kind::Term(value)) = &mut entity.kind else {
             return Err(Status::not_found("term not found"));
         };
         core::validate_term(value).map_err(invalid)?;
-        let digest = core::candidate_digest(value).map_err(invalid)?;
+        let digest = core::candidate_digest_with_pool(value, &pool).map_err(invalid)?;
         let glossary = value.glossary.as_mut().ok_or_else(|| {
             Status::invalid_argument("generated glossary evidence is required for review")
         })?;
@@ -846,10 +892,9 @@ impl EventModelServiceImpl {
             owner_uid,
             reason: input.reason,
         });
-        let representation =
-            trogon_atlas_core::transcode::entity_json_value(&entity).map_err(|_| {
-                Status::invalid_argument("glossary review requires canonical native content")
-            })?;
+        let representation = pool
+            .entity_json_value(&entity)
+            .map_err(|_| Status::invalid_argument("glossary review requires canonical content"))?;
         let bytes = serde_json::to_vec(&representation)
             .map_err(|_| Status::invalid_argument("glossary review cannot be encoded"))?;
         if bytes.len() > 2 * 1024 * 1024 {
@@ -894,7 +939,7 @@ impl EventModelServiceImpl {
             index.published = false;
             index.reason = "Review preview was not persisted".into();
         }
-        bounded_output(
+        bounded_output_with_pool(
             "GetGlossaryTermResponse",
             pb::GetGlossaryTermResponse {
                 entity: Some(entry.stored.entity),
@@ -903,6 +948,7 @@ impl EventModelServiceImpl {
                 evidence: entry.evidence,
                 incomplete: entry.incomplete,
             },
+            &pool,
         )
         .map(Response::new)
     }
@@ -1215,6 +1261,83 @@ impl EventModelServiceImpl {
             })
     }
 
+    async fn validate_glossary_library_changes(
+        &self,
+        metas: &[OpMetaLike],
+        changes: &crate::type_libraries::TypeLibraryChanges,
+        branch: Option<&str>,
+        budget: &mut Budget,
+    ) -> Result<(), Status> {
+        let namespaces: Vec<_> = metas
+            .iter()
+            .filter(|meta| meta.kind == pb::EntityKind::TypeLibrary)
+            .map(|meta| meta.id.namespace.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if namespaces.is_empty() {
+            return Ok(());
+        }
+        let rows = self
+            .store
+            .list_bounded(
+                ListFilter {
+                    kinds: &[pb::EntityKind::Term],
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(MAX_ROWS + 1),
+                branch,
+                trogon_atlas_store::EntityByteBudget::new(MAX_CATALOG_BYTES),
+            )
+            .await
+            .map_err(store_err)?;
+        if rows.len() > MAX_ROWS {
+            return Err(Status::resource_exhausted(
+                "glossary descriptor users exceed their row budget",
+            ));
+        }
+        let mut proposed = HashMap::new();
+        for row in rows {
+            let key = pb::EntityKey::new(pb::EntityKind::Term, super::entity_id(&row.entity)?);
+            proposed.insert(key, row.entity);
+        }
+        for meta in metas.iter().filter(|meta| {
+            meta.kind == pb::EntityKind::Term && namespaces.contains(&meta.id.namespace)
+        }) {
+            let key = pb::EntityKey::new(meta.kind, &meta.id);
+            if let Some(entity) = meta.entity.as_ref().filter(|_| meta.is_put) {
+                proposed.insert(key, entity.clone());
+            } else {
+                proposed.remove(&key);
+            }
+        }
+        if proposed.len() > MAX_ROWS
+            || proposed.values().map(Message::encoded_len).sum::<usize>() > MAX_CATALOG_BYTES
+        {
+            return Err(Status::resource_exhausted(
+                "glossary descriptor users exceed their proposal budget",
+            ));
+        }
+        for value in proposed.values().filter_map(term).filter(|term| {
+            !term.metadata.is_empty()
+                && term
+                    .glossary
+                    .as_ref()
+                    .and_then(|entry| entry.review.as_ref())
+                    .is_some_and(|review| {
+                        review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
+                    })
+        }) {
+            let namespace = &exact(value.id.as_ref())?.namespace;
+            let pool = self
+                .glossary_pool(namespace, changes, branch, budget)
+                .await?;
+            core::candidate_digest_with_pool(value, &pool).map_err(|_| Status::failed_precondition("type library change would strand accepted glossary metadata; review its retirement first"))?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn validate_glossary_writes(
         &self,
         metas: &[OpMetaLike],
@@ -1223,6 +1346,16 @@ impl EventModelServiceImpl {
         landing: Option<&[BranchLandOp]>,
     ) -> Result<(), Status> {
         let mut budget = Budget::default();
+        let mut library_changes = crate::type_libraries::TypeLibraryChanges::default();
+        for meta in metas {
+            if let Some(entity) = meta.entity.as_ref().filter(|_| meta.is_put) {
+                library_changes.put(entity);
+            } else {
+                library_changes.delete(meta.kind, &meta.id);
+            }
+        }
+        self.validate_glossary_library_changes(metas, &library_changes, branch, &mut budget)
+            .await?;
         for meta in metas
             .iter()
             .filter(|meta| meta.kind == pb::EntityKind::Term)
@@ -1260,9 +1393,32 @@ impl EventModelServiceImpl {
             let permit = REVIEW_PERMIT
                 .try_with(|authorized| authorized == proposed)
                 .unwrap_or(false);
+            let needs_authority = permit
+                || (landing.is_some() && new_review.is_some())
+                || old_review.is_some_and(|review| {
+                    review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
+                });
+            let pool = if needs_authority
+                && (!value.metadata.is_empty()
+                    || old.is_some_and(|value| !value.metadata.is_empty()))
+            {
+                self.glossary_pool(&meta.id.namespace, &library_changes, branch, &mut budget)
+                    .await?
+            } else {
+                TranscodePool::builtin().map_err(invalid)?
+            };
+            if permit
+                && !previous.as_ref().is_some_and(|current| {
+                    core::review_is_current_with_pool(value, uid(current), &pool)
+                })
+            {
+                return Err(Status::failed_precondition(
+                    "glossary review descriptors changed before admission; retry",
+                ));
+            }
             let trusted_landing = landing.is_some()
                 && new_review.is_some()
-                && core::review_is_current(value, uid(proposed));
+                && core::review_is_current_with_pool(value, uid(proposed), &pool);
             if old_review != new_review && !permit && !trusted_landing {
                 return Err(Status::invalid_argument(
                     "glossary reviews are server-owned; use ReviewGlossaryTerm",
@@ -1273,8 +1429,8 @@ impl EventModelServiceImpl {
                     review.disposition == pb::GlossaryReviewDisposition::Accepted as i32
                 })
             }) {
-                if core::candidate_digest(old).map_err(invalid)?
-                    != core::candidate_digest(value).map_err(invalid)?
+                if core::candidate_digest_with_pool(old, &pool).map_err(invalid)?
+                    != core::candidate_digest_with_pool(value, &pool).map_err(invalid)?
                 {
                     return Err(Status::failed_precondition(
                         "published glossary meaning is immutable; create a new version",
@@ -1291,14 +1447,13 @@ impl EventModelServiceImpl {
                 })
             {
                 let current_digest = old
-                    .map(core::candidate_digest)
+                    .map(|value| core::candidate_digest_with_pool(value, &pool))
                     .transpose()
                     .map_err(invalid)?;
-                if previous
-                    .as_ref()
-                    .is_some_and(|current| core::review_is_current(value, uid(current)))
-                    && current_digest.as_ref()
-                        == new_review.and_then(|review| review.content_digest.as_ref())
+                if previous.as_ref().is_some_and(|current| {
+                    core::review_is_current_with_pool(value, uid(current), &pool)
+                }) && current_digest.as_ref()
+                    == new_review.and_then(|review| review.content_digest.as_ref())
                 {
                     continue;
                 }

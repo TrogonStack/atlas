@@ -114,8 +114,24 @@ impl NatsStore {
                 Ok(outcome) => {
                     if !matches!(outcome, MutationOutcome::Noop { .. }) {
                         applied.insert(key.clone());
-                        let row =
-                            live_entry(kv_entry_timeout(&self.branches_kv, key.clone()).await?);
+                        let row = if faults.fail_branch_post_write_read_at == Some(index) {
+                            Err(journal::injected("branch post-write read"))
+                        } else {
+                            kv_entry_timeout(&self.branches_kv, key.clone()).await
+                        };
+                        let row = match row {
+                            Ok(row) => live_entry(row),
+                            Err(error) => {
+                                let source = self
+                                    .undo_batch(journal, &priors, &applied)
+                                    .await
+                                    .unwrap_or(error);
+                                return Err(StoreError::BatchFailed {
+                                    index,
+                                    source: Box::new(source),
+                                });
+                            }
+                        };
                         let revision = super::Revision {
                             kind,
                             id,
@@ -240,7 +256,12 @@ impl NatsStore {
         if faults.crash_after_writes == Some(pending.len()) {
             return Err(journal::injected("crash"));
         }
-        journal.commit(Vec::new()).await?;
+        if let Err(error) = journal.commit(Vec::new()).await {
+            return Err(self
+                .undo_batch(journal, &priors, &applied)
+                .await
+                .unwrap_or(error));
+        }
         if faults.crash_after_commit {
             return Err(journal::injected("crash"));
         }

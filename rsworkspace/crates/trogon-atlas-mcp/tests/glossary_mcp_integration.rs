@@ -267,6 +267,101 @@ async fn glossary_details_render_admitted_tenant_metadata_in_the_same_branch() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tenant_glossary_reviews_preserve_metadata_through_preview_apply_and_lean_reads() {
+    let uri = serve().await;
+    let baseline = connect(&uri, REVIEWER).await;
+    create_branch(&baseline, "reviewer/tenant-review").await;
+    let branch = connect_branch(&uri, REVIEWER, Some("reviewer/tenant-review")).await;
+    for (client, namespace, prefix, scope) in [
+        (
+            &baseline,
+            "tenant-review",
+            "glossary.review.baseline",
+            "baseline",
+        ),
+        (
+            &branch,
+            "branch-tenant-review",
+            "glossary.review.branch",
+            "branch",
+        ),
+    ] {
+        let metadata = tenant_term(client, namespace, prefix).await;
+        let material = source(client, namespace, SOURCE, None).await;
+        let original = candidate(
+            client,
+            namespace,
+            "reviewable-parcel",
+            "Parcel",
+            "A shipment handled by fulfillment.",
+            &material,
+            json!({"usage": "GLOSSARY_USAGE_ALLOWED"}),
+        )
+        .await;
+        let mut entity = original["entity"].clone();
+        entity["term"]["metadata"] = json!([metadata]);
+        call(
+            client,
+            "put_entity_json",
+            json!({"if_match": original["etag"], "entity_json": entity}),
+        )
+        .await;
+        let target = reference(namespace, "reviewable-parcel");
+        let draft = query(client, "get_glossary_term", json!({"term": target})).await;
+        assert_eq!(draft["entity"]["term"]["metadata"][0], metadata);
+        for preview in [true, false] {
+            let reviewed = query(
+                client,
+                "review_glossary_term",
+                json!({
+                    "term": target, "ifMatch": draft["etag"],
+                    "disposition": "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED",
+                    "reason": "Controlled tenant metadata review.", "validateOnly": preview
+                }),
+            )
+            .await;
+            assert_eq!(reviewed["scope"], scope);
+            assert_eq!(reviewed["entity"]["term"]["metadata"][0], metadata);
+            let current = query(client, "get_glossary_term", json!({"term": target})).await;
+            if preview {
+                assert_eq!(current, draft);
+            } else {
+                assert_eq!(current["entity"], reviewed["entity"]);
+                assert_eq!(current["entry"]["published"], true);
+                assert_eq!(current["entry"]["state"], "GLOSSARY_ENTRY_STATE_REVIEWED");
+            }
+        }
+        let pointers = query(
+            client,
+            "list_glossary_pointers",
+            json!({"selection": selection(namespace, false)}),
+        )
+        .await;
+        let entries = pointers["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["term"], target);
+        let lean = query(client, "get_glossary_definition", json!({"term": target})).await;
+        assert_eq!(lean["entry"]["term"], target);
+        assert_eq!(lean["entry"]["state"], "GLOSSARY_ENTRY_STATE_REVIEWED");
+        assert_eq!(lean["definition"], "A shipment handled by fulfillment.");
+        assert!(lean.get("entity").is_none());
+    }
+    assert!(baseline
+        .call_tool(
+            CallToolRequestParams::new("get_glossary_term").with_arguments(
+                json!({"request_json": {"term": reference("branch-tenant-review", "reviewable-parcel")}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .is_err());
+    branch.cancel().await.unwrap();
+    baseline.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn glossary_detail_refuses_unknown_metadata_without_dropping_it() {
     let uri = serve().await;
     let writer = connect(&uri, REVIEWER).await;

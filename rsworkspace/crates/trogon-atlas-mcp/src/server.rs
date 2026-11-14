@@ -32,7 +32,7 @@ use crate::{
         EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
         ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
         GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
-        GlossaryRequestParams, ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
         ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
         ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
         ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
@@ -3360,7 +3360,7 @@ impl McpServer {
     )]
     async fn list_glossary_entries(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("ListGlossaryEntriesRequest", &p)?;
         crate::glossary::response(
@@ -3379,7 +3379,7 @@ impl McpServer {
     )]
     async fn list_glossary_pointers(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("ListGlossaryEntriesRequest", &p)?;
         crate::glossary::response(
@@ -3399,7 +3399,7 @@ impl McpServer {
     )]
     async fn get_glossary_term(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("GetGlossaryTermRequest", &p)?;
         crate::glossary::response(
@@ -3418,7 +3418,7 @@ impl McpServer {
     )]
     async fn get_glossary_definition(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("GetGlossaryTermRequest", &p)?;
         crate::glossary::response(
@@ -3438,7 +3438,7 @@ impl McpServer {
     )]
     async fn inspect_glossary_sources(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("InspectGlossarySourcesRequest", &p)?;
         crate::glossary::response(
@@ -3458,7 +3458,7 @@ impl McpServer {
     )]
     async fn review_glossary_term(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request: pb::ReviewGlossaryTermRequest =
             crate::glossary::request("ReviewGlossaryTermRequest", &p)?;
@@ -3490,7 +3490,7 @@ impl McpServer {
     )]
     async fn compare_glossaries(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("CompareGlossariesRequest", &p)?;
         crate::glossary::response(
@@ -3509,7 +3509,7 @@ impl McpServer {
     )]
     async fn check_glossary_usage(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("CheckGlossaryUsageRequest", &p)?;
         crate::glossary::response(
@@ -3528,7 +3528,7 @@ impl McpServer {
     )]
     async fn check_glossary_code_usage(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("CheckGlossaryUsageRequest", &p)?;
         crate::glossary::response(
@@ -3548,7 +3548,7 @@ impl McpServer {
     )]
     async fn inspect_glossary_refresh(
         &self,
-        Parameters(p): Parameters<GlossaryRequestParams>,
+        Parameters(p): Parameters<crate::tools::GlossaryRequestParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let request = crate::glossary::request("InspectGlossaryRefreshRequest", &p)?;
         crate::glossary::response(

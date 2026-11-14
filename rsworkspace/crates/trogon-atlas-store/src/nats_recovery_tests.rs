@@ -1211,3 +1211,198 @@ async fn branch_journal_restores_an_existing_tombstone_and_its_baseline_snapshot
     );
     store.read_marker().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_post_write_read_failures_roll_back_or_report_partial_apply() {
+    for failed_rollback in [false, true] {
+        let store = isolated_store().await;
+        let scenario = seed_branch_batch(&store).await;
+        let before = raw_branch_rows(&store).await;
+        store.faults.lock().fail_branch_post_write_read_at = Some(0);
+        store.faults.lock().fail_rollback = failed_rollback;
+        let err = store
+            .batch_apply(
+                &scenario.ops,
+                WriteContext::branch(RECOVERY_BRANCH).attributed(scenario.changeset()),
+            )
+            .await
+            .expect_err("post-write read fails");
+        clear_faults(&store);
+        if failed_rollback {
+            assert!(
+                matches!(err, StoreError::BatchFailed { index: 0, source } if matches!(*source, StoreError::PartialApply { journal: Some(_), .. }))
+            );
+            assert!(matches!(
+                store.read_marker().await,
+                Err(StoreError::Unavailable(_))
+            ));
+            repair(&store).await;
+        } else {
+            assert_eq!(
+                raw_branch_rows(&store).await,
+                before,
+                "a failed post-write read must roll back the persisted delta"
+            );
+            assert!(
+                matches!(err, StoreError::BatchFailed { index: 0, .. }),
+                "expected batch failure after successful rollback, got {err}"
+            );
+            assert_journal_empty(&store).await;
+        }
+        assert_eq!(raw_branch_rows(&store).await, before);
+        assert_eq!(branch_revision_count(&store, &scenario, UPDATED).await, 0);
+        store.read_marker().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_maintenance_commit_failures_roll_back_or_report_partial_apply() {
+    for delete in [false, true] {
+        for failed_rollback in [false, true] {
+            let store = isolated_store().await;
+            seed_branch_batch(&store).await;
+            let before = raw_branch_rows(&store).await;
+            store.faults.lock().fail_commit = true;
+            store.faults.lock().fail_rollback = failed_rollback;
+            let err = if delete {
+                store.delete_branch(RECOVERY_BRANCH).await
+            } else {
+                store
+                    .rebase_branch_deltas(
+                        RECOVERY_BRANCH,
+                        &[(EntityKind::Event, event_id(UPDATED), None)],
+                    )
+                    .await
+                    .map(|_| ())
+            }
+            .expect_err("commit fails");
+            clear_faults(&store);
+            if failed_rollback {
+                assert!(
+                    matches!(
+                        err,
+                        StoreError::PartialApply {
+                            journal: Some(_),
+                            ..
+                        }
+                    ),
+                    "failed rollback must report partial apply: {err}"
+                );
+                assert!(matches!(
+                    store.read_marker().await,
+                    Err(StoreError::Unavailable(_))
+                ));
+                repair(&store).await;
+            } else {
+                assert_eq!(
+                    raw_branch_rows(&store).await,
+                    before,
+                    "a failed maintenance commit must restore persisted deltas and metadata"
+                );
+                assert_journal_empty(&store).await;
+            }
+            assert_eq!(raw_branch_rows(&store).await, before);
+            store.read_marker().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn baseline_recreation_tombstone_priors_recover_before_and_after_commit() {
+    for operation in ["delete", "purge", "empty-put"] {
+        for committed in [false, true] {
+            let store = isolated_store().await;
+            Scenario::seed(&store).await;
+            store
+                .delete(
+                    EntityKind::Event,
+                    &event_id(UPDATED),
+                    None,
+                    WriteContext::baseline(),
+                )
+                .await
+                .unwrap();
+            let key = entity_key(EntityKind::Event, &event_id(UPDATED));
+            match operation {
+                "purge" => store.kv.purge(&key).await.unwrap(),
+                "empty-put" => {
+                    store.kv.put(&key, bytes::Bytes::new()).await.unwrap();
+                }
+                _ => {}
+            }
+            assert!(matches!(
+                store.get(EntityKind::Event, &event_id(UPDATED), None).await,
+                Err(StoreError::NotFound)
+            ));
+            let id = uuid::Uuid::now_v7().to_string();
+            let changeset = ChangesetRef {
+                id: &id,
+                author: AUTHOR,
+                rpc: RPC,
+                operation_id: None,
+            };
+            if committed {
+                store.faults.lock().crash_after_commit = true;
+            } else {
+                store.faults.lock().crash_after_writes = Some(1);
+            }
+            store
+                .batch_apply(
+                    &[MutationOp::Create {
+                        kind: EntityKind::Event,
+                        entity: event(UPDATED, "recreated"),
+                    }],
+                    WriteContext::baseline().attributed(changeset),
+                )
+                .await
+                .expect_err("interrupted recreation");
+            clear_faults(&store);
+            repair(&store).await;
+            if committed {
+                assert_eq!(
+                    Scenario::title(&store, UPDATED).await.as_deref(),
+                    Some("recreated")
+                );
+                let revisions = store
+                    .list_entity_revisions(
+                        EntityKind::Event,
+                        &event_id(UPDATED),
+                        RevisionPage {
+                            branch: None,
+                            before: None,
+                            limit: 100,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                let revision = revisions.iter().find(|r| r.changeset_id == id).unwrap();
+                assert_eq!(revision.before, None);
+                assert!(revision.after.is_some());
+                store.get_changeset(&id).await.unwrap();
+            } else {
+                assert!(matches!(
+                    store.get(EntityKind::Event, &event_id(UPDATED), None).await,
+                    Err(StoreError::NotFound)
+                ));
+                let raw = super::kv_entry_timeout(&store.kv, key)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(super::live_entry(Some(raw)).is_none());
+                assert!(matches!(
+                    store.get_changeset(&id).await,
+                    Err(StoreError::NotFound)
+                ));
+                store
+                    .create(
+                        EntityKind::Event,
+                        &event(UPDATED, "after-rollback"),
+                        WriteContext::baseline(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            store.read_marker().await.unwrap();
+        }
+    }
+}

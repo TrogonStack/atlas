@@ -135,6 +135,103 @@ fn evidence_resolves_exact_document_content_and_incarnation() {
 }
 
 #[test]
+fn cached_evidence_checks_every_citations_identity_digest_and_quote() {
+    let mut source = document();
+    let Some(entity::Kind::Document(value)) = &mut source.kind else {
+        unreachable!();
+    };
+    let Some(pb::document::Body::Retained(body)) = &mut value.body else {
+        unreachable!();
+    };
+    body.digest = Some(pb::ContentDigest {
+        sha256: "0".repeat(64),
+    });
+    let cached = glossary::EvidenceDocument::new(source.clone());
+    assert_eq!(cached.entity(), &source);
+    assert_eq!(
+        cached.content_digest().unwrap(),
+        evidence().content_digest.as_ref().unwrap()
+    );
+    for index in 0..32 {
+        let mut citation = evidence();
+        citation.locator = format!("paragraph:{index}");
+        cached.verify(&citation).unwrap();
+        for field in ["document", "owner_uid", "content_digest", "quote"] {
+            let mut changed = citation.clone();
+            match field {
+                "document" => {
+                    changed
+                        .document
+                        .as_mut()
+                        .unwrap()
+                        .id
+                        .as_mut()
+                        .unwrap()
+                        .version = 2;
+                }
+                "owner_uid" => changed.owner_uid = TERM_UID.into(),
+                "content_digest" => {
+                    changed.content_digest.as_mut().unwrap().sha256 = "0".repeat(64);
+                }
+                "quote" => changed.quote = "an invented definition".into(),
+                _ => unreachable!(),
+            }
+            let expected = Err(glossary::GlossaryError(format!("evidence.{field}")));
+            assert_eq!(glossary::verify_evidence(&changed, &source), expected);
+            assert_eq!(cached.verify(&changed), expected);
+            cached.verify(&citation).unwrap();
+        }
+    }
+}
+
+#[test]
+fn cached_evidence_preserves_invalid_source_and_non_utf8_failures() {
+    for bytes in [
+        Vec::new(),
+        vec![0xff],
+        vec![b'a'; glossary::MAX_TEXT_BYTES + 1],
+    ] {
+        let mut source = document();
+        let Some(entity::Kind::Document(value)) = &mut source.kind else {
+            unreachable!();
+        };
+        value.body = Some(pb::document::Body::RetainedContent(pb::RetainedContent {
+            content: bytes.clone(),
+            ..Default::default()
+        }));
+        let mut citation = evidence();
+        citation.content_digest =
+            Some(trogon_atlas_core::document_catalog_context::bytes_content_digest(&bytes));
+        let cached = glossary::EvidenceDocument::new(source.clone());
+        let expected = glossary::verify_evidence(&citation, &source);
+        assert!(expected.is_err());
+        assert_eq!(cached.verify(&citation), expected);
+        citation.owner_uid = TERM_UID.into();
+        assert_eq!(
+            cached.verify(&citation),
+            Err(glossary::GlossaryError("evidence.owner_uid".into()))
+        );
+    }
+    for source in [
+        pb::Entity::default(),
+        pb::Entity {
+            kind: Some(entity::Kind::Document(pb::Document {
+                id: Some(id("store", "source")),
+                ..Default::default()
+            })),
+            system: document().system,
+        },
+    ] {
+        let expected = glossary::verify_evidence(&evidence(), &source);
+        assert!(expected.is_err());
+        assert_eq!(
+            glossary::EvidenceDocument::new(source).verify(&evidence()),
+            expected
+        );
+    }
+}
+
+#[test]
 fn candidate_digest_binds_meaning_but_not_schedule_or_server_review() {
     let original = term();
     let digest = glossary::candidate_digest(&original).unwrap();
@@ -891,6 +988,576 @@ fn unrenderable_metadata_has_no_glossary_review_identity() {
         value: vec![1],
     });
     assert!(glossary::candidate_digest(&candidate).is_err());
+}
+
+fn tenant_review_pool() -> trogon_atlas_core::transcode::TranscodePool {
+    use prost_types::{
+        field_descriptor_proto::{Label, Type},
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+    };
+
+    trogon_atlas_core::transcode::TranscodePool::builtin()
+        .unwrap()
+        .with_files([FileDescriptorProto {
+            name: Some("shipping/review/v1/note.proto".into()),
+            package: Some("shipping.review.v1".into()),
+            syntax: Some("proto3".into()),
+            message_type: vec![DescriptorProto {
+                name: Some("Note".into()),
+                field: ["text", "context"]
+                    .into_iter()
+                    .zip(1..)
+                    .map(|(name, number)| FieldDescriptorProto {
+                        name: Some(name.into()),
+                        number: Some(number),
+                        label: Some(Label::Optional as i32),
+                        r#type: Some(Type::String as i32),
+                        ..Default::default()
+                    })
+                    .chain([
+                        FieldDescriptorProto {
+                            name: Some("child".into()),
+                            number: Some(3),
+                            label: Some(Label::Optional as i32),
+                            r#type: Some(Type::Message as i32),
+                            type_name: Some(".shipping.review.v1.Note".into()),
+                            ..Default::default()
+                        },
+                        FieldDescriptorProto {
+                            name: Some("children".into()),
+                            number: Some(4),
+                            label: Some(Label::Repeated as i32),
+                            r#type: Some(Type::Message as i32),
+                            type_name: Some(".shipping.review.v1.Note".into()),
+                            ..Default::default()
+                        },
+                    ])
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }])
+        .unwrap()
+}
+
+fn tenant_review_term(text: &str, reverse_fields: bool) -> pb::Term {
+    let mut candidate = term();
+    let fields = if reverse_fields {
+        [(2, "Customer vocabulary"), (1, text)]
+    } else {
+        [(1, text), (2, "Customer vocabulary")]
+    };
+    let mut value = Vec::new();
+    for (tag, text) in fields {
+        prost::encoding::string::encode(tag, &text.to_owned(), &mut value);
+    }
+    candidate.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/shipping.review.v1.Note".into(),
+        value,
+    });
+    candidate
+}
+
+#[test]
+fn tenant_metadata_can_receive_a_canonical_glossary_review_identity() {
+    let pool = tenant_review_pool();
+    let original = tenant_review_term("Exact customer definition", false);
+    let equivalent = tenant_review_term("Exact customer definition", true);
+    assert_ne!(original.metadata, equivalent.metadata);
+    let entity = |candidate| pb::Entity {
+        kind: Some(entity::Kind::Term(candidate)),
+        ..Default::default()
+    };
+    assert_eq!(
+        pool.entity_json_value(&entity(original.clone())).unwrap(),
+        pool.entity_json_value(&entity(equivalent.clone())).unwrap()
+    );
+    let digest = glossary::candidate_digest_with_pool(&original, &pool).unwrap();
+    assert_eq!(
+        glossary::candidate_digest_with_pool(&equivalent, &pool).unwrap(),
+        digest
+    );
+    assert_ne!(
+        glossary::candidate_digest_with_pool(
+            &tenant_review_term("Different customer definition", false),
+            &pool
+        )
+        .unwrap(),
+        digest
+    );
+    assert!(glossary::candidate_digest(&original).is_err());
+    assert_eq!(
+        glossary::candidate_digest(&term()).unwrap(),
+        glossary::candidate_digest_with_pool(&term(), &pool).unwrap()
+    );
+    let mut reviewed = equivalent;
+    reviewed.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+        disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+        actor: "expert".into(),
+        reviewed_at: "2026-11-12T12:00:00Z".into(),
+        content_digest: Some(digest.clone()),
+        owner_uid: TERM_UID.into(),
+        reason: "Exact definition and tenant metadata reviewed.".into(),
+    });
+    assert!(glossary::review_is_current_with_pool(
+        &reviewed, TERM_UID, &pool
+    ));
+    assert!(glossary::review_is_accepted_with_pool(
+        &reviewed, TERM_UID, &pool
+    ));
+    assert!(!glossary::review_is_current(&reviewed, TERM_UID));
+    assert!(!glossary::review_is_accepted(&reviewed, TERM_UID));
+    assert!(!glossary::review_is_current_with_pool(
+        &reviewed,
+        DOCUMENT_UID,
+        &pool
+    ));
+    reviewed.glossary.as_mut().unwrap().next_review_on = Some(pb::CalendarDate {
+        value: "2027-01-01".into(),
+    });
+    assert_eq!(
+        glossary::candidate_digest_with_pool(&reviewed, &pool).unwrap(),
+        digest
+    );
+    reviewed.metadata = tenant_review_term("Different customer definition", false).metadata;
+    assert!(!glossary::review_is_current_with_pool(
+        &reviewed, TERM_UID, &pool
+    ));
+    assert!(!glossary::review_is_accepted_with_pool(
+        &reviewed, TERM_UID, &pool
+    ));
+}
+
+#[test]
+fn scoped_glossary_review_identity_refuses_unknown_and_malformed_metadata() {
+    let pool = tenant_review_pool();
+    let mut unknown = tenant_review_term("An exact review note", false);
+    unknown.metadata[0].type_url = "type.googleapis.com/shipping.review.v1.Missing".into();
+    let mut malformed = tenant_review_term("An exact review note", false);
+    malformed.metadata[0].value = vec![0x0a, 0xff];
+    for mut candidate in [unknown, malformed] {
+        assert_eq!(
+            glossary::candidate_digest_with_pool(&candidate, &pool),
+            Err(glossary::GlossaryError(
+                "candidate.canonical_content".into()
+            ))
+        );
+        candidate.glossary.as_mut().unwrap().review = Some(pb::GlossaryReview {
+            disposition: pb::GlossaryReviewDisposition::Accepted as i32,
+            actor: "expert".into(),
+            reviewed_at: "2026-11-12T12:00:00Z".into(),
+            content_digest: Some(glossary::candidate_digest(&term()).unwrap()),
+            owner_uid: TERM_UID.into(),
+            reason: "A digest cannot authorize unrenderable metadata.".into(),
+        });
+        assert!(!glossary::review_is_current_with_pool(
+            &candidate, TERM_UID, &pool
+        ));
+        assert!(!glossary::review_is_accepted_with_pool(
+            &candidate, TERM_UID, &pool
+        ));
+    }
+}
+
+#[test]
+fn native_glossary_review_digest_preserves_existing_canonical_bytes() {
+    use prost::Message;
+
+    let mut candidate = term();
+    candidate.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.NoteAnnotation".into(),
+        value: pb::NoteAnnotation {
+            text: "A supported native note".into(),
+            ..Default::default()
+        }
+        .encode_to_vec(),
+    });
+    let expected = pb::ContentDigest {
+        sha256: "a7dff9cc2f0a3eede1b516caa594770dc927339a3dada15664ee8665b177f68e".into(),
+    };
+    assert_eq!(glossary::candidate_digest(&candidate).unwrap(), expected);
+    assert_eq!(
+        glossary::candidate_digest_with_pool(&candidate, &tenant_review_pool()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn review_identity_checks_wire_occurrences_before_map_and_oneof_normalization() {
+    use prost::Message;
+
+    let pool = tenant_review_pool();
+    let clean_value = prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue("x".into())),
+    }
+    .encode_to_vec();
+    let entry = |value: &[u8]| {
+        let mut bytes = Vec::new();
+        prost::encoding::string::encode(1, &"note".to_owned(), &mut bytes);
+        prost::encoding::bytes::encode(2, &value.to_vec(), &mut bytes);
+        bytes
+    };
+    let mut unknown_entry = entry(&clean_value);
+    prost::encoding::uint64::encode(127, &1, &mut unknown_entry);
+    let mut map_with_unknown_entry = Vec::new();
+    prost::encoding::bytes::encode(1, &unknown_entry, &mut map_with_unknown_entry);
+
+    let mut unknown_value = clean_value.clone();
+    prost::encoding::uint64::encode(127, &1, &mut unknown_value);
+    let mut overwritten_map_value = Vec::new();
+    for value in [&unknown_value, &clean_value] {
+        prost::encoding::bytes::encode(1, &entry(value), &mut overwritten_map_value);
+    }
+
+    let mut unknown_struct = Vec::new();
+    prost::encoding::uint64::encode(127, &1, &mut unknown_struct);
+    let mut overwritten_oneof = Vec::new();
+    prost::encoding::bytes::encode(5, &unknown_struct, &mut overwritten_oneof);
+    prost::encoding::string::encode(3, &"x".to_owned(), &mut overwritten_oneof);
+
+    let results = [
+        ("google.protobuf.Struct", map_with_unknown_entry),
+        ("google.protobuf.Struct", overwritten_map_value),
+        ("google.protobuf.Value", overwritten_oneof),
+    ]
+    .into_iter()
+    .map(|(name, value)| {
+        let mut candidate = term();
+        candidate.metadata.push(prost_types::Any {
+            type_url: format!("type.googleapis.com/{name}"),
+            value,
+        });
+        pool.entity_json_value(&pb::Entity {
+            kind: Some(entity::Kind::Term(candidate.clone())),
+            ..Default::default()
+        })
+        .unwrap();
+        glossary::candidate_digest_with_pool(&candidate, &pool)
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        results,
+        vec![
+            Err(glossary::GlossaryError(
+                "candidate.canonical_content".into()
+            ));
+            3
+        ]
+    );
+}
+
+#[test]
+fn review_metadata_groups_preserve_known_fields_and_refuse_unknown_or_unclosed_data() {
+    use prost::encoding::{encode_key, WireType};
+    use prost_types::{
+        field_descriptor_proto::{Label, Type},
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+    };
+
+    let pool = tenant_review_pool()
+        .with_files([FileDescriptorProto {
+            name: Some("review/groups.proto".into()),
+            package: Some("review.groups".into()),
+            syntax: Some("proto2".into()),
+            message_type: vec![DescriptorProto {
+                name: Some("Outer".into()),
+                nested_type: vec![DescriptorProto {
+                    name: Some("Payload".into()),
+                    field: vec![FieldDescriptorProto {
+                        name: Some("text".into()),
+                        number: Some(1),
+                        label: Some(Label::Optional as i32),
+                        r#type: Some(Type::String as i32),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                field: vec![FieldDescriptorProto {
+                    name: Some("payload".into()),
+                    number: Some(1),
+                    label: Some(Label::Optional as i32),
+                    r#type: Some(Type::Group as i32),
+                    type_name: Some(".review.groups.Outer.Payload".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }])
+        .unwrap();
+    for (unknown, closed) in [(false, true), (true, true), (false, false)] {
+        let mut value = Vec::new();
+        encode_key(1, WireType::StartGroup, &mut value);
+        prost::encoding::string::encode(1, &"A retained group value".to_owned(), &mut value);
+        if unknown {
+            prost::encoding::uint64::encode(127, &1, &mut value);
+        }
+        if closed {
+            encode_key(1, WireType::EndGroup, &mut value);
+        }
+        let mut candidate = term();
+        candidate.metadata.push(prost_types::Any {
+            type_url: "type.googleapis.com/review.groups.Outer".into(),
+            value,
+        });
+        assert_eq!(
+            glossary::candidate_digest_with_pool(&candidate, &pool).is_ok(),
+            !unknown && closed
+        );
+    }
+}
+
+#[test]
+fn split_singular_any_messages_preserve_canonical_review_identity() {
+    use prost::Message;
+    use prost_types::{
+        field_descriptor_proto::{Label, Type},
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+    };
+
+    let field = |name: &str, type_name: &str| FieldDescriptorProto {
+        name: Some(name.into()),
+        number: Some(1),
+        label: Some(Label::Optional as i32),
+        r#type: Some(Type::Message as i32),
+        type_name: Some(type_name.into()),
+        ..Default::default()
+    };
+    let pool = tenant_review_pool()
+        .with_files([FileDescriptorProto {
+            name: Some("review/fragments.proto".into()),
+            package: Some("review.fragments".into()),
+            syntax: Some("proto3".into()),
+            dependency: vec!["google/protobuf/any.proto".into()],
+            message_type: vec![
+                DescriptorProto {
+                    name: Some("Wrapper".into()),
+                    field: vec![field("note", ".google.protobuf.Any")],
+                    ..Default::default()
+                },
+                DescriptorProto {
+                    name: Some("Parent".into()),
+                    field: vec![field("wrapper", ".review.fragments.Wrapper")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }])
+        .unwrap();
+    let note = tenant_review_term("A merged note", false)
+        .metadata
+        .remove(0);
+    let fragments = [
+        prost_types::Any {
+            type_url: note.type_url.clone(),
+            value: Vec::new(),
+        }
+        .encode_to_vec(),
+        prost_types::Any {
+            type_url: String::new(),
+            value: note.value.clone(),
+        }
+        .encode_to_vec(),
+    ];
+    let wrap = |bytes: &[u8]| {
+        let mut value = Vec::new();
+        prost::encoding::bytes::encode(1, &bytes.to_vec(), &mut value);
+        value
+    };
+    let combined = wrap(&note.encode_to_vec());
+    let split = [wrap(&fragments[0]), wrap(&fragments[1])].concat();
+    let cases = [
+        ("review.fragments.Wrapper", combined.clone(), split),
+        (
+            "review.fragments.Parent",
+            wrap(&combined),
+            [wrap(&wrap(&fragments[0])), wrap(&wrap(&fragments[1]))].concat(),
+        ),
+    ];
+    let results = cases
+        .into_iter()
+        .map(|(name, combined, split)| {
+            let candidate = |value| {
+                let mut candidate = term();
+                candidate.metadata.push(prost_types::Any {
+                    type_url: format!("type.googleapis.com/{name}"),
+                    value,
+                });
+                candidate
+            };
+            let combined = candidate(combined);
+            let split = candidate(split);
+            let entity = |term| pb::Entity {
+                kind: Some(entity::Kind::Term(term)),
+                ..Default::default()
+            };
+            assert_eq!(
+                pool.entity_json_value(&entity(combined.clone())).unwrap(),
+                pool.entity_json_value(&entity(split.clone())).unwrap()
+            );
+            let expected = glossary::candidate_digest_with_pool(&combined, &pool).unwrap();
+            (
+                glossary::candidate_digest_with_pool(&split, &pool),
+                Ok(expected),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (actual, expected) in results {
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn glossary_review_identity_rejects_unknown_fields_in_supported_metadata() {
+    use prost::Message;
+
+    let pool = tenant_review_pool();
+    let mut tenant = tenant_review_term("A supported note", false);
+    prost::encoding::string::encode(
+        127,
+        &"Meaning absent from descriptors".to_owned(),
+        &mut tenant.metadata[0].value,
+    );
+    let mut native = term();
+    let mut value = pb::NoteAnnotation {
+        text: "A supported native note".into(),
+        ..Default::default()
+    }
+    .encode_to_vec();
+    prost::encoding::string::encode(
+        127,
+        &"Meaning absent from descriptors".to_owned(),
+        &mut value,
+    );
+    native.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.NoteAnnotation".into(),
+        value,
+    });
+    let mut nested = term();
+    nested.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/google.protobuf.Any".into(),
+        value: tenant.metadata[0].encode_to_vec(),
+    });
+    let mut candidates = vec![tenant.clone(), native, nested];
+    for tag in [3, 4] {
+        let mut parent = term();
+        let mut value = Vec::new();
+        prost::encoding::bytes::encode(tag, &tenant.metadata[0].value, &mut value);
+        parent.metadata.push(prost_types::Any {
+            type_url: tenant.metadata[0].type_url.clone(),
+            value,
+        });
+        candidates.push(parent);
+    }
+    let mut map = term();
+    let mut child = prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue(
+            "A known map value".into(),
+        )),
+    }
+    .encode_to_vec();
+    prost::encoding::string::encode(
+        127,
+        &"Meaning absent from descriptors".to_owned(),
+        &mut child,
+    );
+    let mut entry = Vec::new();
+    prost::encoding::string::encode(1, &"note".to_owned(), &mut entry);
+    prost::encoding::bytes::encode(2, &child, &mut entry);
+    let mut value = Vec::new();
+    prost::encoding::bytes::encode(1, &entry, &mut value);
+    map.metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/google.protobuf.Struct".into(),
+        value,
+    });
+    candidates.push(map);
+    let identities = candidates
+        .iter()
+        .map(|candidate| {
+            pool.entity_json_value(&pb::Entity {
+                kind: Some(entity::Kind::Term(candidate.clone())),
+                ..Default::default()
+            })
+            .unwrap();
+            glossary::candidate_digest_with_pool(candidate, &pool)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        vec![
+            Err(glossary::GlossaryError(
+                "candidate.canonical_content".into()
+            ));
+            6
+        ]
+    );
+}
+
+#[test]
+fn glossary_metadata_review_identity_bounds_nested_messages_and_any() {
+    use prost::Message;
+
+    let pool = tenant_review_pool();
+    for depth in [32, 33] {
+        let mut ordinary = tenant_review_term("A nested note", false);
+        for _ in 0..depth {
+            let mut parent = Vec::new();
+            prost::encoding::bytes::encode(3, &ordinary.metadata[0].value, &mut parent);
+            ordinary.metadata[0].value = parent;
+        }
+        let mut any = tenant_review_term("A nested note", false);
+        for _ in 0..depth {
+            any.metadata[0] = prost_types::Any {
+                type_url: "type.googleapis.com/google.protobuf.Any".into(),
+                value: any.metadata[0].encode_to_vec(),
+            };
+        }
+        for candidate in [ordinary, any] {
+            let digest = glossary::candidate_digest_with_pool(&candidate, &pool);
+            if depth == 32 {
+                assert!(digest.is_ok());
+            } else {
+                assert_eq!(
+                    digest,
+                    Err(glossary::GlossaryError("candidate.metadata_limit".into()))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn glossary_metadata_review_identity_bounds_cumulative_decode_and_message_work() {
+    use prost::Message;
+
+    let pool = tenant_review_pool();
+    let mut candidate = tenant_review_term(&"a".repeat(300_000), false);
+    for _ in 0..15 {
+        candidate.metadata[0] = prost_types::Any {
+            type_url: "type.googleapis.com/google.protobuf.Any".into(),
+            value: candidate.metadata[0].encode_to_vec(),
+        };
+    }
+    assert!(candidate.encoded_len() < 1_048_576);
+    assert_eq!(
+        glossary::candidate_digest_with_pool(&candidate, &pool),
+        Err(glossary::GlossaryError("candidate.metadata_limit".into()))
+    );
+    for children in [16_383, 16_384] {
+        let mut candidate = tenant_review_term("A group of notes", false);
+        for _ in 0..children {
+            prost::encoding::bytes::encode(4, &Vec::<u8>::new(), &mut candidate.metadata[0].value);
+        }
+        let digest = glossary::candidate_digest_with_pool(&candidate, &pool);
+        if children == 16_383 {
+            assert!(digest.is_ok());
+        } else {
+            assert_eq!(
+                digest,
+                Err(glossary::GlossaryError("candidate.metadata_limit".into()))
+            );
+        }
+    }
 }
 
 #[test]

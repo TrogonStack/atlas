@@ -50,6 +50,17 @@ and permitted use period. Review and next-review date are excluded. Equivalent
 supported metadata encodings preserve the digest. Unrenderable metadata has no
 canonical review identity.
 
+Tenant-defined metadata uses the live type libraries of the Term namespace's
+merged branch view, including libraries proposed in the same branch landing.
+The namespace and branch selection never broadens to find a missing type.
+Review preview, admission, publication checks and full JSON responses use this
+same scoped interpretation. Unknown or malformed metadata refuses review before
+persistence.
+Unknown wire fields inside otherwise known metadata also refuse, including
+nested messages and Any payloads, because JSON cannot bind their meaning.
+Singular message fragments merge according to protobuf semantics before an Any
+payload is interpreted; equivalent fragmented encodings preserve review identity.
+
 ReviewGlossaryTerm requires an authenticated, nonanonymous User principal with
 ordinary write authority over the Term namespace. Agent credentials, directory
 assignments and lifecycle labels cannot assert review. The caller supplies the
@@ -75,11 +86,28 @@ Scheduling changes may
 preserve the meaning review. Retiring an accepted version requires an explicit
 review disposition before deletion; incoming-reference protection still applies.
 
+An accepted Term must remain renderable for explicit retirement. Type-library
+changes cannot remove the descriptors its metadata needs while its recorded
+disposition is ACCEPTED, including when that receipt has become stale. Retire the
+Term before removing those types. Compatible descriptor changes that alter the
+canonical meaning can make a review stale; a receipt does not pin a private copy
+of the descriptors. Review admission checks the current descriptor interpretation
+again before persisting the receipt.
+
+Land a branch retirement while the required descriptors remain available, then
+remove the library. A retained review cannot land using types absent from the
+landing's final view. Deleting the already-retired Term before removing its
+branch-only types also provides a cleanup path. Full JSON inspection of retained
+retired metadata still requires its descriptors.
+
 Reviews use existing guarded native writes, history and writer authority.
 On a stale etag, refresh and reconsider. After a lost or unavailable response,
 read the exact entry and history to reconcile before retrying. A failed response
 alone does not prove that no mutation landed. Response-size checks run before
 review mutation, leaving headroom for the returned inspection record.
+CLI and MCP review preparation checks the exact stored candidate and etag against
+its prepared descriptor pool before submission. Receipt rendering reuses that
+pool without a post-review network lookup.
 
 ## Publication and retrieval
 
@@ -240,6 +268,7 @@ separately from rule activation and review dates.
 | Generated title / definition | 256 / 16,384 UTF-8 bytes |
 | Generation revision / audience | 256 / 128 UTF-8 bytes on generated entries |
 | Encoded Term | 1 MiB |
+| Review metadata traversal | Depth at most 32, at most 16,384 message occurrences and 4 MiB cumulative decoded Any payload bytes |
 | Evidence traversal | 10,000 examinations and 32 MiB examined encoded content; repeated references count as examinations, while each distinct Document is fetched and charged once per request |
 | Source inspection | At most 32 exact Documents and 1 MiB total retained UTF-8 bytes, with the native 256 KiB limit per Document |
 | Derived response | At most 3 MiB encoded protobuf and JSON |

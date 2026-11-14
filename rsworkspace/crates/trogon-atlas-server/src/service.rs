@@ -888,9 +888,19 @@ impl EventModelServiceImpl {
         namespace: &str,
         branch: Option<&str>,
     ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
+        self.transcode_pool_after_changes(namespace, &Default::default(), branch)
+            .await
+    }
+
+    async fn transcode_pool_after_changes(
+        &self,
+        namespace: &str,
+        changes: &crate::type_libraries::TypeLibraryChanges,
+        branch: Option<&str>,
+    ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
         let files = self
             .type_libraries
-            .tenant_files(&*self.store, namespace, &[], branch)
+            .tenant_files_after_changes(&*self.store, namespace, changes, branch)
             .await?;
         trogon_atlas_core::transcode::TranscodePool::builtin()
             .and_then(|pool| pool.with_files(files))
@@ -2790,7 +2800,9 @@ impl EventModelServiceImpl {
         };
 
         let status = if delta.tombstone {
-            if !baseline_moved {
+            if delta.base.is_none() && theirs.is_none() {
+                pb::branch_diff_entry::Status::Converged
+            } else if !baseline_moved {
                 pb::branch_diff_entry::Status::Deleted
             } else if theirs.is_some() {
                 pb::branch_diff_entry::Status::ConflictEditDelete

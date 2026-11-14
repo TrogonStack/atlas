@@ -2737,3 +2737,932 @@ async fn glossary_reader_refreshes_cached_ownership_after_a_remote_move() {
         Code::NotFound
     );
 }
+
+fn tenant_review_library(namespace: &str) -> pb::Entity {
+    entity(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+        id: Some(id(namespace, "glossary.review", 1)),
+        title: "Glossary review notes".into(),
+        files: vec![pb::ProtoSourceFile {
+            path: "glossary/review/note.proto".into(),
+            content:
+                "syntax = \"proto3\"; package glossary.review; message Note { string text = 1; }"
+                    .into(),
+        }],
+        ..Default::default()
+    }))
+}
+
+fn tenant_review_candidate(source: &pb::PutEntityResponse) -> pb::Entity {
+    let mut proposed = candidate(source, "purchase", 1);
+    let mut payload = Vec::new();
+    prost::encoding::string::encode(1, &"A tenant review note.".to_owned(), &mut payload);
+    term_mut(&mut proposed).metadata.push(prost_types::Any {
+        type_url: "type.googleapis.com/glossary.review.Note".into(),
+        value: payload,
+    });
+    proposed
+}
+
+#[tokio::test]
+async fn tenant_metadata_reviews_remain_current_and_land_with_branch_only_descriptors() {
+    use prost::Message;
+
+    for branch in [None, Some("glossary-tenant-review")] {
+        let mut client = client().await;
+        let source = source(&mut client, "shop", "source", None).await;
+        if let Some(branch) = branch {
+            create_branch(&mut client, branch).await;
+        }
+        put(&mut client, tenant_review_library("shop"), "", branch).await;
+        let draft = put(&mut client, tenant_review_candidate(&source), "", branch).await;
+        let target = id("shop", "purchase", 1);
+        let before = read(&mut client, pb::EntityKind::Term, &target, branch).await;
+        let preview = review(&mut client, &target, &draft.etag, true, branch)
+            .await
+            .expect("admitted tenant metadata must be reviewable");
+        assert!(!preview.entry.unwrap().published);
+        assert_eq!(
+            read(&mut client, pb::EntityKind::Term, &target, branch).await,
+            before
+        );
+        let accepted = review(&mut client, &target, &draft.etag, false, branch)
+            .await
+            .unwrap();
+        assert!(accepted.entry.as_ref().unwrap().published);
+        assert_eq!(
+            term(accepted.entity.as_ref().unwrap()).metadata,
+            term(draft.entity.as_ref().unwrap()).metadata
+        );
+        let mut scheduled = accepted.entity.clone().unwrap();
+        term_mut(&mut scheduled)
+            .glossary
+            .as_mut()
+            .unwrap()
+            .next_review_on = Some(pb::CalendarDate {
+            value: "9999-12-31".into(),
+        });
+        let scheduled = put(&mut client, scheduled, &accepted.etag, branch).await;
+        let inspected = client
+            .get_glossary_term(request(
+                pb::GetGlossaryTermRequest {
+                    term: Some(pb::TermRef {
+                        id: Some(target.clone()),
+                    }),
+                },
+                READER,
+                branch,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(inspected.entry.unwrap().published);
+        let indexed = list(&mut client, selection("shop", false), "", READER, branch)
+            .await
+            .unwrap();
+        assert_eq!(indexed.entries.len(), 1);
+        assert!(indexed.entries[0].published);
+        let mut changed = scheduled.entity.clone().unwrap();
+        term_mut(&mut changed).metadata[0].value =
+            vec![10, 7, b'c', b'h', b'a', b'n', b'g', b'e', b'd'];
+        let error = client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(changed),
+                    if_match: scheduled.etag.clone(),
+                    ..Default::default()
+                },
+                ADMIN,
+                branch,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::FailedPrecondition);
+        if let Some(branch) = branch {
+            assert_eq!(
+                client
+                    .get_entity(request(
+                        pb::GetEntityRequest {
+                            kind: pb::EntityKind::TypeLibrary as i32,
+                            id: Some(id("shop", "glossary.review", 1))
+                        },
+                        ADMIN,
+                        None
+                    ))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::NotFound
+            );
+            for dry_run in [true, false] {
+                let merged = client
+                    .merge_branch(request(
+                        pb::MergeBranchRequest {
+                            name: branch.into(),
+                            dry_run,
+                            keep_branch: true,
+                            ..Default::default()
+                        },
+                        ADMIN,
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(
+                    merged.status,
+                    if dry_run {
+                        pb::merge_branch_response::Status::Validated as i32
+                    } else {
+                        pb::merge_branch_response::Status::Applied as i32
+                    },
+                    "{merged:?}"
+                );
+            }
+            assert!(detail(&mut client, &target).await.entry.unwrap().published);
+        }
+        let mut native = candidate(&source, "native-note", 1);
+        term_mut(&mut native).metadata.push(prost_types::Any {
+            type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.NoteAnnotation".into(),
+            value: pb::NoteAnnotation {
+                text: "A supported native review note.".into(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        });
+        let native = put(&mut client, native, "", None).await;
+        let accepted = review(
+            &mut client,
+            &id("shop", "native-note", 1),
+            &native.etag,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(accepted.entry.unwrap().published);
+    }
+}
+
+#[tokio::test]
+async fn tenant_metadata_descriptor_deletion_requires_retirement_review() {
+    for branch in [None, Some("glossary-tenant-retirement")] {
+        let mut client = client().await;
+        let source = source(&mut client, "shop", "source", None).await;
+        put(&mut client, tenant_review_library("shop"), "", None).await;
+        let draft = put(&mut client, tenant_review_candidate(&source), "", None).await;
+        let accepted = review(
+            &mut client,
+            &id("shop", "purchase", 1),
+            &draft.etag,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        if let Some(branch) = branch {
+            create_branch(&mut client, branch).await;
+        }
+        let library = id("shop", "glossary.review", 1);
+        let before = read(&mut client, pb::EntityKind::TypeLibrary, &library, branch).await;
+        for preview in [true, false] {
+            let result = client
+                .batch_mutate(request(
+                    pb::BatchMutateRequest {
+                        ops: vec![pb::BatchMutateOp {
+                            op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                                kind: pb::EntityKind::TypeLibrary as i32,
+                                id: Some(library.clone()),
+                                mode: pb::delete_entity_request::Mode::Force as i32,
+                                ..Default::default()
+                            })),
+                        }],
+                        validate_only: preview,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    branch,
+                ))
+                .await;
+            assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+            assert_eq!(
+                read(&mut client, pb::EntityKind::TypeLibrary, &library, branch).await,
+                before
+            );
+        }
+        let bulk = client
+            .delete_by_query(request(
+                pb::DeleteByQueryRequest {
+                    kind: pb::EntityKind::TypeLibrary as i32,
+                    namespace: "shop".into(),
+                    slug: "glossary.review".into(),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    max_deletes: 1,
+                    ..Default::default()
+                },
+                ADMIN,
+                branch,
+            ))
+            .await;
+        assert_eq!(bulk.unwrap_err().code(), Code::FailedPrecondition);
+        assert_eq!(
+            read(&mut client, pb::EntityKind::TypeLibrary, &library, branch).await,
+            before
+        );
+        for mode in [
+            pb::delete_entity_request::Mode::DryRun,
+            pb::delete_entity_request::Mode::Force,
+        ] {
+            let result = client
+                .delete_entity(request(
+                    pb::DeleteEntityRequest {
+                        kind: pb::EntityKind::TypeLibrary as i32,
+                        id: Some(library.clone()),
+                        mode: mode as i32,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    branch,
+                ))
+                .await;
+            assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+            assert_eq!(
+                read(&mut client, pb::EntityKind::TypeLibrary, &library, branch).await,
+                before
+            );
+        }
+        client
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::Document as i32,
+                    id: Some(id("shop", "source", 1)),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    ..Default::default()
+                },
+                ADMIN,
+                branch,
+            ))
+            .await
+            .unwrap();
+        let retired = client
+            .review_glossary_term(request(
+                pb::ReviewGlossaryTermRequest {
+                    term: Some(pb::TermRef {
+                        id: Some(id("shop", "purchase", 1)),
+                    }),
+                    if_match: accepted.etag.clone(),
+                    disposition: pb::GlossaryReviewDisposition::Rejected as i32,
+                    reason: "Retire this published vocabulary before removing its metadata type."
+                        .into(),
+                    ..Default::default()
+                },
+                ADMIN,
+                branch,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!retired.entry.unwrap().published);
+        client
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::TypeLibrary as i32,
+                    id: Some(library),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    ..Default::default()
+                },
+                ADMIN,
+                branch,
+            ))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn tenant_metadata_reviews_refuse_unknown_and_malformed_content_without_mutation() {
+    for (library_namespace, type_name, bytes) in [
+        ("elsewhere", "glossary.review.Note", vec![10, 1, b'a']),
+        ("shop", "glossary.review.Missing", vec![10, 1, b'a']),
+        ("shop", "glossary.review.Note", vec![10, 9, b'a']),
+    ] {
+        let mut client = client().await;
+        let source = source(&mut client, "shop", "source", None).await;
+        put(
+            &mut client,
+            tenant_review_library(library_namespace),
+            "",
+            None,
+        )
+        .await;
+        let mut candidate = tenant_review_candidate(&source);
+        term_mut(&mut candidate).metadata[0] = prost_types::Any {
+            type_url: format!("type.googleapis.com/{type_name}"),
+            value: bytes,
+        };
+        let draft = put(&mut client, candidate, "", None).await;
+        let target = id("shop", "purchase", 1);
+        let before = read(&mut client, pb::EntityKind::Term, &target, None).await;
+        for preview in [true, false] {
+            let error = review(&mut client, &target, &draft.etag, preview, None)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(
+                read(&mut client, pb::EntityKind::Term, &target, None).await,
+                before
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tenant_metadata_review_rechecks_descriptors_before_persisting_authority() {
+    use std::sync::atomic::Ordering;
+
+    use trogon_atlas_store::{Store, WriteContext};
+    let store = Arc::new(observed_glossary_store::ObservedGlossaryStore::new(
+        trogon_atlas_testsupport::shared().await.store().await,
+    ));
+    let mut client = client_with_store(store.clone()).await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let library = put(&mut client, tenant_review_library("shop"), "", None).await;
+    let draft = put(&mut client, tenant_review_candidate(&source), "", None).await;
+    let target = id("shop", "purchase", 1);
+    let before = read(&mut client, pb::EntityKind::Term, &target, None).await;
+    store.pause_libraries.store(true, Ordering::SeqCst);
+    let mut reviewer = client.clone();
+    let checking =
+        tokio::spawn(async move { review(&mut reviewer, &target, &draft.etag, false, None).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), store.reached.notified())
+        .await
+        .expect("review must load its initial descriptor view");
+    let mut renamed = library.entity.unwrap();
+    let Some(pb::entity::Kind::TypeLibrary(value)) = &mut renamed.kind else {
+        unreachable!()
+    };
+    value.files[0].content =
+        "syntax = \"proto3\"; package glossary.review; message Note { string replacement = 1; }"
+            .into();
+    store
+        .inner
+        .update(
+            pb::EntityKind::TypeLibrary,
+            &renamed,
+            &library.etag,
+            false,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    store.release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), checking)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.is_err(),
+        "descriptor changes cannot mint stale review authority"
+    );
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::Term,
+            &id("shop", "purchase", 1),
+            None
+        )
+        .await,
+        before
+    );
+}
+
+#[tokio::test]
+async fn tenant_metadata_library_overlays_honor_the_final_ordered_operation() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let library = put(&mut client, tenant_review_library("shop"), "", None).await;
+    put(&mut client, entity(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+        id: Some(id("shop", "glossary.alias", 1)), title: "Glossary aliases".into(),
+        files: vec![pb::ProtoSourceFile { path: "glossary/alias/alias.proto".into(), content: "syntax = \"proto3\"; package glossary.alias; import \"glossary/review/note.proto\"; message Alias { glossary.review.Note note = 1; }".into() }],
+        dependencies: vec![pb::TypeLibraryRef { id: Some(id("shop", "glossary.review", 1)) }], ..Default::default()
+    })), "", None).await;
+    let draft = put(&mut client, tenant_review_candidate(&source), "", None).await;
+    review(
+        &mut client,
+        &id("shop", "purchase", 1),
+        &draft.etag,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    let deletion = pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::TypeLibrary as i32,
+            id: Some(id("shop", "glossary.review", 1)),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        })),
+    };
+    let restoration = pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+            entity: library.entity.clone(),
+            ..Default::default()
+        })),
+    };
+    for preview in [true, false] {
+        let result = client
+            .batch_mutate(request(
+                pb::BatchMutateRequest {
+                    ops: vec![deletion.clone(), restoration.clone()],
+                    validate_only: preview,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            result.status,
+            if preview {
+                pb::batch_mutate_response::Status::Validated as i32
+            } else {
+                pb::batch_mutate_response::Status::Applied as i32
+            },
+            "{result:?}"
+        );
+        assert!(
+            detail(&mut client, &id("shop", "purchase", 1))
+                .await
+                .entry
+                .unwrap()
+                .published
+        );
+    }
+    let before = read(
+        &mut client,
+        pb::EntityKind::TypeLibrary,
+        &id("shop", "glossary.review", 1),
+        None,
+    )
+    .await;
+    let result = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: vec![restoration, deletion],
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await;
+    assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+    assert_eq!(
+        read(
+            &mut client,
+            pb::EntityKind::TypeLibrary,
+            &id("shop", "glossary.review", 1),
+            None
+        )
+        .await,
+        before
+    );
+}
+
+#[tokio::test]
+async fn tenant_metadata_catalog_reuses_namespace_pools_and_native_catalog_needs_none() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(observed_glossary_store::ObservedGlossaryStore::new(
+        trogon_atlas_testsupport::shared().await.store().await,
+    ));
+    let mut client = client_with_store(store.clone()).await;
+    let tenant_source = source(&mut client, "shop", "source", None).await;
+    put(&mut client, tenant_review_library("shop"), "", None).await;
+    for slug in ["purchase", "order"] {
+        let mut proposed = tenant_review_candidate(&tenant_source);
+        term_mut(&mut proposed).id.as_mut().unwrap().slug = slug.into();
+        let draft = put(&mut client, proposed, "", None).await;
+        review(&mut client, &id("shop", slug, 1), &draft.etag, false, None)
+            .await
+            .unwrap();
+    }
+    let plain_source = source(&mut client, "plain", "source", None).await;
+    let draft = put(
+        &mut client,
+        candidate(&plain_source, "purchase", 1),
+        "",
+        None,
+    )
+    .await;
+    review(
+        &mut client,
+        &id("plain", "purchase", 1),
+        &draft.etag,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    store.library_reads.store(0, Ordering::SeqCst);
+    let page = list(&mut client, selection("shop", false), "", READER, None)
+        .await
+        .unwrap();
+    assert_eq!(page.entries.len(), 1);
+    assert_ne!(page.next_page_token, "");
+    assert_eq!(store.library_reads.load(Ordering::SeqCst), 1);
+    store.library_reads.store(0, Ordering::SeqCst);
+    list(&mut client, selection("plain", false), "", READER, None)
+        .await
+        .unwrap();
+    assert_eq!(store.library_reads.load(Ordering::SeqCst), 0);
+    let mut unrelated = tenant_review_library("shop");
+    let Some(pb::entity::Kind::TypeLibrary(library)) = &mut unrelated.kind else {
+        unreachable!()
+    };
+    library.id.as_mut().unwrap().slug = "glossary.extra".into();
+    library.files[0].path = "glossary/extra/note.proto".into();
+    library.files[0].content = library.files[0]
+        .content
+        .replace("glossary.review", "glossary.extra");
+    put(&mut client, unrelated, "", None).await;
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::TypeLibrary as i32,
+                id: Some(id("shop", "glossary.extra", 1)),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        detail(&mut client, &id("shop", "purchase", 1))
+            .await
+            .entry
+            .unwrap()
+            .published
+    );
+}
+
+#[tokio::test]
+async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanup() {
+    let mut client = client().await;
+    let source = source(&mut client, "shop", "source", None).await;
+    let branch = "glossary-retired-library";
+    create_branch(&mut client, branch).await;
+    put(&mut client, tenant_review_library("shop"), "", Some(branch)).await;
+    let draft = put(
+        &mut client,
+        tenant_review_candidate(&source),
+        "",
+        Some(branch),
+    )
+    .await;
+    let accepted = review(
+        &mut client,
+        &id("shop", "purchase", 1),
+        &draft.etag,
+        false,
+        Some(branch),
+    )
+    .await
+    .unwrap();
+    client
+        .review_glossary_term(request(
+            pb::ReviewGlossaryTermRequest {
+                term: Some(pb::TermRef {
+                    id: Some(id("shop", "purchase", 1)),
+                }),
+                if_match: accepted.etag,
+                disposition: pb::GlossaryReviewDisposition::Rejected as i32,
+                reason: "Retire this branch-only vocabulary.".into(),
+                ..Default::default()
+            },
+            ADMIN,
+            Some(branch),
+        ))
+        .await
+        .unwrap();
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::TypeLibrary as i32,
+                id: Some(id("shop", "glossary.review", 1)),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            Some(branch),
+        ))
+        .await
+        .unwrap();
+    for dry_run in [true, false] {
+        let result = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
+                    name: branch.into(),
+                    dry_run,
+                    keep_branch: true,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await;
+        assert_eq!(result.unwrap_err().code(), Code::InvalidArgument);
+        assert_eq!(
+            client
+                .get_entity(request(
+                    pb::GetEntityRequest {
+                        kind: pb::EntityKind::Term as i32,
+                        id: Some(id("shop", "purchase", 1))
+                    },
+                    ADMIN,
+                    None
+                ))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::NotFound
+        );
+    }
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Term as i32,
+                id: Some(id("shop", "purchase", 1)),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            Some(branch),
+        ))
+        .await
+        .unwrap();
+    client
+        .merge_branch(request(
+            pb::MergeBranchRequest {
+                name: branch.into(),
+                keep_branch: true,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn tenant_metadata_descriptor_users_share_one_raw_branch_budget() {
+    use prost::Message;
+    use trogon_atlas_store::{
+        store::ListFilter, EntityByteBudget, Store, StoreError, WriteContext,
+    };
+    let store = Arc::new(observed_glossary_store::ObservedGlossaryStore::new(
+        trogon_atlas_testsupport::shared().await.store().await,
+    ));
+    let mut client = client_with_store(store.clone()).await;
+    let namespaces = ["alpha".to_owned(), "beta".to_owned()];
+    let mut libraries = Vec::new();
+    let mut originals = Vec::new();
+    for namespace in &namespaces {
+        libraries.push(put(&mut client, tenant_review_library(namespace), "", None).await);
+        for index in 0..26 {
+            let original = entity(pb::entity::Kind::Term(pb::Term {
+                id: Some(id(namespace, &format!("word-{index}"), 1)),
+                title: "Controlled vocabulary".into(),
+                doc: "b".repeat(262_000),
+                ..Default::default()
+            }));
+            originals.push(
+                store
+                    .inner
+                    .create(pb::EntityKind::Term, &original, WriteContext::baseline())
+                    .await
+                    .unwrap()
+                    .entity,
+            );
+        }
+    }
+    let branch = "glossary-raw-budget";
+    create_branch(&mut client, branch).await;
+    for mut changed in originals {
+        term_mut(&mut changed).doc = "a".repeat(262_000);
+        store
+            .inner
+            .put(
+                pb::EntityKind::Term,
+                &changed,
+                false,
+                WriteContext::branch(branch),
+            )
+            .await
+            .unwrap();
+    }
+    let budget = 32 * 1024 * 1024;
+    let mut logical_bytes = 0;
+    for namespace in &namespaces {
+        let rows = store
+            .inner
+            .list_bounded(
+                ListFilter {
+                    kinds: &[pb::EntityKind::Term],
+                    namespaces: std::slice::from_ref(namespace),
+                    ..Default::default()
+                },
+                Some(5_001),
+                Some(branch),
+                EntityByteBudget::new(budget),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 26);
+        logical_bytes += rows
+            .iter()
+            .map(|row| row.entity.encoded_len())
+            .sum::<usize>();
+    }
+    assert!(logical_bytes < budget);
+    assert!(matches!(
+        store
+            .inner
+            .list_bounded(
+                ListFilter {
+                    kinds: &[pb::EntityKind::Term],
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(5_001),
+                Some(branch),
+                EntityByteBudget::new(budget)
+            )
+            .await,
+        Err(StoreError::ResourceExhausted(_))
+    ));
+    let ops = libraries
+        .iter()
+        .map(|library| {
+            let mut changed = library.entity.clone().unwrap();
+            let Some(pb::entity::Kind::TypeLibrary(value)) = &mut changed.kind else {
+                unreachable!()
+            };
+            value.title.push_str(" updated");
+            pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(changed),
+                    if_match: library.etag.clone(),
+                    ..Default::default()
+                })),
+            }
+        })
+        .collect::<Vec<_>>();
+    for validate_only in [true, false] {
+        let result = client
+            .batch_mutate(request(
+                pb::BatchMutateRequest {
+                    ops: ops.clone(),
+                    validate_only,
+                    ..Default::default()
+                },
+                ADMIN,
+                Some(branch),
+            ))
+            .await;
+        assert_eq!(result.unwrap_err().code(), Code::ResourceExhausted);
+        for (namespace, library) in namespaces.iter().zip(&libraries) {
+            assert_eq!(
+                read(
+                    &mut client,
+                    pb::EntityKind::TypeLibrary,
+                    &id(namespace, "glossary.review", 1),
+                    Some(branch)
+                )
+                .await
+                .entity,
+                library.entity
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn branch_only_tombstones_converge_without_deleting_independent_baseline_entities() {
+    for foreign_baseline in [false, true] {
+        let mut client = client().await;
+        let branch = "glossary-empty-cleanup";
+        create_branch(&mut client, branch).await;
+        let target = id("shop", "temporary", 1);
+        put(
+            &mut client,
+            entity(pb::entity::Kind::Event(pb::Event {
+                id: Some(target.clone()),
+                title: "Temporary branch fact".into(),
+                ..Default::default()
+            })),
+            "",
+            Some(branch),
+        )
+        .await;
+        client
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(target.clone()),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    ..Default::default()
+                },
+                ADMIN,
+                Some(branch),
+            ))
+            .await
+            .unwrap();
+        let independent = if foreign_baseline {
+            Some(
+                put(
+                    &mut client,
+                    entity(pb::entity::Kind::Event(pb::Event {
+                        id: Some(target.clone()),
+                        title: "Independent baseline fact".into(),
+                        ..Default::default()
+                    })),
+                    "",
+                    None,
+                )
+                .await
+                .entity
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+        let diff = client
+            .diff_branch(request(
+                pb::DiffBranchRequest {
+                    name: branch.into(),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(diff.entries.len(), 1);
+        assert_eq!(
+            diff.entries[0].status,
+            if foreign_baseline {
+                pb::branch_diff_entry::Status::ConflictEditDelete as i32
+            } else {
+                pb::branch_diff_entry::Status::Converged as i32
+            }
+        );
+        for dry_run in [true, false] {
+            let merged = client
+                .merge_branch(request(
+                    pb::MergeBranchRequest {
+                        name: branch.into(),
+                        dry_run,
+                        keep_branch: true,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                merged.status,
+                if foreign_baseline {
+                    pb::merge_branch_response::Status::Conflicts as i32
+                } else if dry_run {
+                    pb::merge_branch_response::Status::Validated as i32
+                } else {
+                    pb::merge_branch_response::Status::Applied as i32
+                }
+            );
+            let current = client
+                .get_entity(request(
+                    pb::GetEntityRequest {
+                        kind: pb::EntityKind::Event as i32,
+                        id: Some(target.clone()),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await;
+            if let Some(independent) = &independent {
+                assert_eq!(
+                    current.unwrap().into_inner().entity.as_ref(),
+                    Some(independent)
+                );
+            } else {
+                assert_eq!(current.unwrap_err().code(), Code::NotFound);
+            }
+        }
+    }
+}
