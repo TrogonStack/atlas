@@ -942,7 +942,7 @@ impl EventModelServiceImpl {
 
     /// Branch-aware variant of `snapshot()`. When `branch` is `None`,
     /// delegates to the cached baseline `snapshot()` unchanged. When
-    /// `branch` is `Some`, always issues a fresh `graph::load_all` scoped to
+    /// `branch` is `Some`, always issues a fresh load scoped to
     /// that branch's merged view and never touches `snapshot_cache` --
     /// caching a branch's merged view alongside the baseline cache would
     /// require per-branch cache keys and per-branch invalidation, which
@@ -953,18 +953,7 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<Arc<Vec<StoredEntity>>, Status> {
-        let Some(branch) = branch else {
-            return self.snapshot(vis).await;
-        };
-        // A branch that was never created has no delta rows, and the merged
-        // load then returns baseline. Existence is checked here so every
-        // snapshot read shares that refusal.
-        self.require_branch(branch).await?;
-        use tracing::Instrument as _;
-        let result = graph::load_all(&self.store, Some(branch))
-            .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
-            .await?;
-        self.narrow(Arc::new(result.entities), vis).await
+        Ok(self.snapshot_with_truncation(branch, vis).await?.0)
     }
 
     /// A `ClassifyImpact` input read from the snapshot the answer uses.
@@ -1359,13 +1348,9 @@ impl EventModelServiceImpl {
         }
     }
 
-    /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
-    /// entity cap.
-    ///
-    /// `snapshot_for` drops the truncation flag of the load it read. Callers that
-    /// must report completeness rather than merely tolerate it -- the
-    /// snapshot id names a *state*, and naming a partial state as if it
-    /// were whole is the failure mode -- need both branches to answer.
+    /// [`snapshot_for`](Self::snapshot_for) plus whether the load behind it
+    /// was truncated. Baseline entities and their flag come from the same
+    /// cache entry; branch entities and their flag come from the same load.
     async fn snapshot_with_truncation(
         &self,
         branch: Option<&str>,
@@ -1376,12 +1361,15 @@ impl EventModelServiceImpl {
             let all = self.narrow_baseline(snap.entities, vis).await?;
             return Ok((all, snap.truncated));
         };
+        // A branch that was never created must not silently fall back to the
+        // baseline. Keep the same existence check used by other branch reads.
+        self.require_branch(branch).await?;
         use tracing::Instrument as _;
-        let result = graph::load_all(&self.store, Some(branch))
+        let loaded = graph::LoadedSnapshot::load(&self.store, self.snapshot_cap, Some(branch))
             .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
             .await?;
-        let entities = self.narrow(Arc::new(result.entities), vis).await?;
-        Ok((entities, result.truncated))
+        let entities = self.narrow(loaded.entities, vis).await?;
+        Ok((entities, loaded.coverage.truncated))
     }
 
     /// The cached baseline, reloaded first when this process holds the
@@ -1889,8 +1877,8 @@ impl EventModelServiceImpl {
         self
     }
 
-    /// Lower the baseline snapshot's entity cap so the truncation boundary
-    /// can be reached with a handful of entities in tests.
+    /// Lower the entity cap for baseline and branch snapshots so the
+    /// truncation boundary can be reached with a handful of entities in tests.
     #[must_use]
     pub fn with_snapshot_cap(mut self, cap: usize) -> Self {
         self.snapshot_cap = cap;
