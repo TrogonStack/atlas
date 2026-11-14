@@ -118,3 +118,14 @@ describe('buildProjectIssueIndex', () => {
     expect(buildProjectIssueIndex([undefined, {}, { reports: [{}] }]).all).toEqual([]);
   });
 });
+
+describe('acknowledged findings', () => {
+  it('reads the acknowledged flag and defaults to false', () => {
+    const index = buildIssueIndex([
+      { ...RM_EVENT_NOT_PROJECTED, code: 'DECLARED', acknowledged: true },
+      RM_EVENT_NOT_PROJECTED,
+    ]);
+    const byCode = Object.fromEntries(index.all.map((i) => [i.code, i.acknowledged]));
+    expect(byCode).toEqual({ DECLARED: true, RM_EVENT_NOT_PROJECTED: false });
+  });
+});

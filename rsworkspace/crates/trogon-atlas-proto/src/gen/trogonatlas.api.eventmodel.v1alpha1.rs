@@ -443,6 +443,10 @@ pub struct ValidationIssue {
     /// `message`; ValidationRule.evidence_roles says which rules carry it.
     #[prost(message, repeated, tag="9")]
     pub evidence: ::prost::alloc::vec::Vec<ValidationEvidence>,
+    /// True when the author declared the finding intentional, so there is
+    /// nothing to repair. Clients show it without a fix action.
+    #[prost(bool, tag="10")]
+    pub acknowledged: bool,
 }
 /// Nested message and enum types in `ValidationIssue`.
 pub mod validation_issue {
