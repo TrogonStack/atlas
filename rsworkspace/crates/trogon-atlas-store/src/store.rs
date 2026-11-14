@@ -321,6 +321,22 @@ impl<'a> WriteContext<'a> {
     }
 
     #[must_use]
+    pub(crate) fn without_changeset(self) -> Self {
+        Self {
+            changeset: None,
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn without_branch(self) -> Self {
+        Self {
+            branch: None,
+            ..self
+        }
+    }
+
+    #[must_use]
     pub fn with_branch_merge_base(mut self, base: &'a Entity) -> Self {
         self.connection_admission = ConnectionAdmission::BranchMerge { base };
         self
@@ -695,6 +711,14 @@ pub struct ChangesetPage<'a> {
 /// management, and `docs/explanation/branching.md` for the full design.
 #[async_trait]
 pub trait Store: Send + Sync {
+    /// A leader-observed revision of every model input, unavailable while a
+    /// recoverable write is in flight. Equal markers bracket a stable read.
+    async fn read_marker(&self) -> StoreResult<StoreReadMarker> {
+        Err(StoreError::Unavailable(
+            "consistent read markers are unsupported by this store".into(),
+        ))
+    }
+
     fn artifact_publication_authority(
         &self,
     ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
@@ -809,6 +833,24 @@ pub trait Store: Send + Sync {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
+
+    /// List with a cumulative stored-payload byte budget enforced before decoding.
+    ///
+    /// The budget covers scanned baseline Entity payloads and full branch delta
+    /// payloads before latest-version selection or result truncation. Branch
+    /// payloads include retained base/ours snapshots, tombstones and protobuf
+    /// framing. Return `ResourceExhausted` before decoding an over-budget payload.
+    async fn list_bounded(
+        &self,
+        _filter: ListFilter<'_>,
+        _limit: Option<usize>,
+        _branch: Option<&str>,
+        _budget: EntityByteBudget,
+    ) -> StoreResult<Vec<StoredEntity>> {
+        Err(StoreError::Unavailable(
+            "byte-bounded entity listing is unsupported by this store".into(),
+        ))
+    }
 
     /// Requested targets explicitly referenced by entities in the merged view.
     ///
@@ -1583,6 +1625,46 @@ pub struct ListFilter<'a> {
     /// identity out of the listing.
     pub slug: Option<&'a str>,
     pub latest_versions_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityByteBudget {
+    max_encoded_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BucketReadRevision {
+    pub(crate) incarnation: String,
+    pub(crate) sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreNamespaceMarker(pub(crate) BucketReadRevision);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreReadMarker {
+    pub(crate) revisions: Vec<BucketReadRevision>,
+    pub(crate) namespace: StoreNamespaceMarker,
+    pub(crate) writer: Option<(String, u64)>,
+}
+
+impl StoreReadMarker {
+    #[must_use]
+    pub fn namespace_marker(&self) -> &StoreNamespaceMarker {
+        &self.namespace
+    }
+}
+
+impl EntityByteBudget {
+    #[must_use]
+    pub const fn new(max_encoded_bytes: usize) -> Self {
+        Self { max_encoded_bytes }
+    }
+
+    #[must_use]
+    pub const fn max_encoded_bytes(self) -> usize {
+        self.max_encoded_bytes
+    }
 }
 
 // Historical home for `stamp_system`. The policy lives in

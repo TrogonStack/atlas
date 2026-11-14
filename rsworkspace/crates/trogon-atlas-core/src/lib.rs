@@ -31,6 +31,7 @@ mod decision_document_refs;
 pub mod design_topology;
 mod design_topology_refs;
 pub mod document_catalog_context;
+pub mod glossary;
 pub mod id_component;
 pub mod message_claims;
 pub mod namespace;

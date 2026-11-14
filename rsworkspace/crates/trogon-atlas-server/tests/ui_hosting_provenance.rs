@@ -74,7 +74,15 @@ fn hosting_provenance_retains_distinct_occurrences_across_public_graph_surfaces(
     let index = ReverseIndex::build(&rows).unwrap();
     let incoming = index.incoming(pb::EntityKind::Ui, &target);
     assert_eq!(incoming, refs.as_slice());
-    let nodes = impact(&rows, pb::EntityKind::Component, &id("portal"), 1, false).unwrap();
+    let nodes = impact(
+        &rows,
+        pb::EntityKind::Component,
+        &id("portal"),
+        1,
+        false,
+        false,
+    )
+    .unwrap();
     let selected = nodes
         .iter()
         .find(|node| {

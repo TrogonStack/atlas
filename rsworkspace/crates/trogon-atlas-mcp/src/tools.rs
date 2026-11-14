@@ -51,6 +51,11 @@ pub struct ListEntitiesParams {
     #[schemars(description = "Restrict by entity kind (optional)")]
     pub kind: Option<String>,
     pub namespace: Option<String>,
+    #[schemars(
+        description = "Return only the highest stored version per identity. This does not imply review or publication. Defaults to false."
+    )]
+    #[serde(default)]
+    pub latest_versions_only: bool,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -132,6 +137,8 @@ struct ImpactParamsDe {
     max_depth: u32,
     #[serde(default)]
     filter_kinds: Option<Vec<String>>,
+    #[serde(default)]
+    include_containers: bool,
 }
 
 #[derive(Debug, schemars::JsonSchema)]
@@ -148,6 +155,11 @@ pub struct ImpactParams {
     #[serde(default)]
     pub max_depth: u32,
     pub filter_kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Also walk down through every member of event models and components reached. Default false, so unrelated sibling members are not reported."
+    )]
+    #[serde(default)]
+    pub include_containers: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -177,6 +189,7 @@ impl<'de> Deserialize<'de> for ImpactParams {
             version: raw.version,
             max_depth: raw.max_depth,
             filter_kinds: raw.filter_kinds,
+            include_containers: raw.include_containers,
         })
     }
 }
@@ -248,6 +261,10 @@ pub struct SearchParams {
     #[schemars(description = "Full-text search query. Maximum 2048 bytes.")]
     pub q: String,
     pub kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Restrict search to these exact namespaces. Omit or pass an empty list for every namespace visible to the caller."
+    )]
+    pub namespaces: Option<Vec<String>>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -1354,6 +1371,15 @@ pub struct ResponsibilityQueryParams {
 pub struct CatalogQueryParams {
     #[schemars(
         description = "Exact native query request in proto3 JSON. Preserve selector alternatives, UID, local identity, digest pin presence and checked scope. No inferred historical hydration."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GlossaryRequestParams {
+    #[schemars(
+        description = "Exact glossary RPC request in proto3 JSON. Preserve context selection, exact versions and evidence pins. Review requires an authenticated User writer, current ifMatch, disposition and reason; review actor/time/digest are server-owned."
     )]
     pub request_json: JsonPayload,
 }

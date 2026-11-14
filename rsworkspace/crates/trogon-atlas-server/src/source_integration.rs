@@ -1028,7 +1028,7 @@ fn native_relationships_only(
     let has_native_authoring = |entity: &pb::Entity| -> Result<bool, Status> {
         Ok(
             matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
-                || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some())
+                || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some() || term.glossary.is_some())
                 || matches!(&entity.kind, Some(pb::entity::Kind::SystemGroup(v)) if !v.members.is_empty() || !v.relationships.is_empty() || !v.actors.is_empty())
                 || matches!(&entity.kind, Some(pb::entity::Kind::Domain(v)) if !v.members.is_empty())
                 || !trogon_atlas_core::architectural_relationships::relationships(entity)

@@ -924,6 +924,7 @@ async fn fixture_impact_from_order_placed() {
             filter_kinds: Vec::new(),
             page_size: 0,
             page_token: String::new(),
+            include_containers: false,
         }))
         .await
         .unwrap()

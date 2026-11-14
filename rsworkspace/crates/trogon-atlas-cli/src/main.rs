@@ -10,6 +10,8 @@ use trogon_atlas_client::{
 };
 use trogon_atlas_proto as pb;
 
+mod glossary;
+
 /// kubectl-style CLI for the trogon-atlas server: declarative YAML manifests
 /// in, idempotent BatchMutate out.
 #[derive(Parser)]
@@ -104,6 +106,11 @@ enum ArtifactCmd {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Review and inspect contextual vocabulary, source evidence and usage policy.
+    Glossary {
+        #[command(subcommand)]
+        command: glossary::GlossaryCmd,
+    },
     /// Upload and retrieve files using the server-configured object storage.
     Artifacts {
         #[command(subcommand)]
@@ -1356,6 +1363,30 @@ async fn run(
     // Local validation (paths, flags, kind parse) runs before connect so an
     // unreachable --endpoint cannot mask authoring errors.
     match cmd {
+        Cmd::Glossary { command } => {
+            let command = command.prepare()?;
+            let mut client = match command.mutation_preview() {
+                Some(validate_only) => {
+                    connect_mutating_client(
+                        &endpoint,
+                        auth_token.as_deref(),
+                        rpc_timeout_secs,
+                        branch,
+                        validate_only,
+                    )
+                    .await?
+                }
+                None => {
+                    connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
+                        .await?
+                }
+            };
+            let result = command.execute(&mut client).await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::Artifacts { command } => {
             if let ArtifactCmd::Upload { ref file, .. } = command {
                 let metadata = std::fs::symlink_metadata(file).map_err(|_| {

@@ -419,6 +419,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
                 ("slug", serde_json::json!("placed")),
                 ("version", serde_json::json!(1)),
                 ("max_depth", serde_json::json!(5)),
+                ("include_containers", serde_json::json!(true)),
             ])),
         )
         .await

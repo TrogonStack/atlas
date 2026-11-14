@@ -1,4 +1,4 @@
-//! Recovery of baseline batches that did not finish.
+//! Recovery of baseline and branch mutations that did not finish.
 //!
 //! A batch is never transactional on a backend without multi-key
 //! transactions. It is recoverable instead: before its first entity write
