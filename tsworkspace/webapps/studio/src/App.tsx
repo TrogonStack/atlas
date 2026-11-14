@@ -14,15 +14,19 @@ import { isSafeNamespace } from '../shared/safe-namespace.mjs';
 const OverviewPage = lazy(() => import('@/components/OverviewPage').then((m) => ({ default: m.OverviewPage })));
 const EventModelPage = lazy(() => import('@/components/EventModelPage').then((m) => ({ default: m.EventModelPage })));
 const NamespacesPage = lazy(() => import('@/components/NamespacesPage').then((m) => ({ default: m.NamespacesPage })));
+const GlossaryPage = lazy(() => import('@/components/GlossaryPage').then((m) => ({ default: m.GlossaryPage })));
 
 interface Route {
-  kind: 'overview' | 'event-model' | 'namespaces';
+  kind: 'overview' | 'event-model' | 'namespaces' | 'glossary';
   namespace?: string;
   slug?: string;
 }
 
 function parseLocation(): Route {
   const path = window.location.pathname;
+  if (/^\/glossary\/?$/.test(path)) {
+    return { kind: 'glossary' };
+  }
   if (/^\/namespaces\/?$/.test(path)) {
     return { kind: 'namespaces' };
   }
@@ -162,7 +166,9 @@ export default function App() {
     <ErrorBoundary fallback={(props) => <ChunkLoadFallback {...props} />}>
       {authFailure !== null ? <CredentialPrompt message={authFailure} onDismiss={() => setAuthFailure(null)} /> : null}
       <Suspense fallback={<RouteLoading />}>
-        {route.kind === 'namespaces' ? (
+        {route.kind === 'glossary' ? (
+          <GlossaryPage />
+        ) : route.kind === 'namespaces' ? (
           <NamespacesPage />
         ) : route.kind === 'event-model' && route.namespace && route.slug ? (
           <EventModelPage namespace={route.namespace} slug={route.slug} />

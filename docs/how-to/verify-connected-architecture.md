@@ -106,8 +106,9 @@ Use `?focus=data_product:<namespace>/receipts`,
 `?focus=document:<namespace>/delivery-note` and
 `?focus=channel:<namespace>/delivery` to inspect those resources. Confirm the
 receipt title is `Source receipt` and its local documentation remains intact.
-Inspect exact port responsibility, accepted rationale, document content and
-anchor, repeated observation selections and source run records.
+Inspect accepted rationale, document content and anchor, and repeated observation
+selections in Studio. Use exact CLI/MCP queries for port responsibility and source
+run records; these controls are not part of entity Details.
 
 Capture screenshots, rendered text and API/console diagnostics with the exact
 model identity and candidate build evidence. The fixture intentionally exposes

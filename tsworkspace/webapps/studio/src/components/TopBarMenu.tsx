@@ -1,12 +1,24 @@
-import { AlertCircle, Check, Download, EllipsisVertical, LoaderCircle, type LucideIcon, RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import {
+  AlertCircle,
+  Check,
+  Download,
+  EllipsisVertical,
+  Eye,
+  LoaderCircle,
+  type LucideIcon,
+  RefreshCw,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FeaturePreviewDialog } from '@/components/FeaturePreviewDialog';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import type { StudioFeatureFlag, StudioFeatureFlags } from '@/lib/feature-flags';
 import { cn } from '@/lib/utils';
 
 type ExportState = { kind: 'idle' | 'working' | 'done' } | { kind: 'failed'; message: string };
@@ -22,12 +34,19 @@ const TRIGGER: Record<ExportState['kind'], { Icon: LucideIcon; title: string; to
 export function TopBarMenu({
   onRefresh,
   onExportHtml,
+  featureFlags,
+  onFeatureFlagChange,
 }: {
   onRefresh: () => void;
   /** Saves the board as one HTML file. Omit to hide the entry. */
   onExportHtml?: () => Promise<void>;
+  featureFlags?: StudioFeatureFlags;
+  onFeatureFlagChange?: (feature: StudioFeatureFlag, enabled: boolean) => void;
 }) {
   const [exportState, setExportState] = useState<ExportState>({ kind: 'idle' });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [featurePreviewOpen, setFeaturePreviewOpen] = useState(false);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
   const { Icon, title, tone, resetAfterMs } = TRIGGER[exportState.kind];
   useEffect(() => {
     if (resetAfterMs === undefined) return;
@@ -46,11 +65,14 @@ export function TopBarMenu({
           {exportState.message}
         </span>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label="More actions" title={title} />}>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger
+          ref={menuTrigger}
+          render={<Button variant="outline" size="icon" aria-label="More actions" title={title} />}
+        >
           <Icon className={cn(tone)} />
         </DropdownMenuTrigger>
-        <DropdownMenuContent>
+        <DropdownMenuContent finalFocus={featurePreviewOpen ? false : menuTrigger}>
           <DropdownMenuItem onClick={onRefresh}>
             <RefreshCw />
             Refresh
@@ -73,8 +95,31 @@ export function TopBarMenu({
               Export HTML
             </DropdownMenuItem>
           ) : null}
+          {featureFlags && onFeatureFlagChange ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  setFeaturePreviewOpen(true);
+                }}
+              >
+                <Eye />
+                Feature Preview
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      {featureFlags && onFeatureFlagChange ? (
+        <FeaturePreviewDialog
+          open={featurePreviewOpen}
+          onOpenChange={setFeaturePreviewOpen}
+          featureFlags={featureFlags}
+          onFeatureFlagChange={onFeatureFlagChange}
+          finalFocus={menuTrigger}
+        />
+      ) : null}
     </div>
   );
 }

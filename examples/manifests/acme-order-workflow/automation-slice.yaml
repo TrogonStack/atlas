@@ -1,0 +1,211 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: tax-calculator
+  namespace: acme-order-workflow
+spec:
+  doc: An order waits for tax.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: calculate-tax
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-order-workflow
+        slug: tax-worker
+        version: '1'
+  scenarios:
+  - doc: The order is waiting for tax.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: calculate-tax
+          version: '1'
+    title: Tax is due
+    whenDoc: The order row says tax is next.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  title: Tax step
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: payment-capturer
+  namespace: acme-order-workflow
+spec:
+  doc: An order waits for payment.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: capture-payment
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-order-workflow
+        slug: payment-worker
+        version: '1'
+  scenarios:
+  - doc: Tax is done.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: capture-payment
+          version: '1'
+    title: Payment is due
+    whenDoc: The order row says payment is next.
+  - doc: A decided payment is not tried again.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: done
+    noCommand:
+      doc: A decided payment is not tried again.
+    title: Payment already decided
+    whenDoc: The order row says payment.captured or payment.failed.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  title: Payment step
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: shipper
+  namespace: acme-order-workflow
+spec:
+  doc: A paid order waits for shipping.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: ship-order
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-order-workflow
+        slug: shipping-worker
+        version: '1'
+  scenarios:
+  - doc: Payment was captured.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: ship-order
+          version: '1'
+    title: Shipping is due
+    whenDoc: The order row says payment.captured.
+  - doc: Given payment.failed, the shipper does not run.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: failed
+    noCommand:
+      doc: Given payment.failed, the shipper does not run.
+    title: Payment failed
+    whenDoc: The order row says payment.failed.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  title: Shipping step
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: order-canceller
+  namespace: acme-order-workflow
+spec:
+  doc: An order with a failed payment waits for cancellation.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-order-workflow
+        slug: cancel-order
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-order-workflow
+        slug: cancellation-worker
+        version: '1'
+  scenarios:
+  - doc: Payment failed.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-order-workflow
+          slug: cancel-order
+          version: '1'
+    title: Cancellation is due
+    whenDoc: The order row says payment.failed.
+  - doc: Given payment.captured, nothing is cancelled.
+    given:
+    - readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+    id: captured
+    noCommand:
+      doc: Given payment.captured, nothing is cancelled.
+    title: Payment captured
+    whenDoc: The order row says payment.captured.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-order-workflow
+        slug: order-progress
+        version: '1'
+  title: Cancellation step

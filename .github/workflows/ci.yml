@@ -22,6 +22,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   runs-on:
@@ -66,6 +68,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: rust buf github:bnjbvr/cargo-machete
 
       - name: Reclaim runner disk
         run: mise run github:workflows:ci:reclaim-disk
@@ -74,6 +78,7 @@ jobs:
         with:
           workspaces: rsworkspace
           prefix-key: v1-line-tables
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt --check
         run: mise run github:workflows:ci:rust-fmt
@@ -112,6 +117,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: rust buf github:taiki-e/cargo-llvm-cov
 
       - name: Reclaim runner disk
         run: mise run github:workflows:ci:reclaim-disk
@@ -120,6 +127,7 @@ jobs:
         with:
           workspaces: rsworkspace
           prefix-key: v1-line-tables
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: cargo llvm-cov
         env:
@@ -147,6 +155,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: rust cargo-deny
 
       - name: cargo deny
         run: mise run github:workflows:ci:rust-deny
@@ -165,6 +175,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: buf
 
       - name: buf lint
         run: mise run github:workflows:ci:proto-lint
@@ -190,6 +202,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: rust github:open-telemetry/weaver
 
       - name: weaver registry check
         run: mise run github:workflows:ci:otel-check
@@ -213,6 +227,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: zizmor
 
       - name: zizmor
         env:
@@ -248,6 +264,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: node pnpm helm
 
       - name: pnpm install
         run: mise run github:workflows:ci:studio-install
@@ -287,6 +305,8 @@ jobs:
 
       - name: Install mise
         uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: node pnpm
 
       - name: pnpm install
         run: mise run github:workflows:ci:studio-install

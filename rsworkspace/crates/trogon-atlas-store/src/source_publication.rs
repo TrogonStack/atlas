@@ -163,7 +163,7 @@ impl NatsStore {
     ) -> StoreResult<u64> {
         self.require_writer()?;
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -333,10 +333,20 @@ impl NatsStore {
 
     pub(super) async fn prepare_source(&self, publication: &SourcePublication) -> StoreResult<()> {
         self.require_writer()?;
+        let mutation = self.lock_native_mutation().await?;
         let _native =
             tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
                 .await
                 .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(&mutation, self.prepare_source_mutation_locked(publication))
+            .await
+    }
+
+    async fn prepare_source_mutation_locked(
+        &self,
+        publication: &SourcePublication,
+    ) -> StoreResult<()> {
         let _document = self.source_document_lock.lock().await;
         self.prepare_source_locked(publication).await?;
         Ok(())
@@ -390,7 +400,7 @@ impl NatsStore {
             ));
         }
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         let revision = tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -408,10 +418,21 @@ impl NatsStore {
         publication: &SourcePublication,
     ) -> StoreResult<SourcePublicationOutcome> {
         self.require_writer()?;
-        let key = transaction_key(&publication.registration, &publication.run_id);
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(&mutation, self.publish_source_mutation_locked(publication))
             .await
-            .map_err(|_| blocked())?;
+    }
+
+    async fn publish_source_mutation_locked(
+        &self,
+        publication: &SourcePublication,
+    ) -> StoreResult<SourcePublicationOutcome> {
+        let key = transaction_key(&publication.registration, &publication.run_id);
         let _document = self.source_document_lock.lock().await;
         let (mut revision, mut transaction) = self.prepare_source_locked(publication).await?;
         match transaction.phase {
@@ -559,6 +580,7 @@ impl NatsStore {
                 self.require_writer()?;
                 self.lease
                     .verify_epoch(
+                        &self.js,
                         &self.lease_kv,
                         trogon_atlas_core::Epoch::new(transaction.writer_epoch),
                     )
@@ -626,6 +648,7 @@ impl NatsStore {
             self.source_point(SourcePublicationPoint::BeforeCommitDecision)?;
             self.lease
                 .verify_epoch(
+                    &self.js,
                     &self.lease_kv,
                     trogon_atlas_core::Epoch::new(transaction.writer_epoch),
                 )
@@ -707,7 +730,7 @@ impl NatsStore {
         for prior in priors.rows {
             self.require_writer()?;
             self.lease
-                .verify_epoch(&self.lease_kv, recovery_epoch)
+                .verify_epoch(&self.js, &self.lease_kv, recovery_epoch)
                 .await?;
             let current = live_entry(kv_entry_timeout(kv, prior.key.clone()).await?);
             match (prior.raw, current) {
@@ -752,9 +775,25 @@ impl NatsStore {
         digest: &str,
     ) -> StoreResult<SourcePublicationOutcome> {
         self.require_writer()?;
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
-            .await
-            .map_err(|_| blocked())?;
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(
+            &mutation,
+            self.recover_source_mutation_locked(registration, run, digest),
+        )
+        .await
+    }
+
+    async fn recover_source_mutation_locked(
+        &self,
+        registration: &SourceDocumentKey,
+        run: &str,
+        digest: &str,
+    ) -> StoreResult<SourcePublicationOutcome> {
         let _document = self.source_document_lock.lock().await;
         let key = transaction_key(registration, run);
         let (revision, mut transaction) = self.load_transaction(&key).await?.ok_or_else(blocked)?;
@@ -841,9 +880,25 @@ impl NatsStore {
         digest: &str,
     ) -> StoreResult<()> {
         self.require_writer()?;
-        let _lock = tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
-            .await
-            .map_err(|_| blocked())?;
+        let mutation = self.lock_native_mutation().await?;
+        let _native =
+            tokio::time::timeout(Duration::from_secs(60), self.source_native_lock.write())
+                .await
+                .map_err(|_| blocked())?;
+        self.journal_writes_ready().await?;
+        self.mutation_scope(
+            &mutation,
+            self.expire_source_transaction_mutation_locked(registration, run, digest),
+        )
+        .await
+    }
+
+    async fn expire_source_transaction_mutation_locked(
+        &self,
+        registration: &SourceDocumentKey,
+        run: &str,
+        digest: &str,
+    ) -> StoreResult<()> {
         let _document = self.source_document_lock.lock().await;
         let key = transaction_key(registration, run);
         let Some((_, transaction)) = self.load_transaction(&key).await? else {
@@ -863,7 +918,7 @@ impl NatsStore {
             return Err(blocked());
         }
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         // A crash may leave a staged chunk without a durable reference in the transaction.
         let prefix = format!("x.{key}.");
@@ -873,7 +928,7 @@ impl NatsStore {
             }
             self.require_writer()?;
             self.lease
-                .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+                .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
                 .await?;
             tokio::time::timeout(KV_OP_TIMEOUT, self.source_kv.purge(&chunk))
                 .await

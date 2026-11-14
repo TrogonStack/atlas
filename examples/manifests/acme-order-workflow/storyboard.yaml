@@ -1,0 +1,97 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: order-workflow
+  namespace: acme-order-workflow
+spec:
+  doc: A placed order is taxed, paid and shipped. A declined payment cancels it.
+  entry:
+    human:
+      persona:
+        persona:
+          id:
+            namespace: acme-order-workflow
+            slug: shopper
+            version: '1'
+      ui:
+        ui:
+          id:
+            namespace: acme-order-workflow
+            slug: checkout-page
+            version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-order-workflow
+          slug: order-progress
+          version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-order-workflow
+          slug: order.shipped
+          version: '1'
+    - event:
+        id:
+          namespace: acme-order-workflow
+          slug: order.cancelled
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-order-workflow
+      slug: place-order-slice
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: progress-placed-rms
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: tax-calculator
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: calculate-tax-slice
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: progress-taxed-rms
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: payment-capturer
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: capture-payment-slice
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: progress-payment-rms
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: shipper
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: ship-order-slice
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: progress-shipped-rms
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: order-canceller
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: cancel-order-slice
+      version: '1'
+  - id:
+      namespace: acme-order-workflow
+      slug: progress-cancelled-rms
+      version: '1'
+  title: Order workflow

@@ -13,26 +13,28 @@ pub use trogon_atlas_mcp::{profile::ToolProfile, AllowedHosts, MCP_PATH};
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 
 use crate::{
+    artifacts::download_budget::ResponseBudgetService,
     auth::{AuthzLayer, AuthzService, BearerAuth},
     service::EventModelServiceImpl,
     telemetry::{InflightLayer, RpcMetricsLayer},
 };
 
-pub type DataPlane =
-    InterceptedService<AuthzService<EventModelServiceServer<EventModelServiceImpl>>, BearerAuth>;
+pub type DataPlane = ResponseBudgetService<
+    InterceptedService<AuthzService<EventModelServiceServer<EventModelServiceImpl>>, BearerAuth>,
+>;
 
 /// The one path to the EventModelService data plane, for network and MCP
-/// callers alike. `BearerAuth` is the outermost wrapper so it puts the
-/// `Principal` in extensions before `AuthzLayer` reads it; inverting the
-/// nesting denies every request.
+/// callers alike. `BearerAuth` surrounds `AuthzLayer` so it inserts the
+/// `Principal` before authorization. The outer response wrapper retains
+/// artifact reservations through final body frames.
 pub fn data_plane(
     service: EventModelServiceServer<EventModelServiceImpl>,
     auth: BearerAuth,
 ) -> DataPlane {
-    InterceptedService::new(
+    ResponseBudgetService::new(InterceptedService::new(
         ServiceBuilder::new().layer(AuthzLayer).service(service),
         auth,
-    )
+    ))
 }
 
 /// MCP tools that call `data_plane` in process, with no network hop, under

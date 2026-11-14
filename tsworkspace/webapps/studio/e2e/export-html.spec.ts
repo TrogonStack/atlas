@@ -32,7 +32,7 @@ test('Export HTML saves a board that renders from disk with no network', async (
   });
   await offline.goto(`file://${file}`);
 
-  await expect(offline.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
+  await expect(offline.getByRole('heading', { name: 'Atlas', level: 1 })).toBeVisible();
   await expect(offline.getByText(eventTitle)).toBeVisible();
   await expect(offline.getByRole('status', { name: 'Snapshot' })).toContainText('baseline');
   await expect(offline.getByRole('button', { name: 'More actions' })).toHaveCount(0);
