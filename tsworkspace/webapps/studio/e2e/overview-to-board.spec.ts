@@ -108,7 +108,7 @@ test.describe('Overview to board flow', () => {
     await page.goto('/?mode=chart');
     const search = page.getByRole('textbox', { name: 'Search models and entities' });
     const chartCard = page.getByText('No domains mapped yet');
-    const chartLegend = page.getByText(/where investment goes/);
+    const chartLegend = page.getByText(/^realizes: /);
     await expect(chartCard).toBeVisible();
 
     const searchBox = await search.boundingBox();
