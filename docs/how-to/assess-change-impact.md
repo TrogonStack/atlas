@@ -91,6 +91,21 @@ and uses the same ops as `diff_entities`. Referrers found only by continuing
 past that cap are outside its answer. A transitive unknown is the
 `through` link above, not a second diff of the root.
 
+## Read-path impact inventory
+
+Call MCP `get_impact` with the real entity's flat `kind`, `namespace`, `slug`,
+and `version` arguments. The response explores both incoming referrers and
+outgoing references, ordered by depth. Inspect each path's direction before
+treating a node as a dependent. Use `filter_kinds` to narrow returned kinds
+after understanding the paths, and `max_depth` on dense models. When
+`depth_limited` or `snapshot_truncated` is set, the node list is a lower bound,
+not the whole blast radius. Check paging and depth limits as described in the
+[repair playbook](repair-validation-findings.md#discover-the-full-dependency-context).
+
+For each impact node, intersect what it actually uses with the breaking op
+paths. An overlap is broken by the change; no overlap is bump-only. Record the
+entity, depth, path from the root, classification, and the specific diff ops.
+
 ## Notes
 
 - The blast radius belongs to the old entity. Nothing new has to exist under

@@ -17,10 +17,16 @@ use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
+    start_server_capped(usize::MAX).await
+}
+
+async fn start_server_capped(snapshot_cap: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(snapshot_cap);
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -311,6 +317,37 @@ async fn export_empty_namespace_errors() {
         panic!("expected empty namespace to error")
     };
     assert!(format!("{err:#}").contains("no entities"), "{err:#}");
+}
+
+#[tokio::test]
+async fn export_refuses_a_namespace_read_from_a_truncated_snapshot() {
+    let endpoint = start_server_capped(1).await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    for slug in ["a.event", "b.event"] {
+        client
+            .put_entity(put_req(
+                pb::Entity {
+                    system: None,
+                    kind: Some(pb::entity::Kind::Event(pb::Event {
+                        id: Some(pb::Id {
+                            namespace: "export-truncated".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        ..Default::default()
+                    })),
+                },
+                true,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let Err(err) = export::fetch_namespace_entities(&mut client, "export-truncated").await else {
+        panic!("a namespace read from a cut snapshot must not look complete")
+    };
+    assert!(format!("{err:#}").contains("entity cap"), "{err:#}");
 }
 
 #[tokio::test]

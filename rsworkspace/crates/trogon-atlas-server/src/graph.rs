@@ -1056,6 +1056,11 @@ fn is_container_member_ref(source: pb::EntityKind, from_field: &str) -> bool {
 /// records hop count and the path of references taken to reach it. Unless
 /// `include_containers` is set, a non-root container (event model, storyboard,
 /// component) is emitted but its members are not walked.
+pub struct Impact {
+    pub nodes: Vec<pb::ImpactNode>,
+    pub depth_limited: bool,
+}
+
 pub fn impact(
     all: &[StoredEntity],
     root_kind: pb::EntityKind,
@@ -1063,7 +1068,7 @@ pub fn impact(
     max_depth: u32,
     follow_incoming: bool,
     include_containers: bool,
-) -> Result<Vec<pb::ImpactNode>, Status> {
+) -> Result<Impact, Status> {
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {
@@ -1105,10 +1110,8 @@ pub fn impact(
     let mut queue: VecDeque<(pb::EntityKind, pb::Id, u32, Vec<pb::Reference>)> = VecDeque::new();
     queue.push_back((root_kind, root_id.clone(), 0, Vec::new()));
 
+    let mut depth_limited = false;
     while let Some((k, id, depth, path)) = queue.pop_front() {
-        if depth >= max_depth {
-            continue;
-        }
         let key = pb::EntityKey::new(k, &id);
         // Tag each ref with the side we should walk to. For an outbound
         // ref (`from = self`), the neighbor is `r.to`. For an incoming
@@ -1155,6 +1158,13 @@ pub fn impact(
                 continue;
             }
             let okey = pb::EntityKey::new(ok, oid);
+            if depth >= max_depth {
+                depth_limited |= !expanded.contains(&okey);
+                continue;
+            }
+            if expanded.contains(&okey) {
+                continue;
+            }
             let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
             new_path.push(r);
@@ -1186,7 +1196,10 @@ pub fn impact(
             }
         }
     }
-    Ok(out)
+    Ok(Impact {
+        nodes: out,
+        depth_limited,
+    })
 }
 
 fn entity_uid(entity: &pb::Entity) -> String {
@@ -1480,7 +1493,8 @@ mod impact_tests {
             /*follow_incoming=*/ true,
             /*include_containers=*/ false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let entity_ids: Vec<String> = nodes
             .iter()
             .filter_map(|n| {
@@ -1545,7 +1559,8 @@ mod impact_tests {
             true,
             include_containers,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         nodes
             .iter()
             .filter_map(|n| n.entity.as_ref()?.id.as_ref().map(|i| i.slug.clone()))
@@ -1582,8 +1597,49 @@ mod impact_tests {
             true,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         assert_eq!(nodes.len(), 2);
+    }
+
+    fn two_slices_sharing_an_event() -> Vec<StoredEntity> {
+        vec![
+            stored_command_slice("orders", "place", Some(("orders", "placed"))),
+            stored_command_slice("orders", "replace", Some(("orders", "placed"))),
+            stored_event("orders", "placed"),
+        ]
+    }
+
+    #[test]
+    fn impact_is_depth_limited_when_the_bound_cuts_a_reachable_entity() {
+        let all = two_slices_sharing_an_event();
+        let cut = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            1,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(cut.nodes.len(), 2);
+        assert!(cut.depth_limited);
+    }
+
+    #[test]
+    fn impact_is_not_depth_limited_when_the_bound_reaches_everything() {
+        let all = two_slices_sharing_an_event();
+        let whole = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            2,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(whole.nodes.len(), 3);
+        assert!(!whole.depth_limited);
     }
 
     /// `filter_refs_by_kinds` must filter the *other* end of the ref,
@@ -1779,7 +1835,8 @@ mod impact_tests {
             true,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_ui = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1850,7 +1907,8 @@ mod impact_tests {
             true,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_amb = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1923,7 +1981,8 @@ mod impact_tests {
             true,
             false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_sibling = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
