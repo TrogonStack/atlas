@@ -82,7 +82,8 @@ fn hosting_provenance_retains_distinct_occurrences_across_public_graph_surfaces(
         false,
         false,
     )
-    .unwrap();
+    .unwrap()
+    .nodes;
     let selected = nodes
         .iter()
         .find(|node| {

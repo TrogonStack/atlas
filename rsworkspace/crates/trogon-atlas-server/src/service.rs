@@ -5539,14 +5539,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         for ns in &req.namespaces {
             crate::conv::validate_id_component("namespaces[]", ns)?;
         }
-        let (all, truncated) = self
+        let (all, snapshot_truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
-        if truncated {
-            return Err(Status::resource_exhausted(
-                "entity listing cannot be completed within the snapshot limit",
-            ));
-        }
         // Apply kind/namespace filters and latest_versions_only in-process
         // rather than issuing a full store scan on every call. The snapshot
         // is sorted (kind, namespace, slug, version asc) by graph::load_all,
@@ -5630,6 +5625,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::ListEntitiesResponse {
             entities: slice,
             next_page_token,
+            snapshot_truncated,
         }))
     }
 
@@ -5836,7 +5832,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ADVERTISED_MAX_PAGE_SIZE,
         );
         let offset = parse_page_token(&req.page_token)?;
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let mut all_versions: Vec<pb::Entity> = all
             .iter()
             .filter_map(|s| {
@@ -5874,6 +5872,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::ListVersionsResponse {
             versions,
             next_page_token,
+            snapshot_truncated,
         }))
     }
 
@@ -6150,10 +6149,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let kind = kind_from_i32(root.kind, "root.kind")?;
         let id = require_id(root.id.as_ref(), "root")?.clone();
         self.require_visible(&vis, &id.namespace).await?;
-        let max_depth = if req.max_depth == 0 {
+        let depth_clamped = req.max_depth == 0 || req.max_depth > ADVERTISED_MAX_IMPACT_DEPTH;
+        let max_depth = if depth_clamped {
             ADVERTISED_MAX_IMPACT_DEPTH
         } else {
-            req.max_depth.min(ADVERTISED_MAX_IMPACT_DEPTH)
+            req.max_depth
         };
         let page_size = clamp_page_size(
             req.page_size,
@@ -6162,13 +6162,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
         let offset = parse_page_token(&req.page_token)?;
 
-        let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (snapshot, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let all = self
             .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
             .await?;
         graph::validate_responsibility_discovery_budget(&all)?;
-        let mut all_nodes =
-            graph::impact(&all, kind, &id, max_depth, true, req.include_containers)?;
+        let graph::Impact {
+            nodes: mut all_nodes,
+            depth_limited,
+        } = graph::impact(&all, kind, &id, max_depth, true, req.include_containers)?;
 
         if !req.filter_kinds.is_empty() {
             let allowed: std::collections::HashSet<i32> =
@@ -6204,6 +6208,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::GetImpactResponse {
             nodes,
             next_page_token,
+            snapshot_truncated,
+            effective_max_depth: max_depth,
+            depth_clamped,
+            depth_limited,
         }))
     }
 
@@ -6762,7 +6770,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             kind: kind as i32,
             id: Some(id.clone()),
         };
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let graph::Closure {
             mut entities,
             truncated,
@@ -6777,7 +6787,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 slice: Some(slice),
                 entities,
             }),
-            truncated,
+            truncated: truncated || snapshot_truncated,
         }))
     }
 
@@ -6801,7 +6811,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(Status::internal("storyboard entity kind mismatch"));
         };
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let by_key = graph::entity_lookup(&all);
 
         // Inline slices that the storyboard names.
@@ -6844,7 +6856,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 slices,
                 entities,
             }),
-            truncated,
+            truncated: truncated || snapshot_truncated,
         }))
     }
 
@@ -6886,7 +6898,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             None => req.as_of_changeset.clone(),
         };
-        let (em, all, as_of_incomplete) = if as_of_changeset.is_empty() {
+        let (em, all, load_incomplete) = if as_of_changeset.is_empty() {
             let kind = pb::EntityKind::EventModel;
             let stored = match self.store.get(kind, id, branch.as_deref()).await {
                 Ok(stored) => stored,
@@ -6897,7 +6909,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
                 return Err(Status::internal("event_model entity kind mismatch"));
             };
-            (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
+            let (all, snapshot_truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            (em, all, snapshot_truncated)
         } else {
             let AsOfView {
                 entities: all,
@@ -6942,7 +6957,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 event_model: Some(em),
                 entities,
             }),
-            truncated: truncated || as_of_incomplete,
+            truncated: truncated || load_incomplete,
             as_of_changeset,
         }))
     }
@@ -6968,7 +6983,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let _ = kind_from_i32(root_ref.kind, "scope")?;
         let _ = require_id(root_ref.id.as_ref(), "scope")?;
 
-        let (all, responsibility_incomplete) = if matches!(
+        let (all, load_incomplete) = if matches!(
             pb::EntityKind::try_from(root_ref.kind),
             Ok(pb::EntityKind::Team
                 | pb::EntityKind::Person
@@ -6982,7 +6997,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await?;
             (Arc::new(rows), incomplete)
         } else {
-            (self.snapshot_for(branch.as_deref(), &vis).await?, false)
+            self.snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?
         };
         let graph::Closure {
             entities,
@@ -7045,7 +7061,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 supersedes: None,
             }),
             entities: filtered,
-            truncated: truncated || responsibility_incomplete,
+            truncated: truncated || load_incomplete,
         }))
     }
 
@@ -11063,7 +11079,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
         let offset = parse_page_token(&req.page_token)?;
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
 
         let target = pb::IdKey::new(&dom_id);
         let subdomains: std::collections::HashSet<pb::IdKey> = all
@@ -11147,6 +11165,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::ListEntitiesByDomainResponse {
             entities,
             next_page_token,
+            snapshot_truncated,
         }))
     }
 
@@ -11172,7 +11191,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
         let _ = kind_from_i32(scope_ref.kind, "scope.kind")?;
         let _ = require_id(scope_ref.id.as_ref(), "scope")?;
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let jev_fallback = if let Some(analyzer) = self.jev_analyzer.as_ref() {
             use tracing::Instrument as _;
             match analyzer
@@ -11190,6 +11211,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         mappings: result.mappings,
                         provenance: provenance as i32,
                         fallback_reason: String::new(),
+                        snapshot_truncated,
                     }));
                 }
                 Err(error) => {
@@ -11238,6 +11260,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             mappings,
             provenance: provenance as i32,
             fallback_reason,
+            snapshot_truncated,
         }))
     }
 
@@ -11262,7 +11285,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
         let _ = kind_from_i32(scope_ref.kind, "scope.kind")?;
         let _ = require_id(scope_ref.id.as_ref(), "scope")?;
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let ((gaps, overall_score), provenance, fallback_reason) = match self.llm_analyzer.as_ref()
         {
             Some(analyzer) => {
@@ -11295,6 +11320,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             overall_score,
             provenance: provenance as i32,
             fallback_reason,
+            snapshot_truncated,
         }))
     }
 
