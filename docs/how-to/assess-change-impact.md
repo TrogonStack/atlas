@@ -102,9 +102,12 @@ after understanding the paths, and `max_depth` on dense models. When
 not the whole blast radius. Check paging and depth limits as described in the
 [repair playbook](repair-validation-findings.md#discover-the-full-dependency-context).
 
-For each impact node, intersect what it actually uses with the breaking op
-paths. An overlap is broken by the change; no overlap is bump-only. Record the
-entity, depth, path from the root, classification, and the specific diff ops.
+For each direct impact node, intersect what it actually uses with the breaking
+op paths. An overlap is broken by the change; no overlap is bump-only. For a
+transitive node, follow the `through` propagation above and keep
+`TRANSITIVE_THROUGH_AFFECTED` when its intermediate dependent is breaking or
+unknown; do not compare its paths with the root diff. Record the entity, depth,
+path from the root, classification, and the specific diff ops.
 
 ## Notes
 

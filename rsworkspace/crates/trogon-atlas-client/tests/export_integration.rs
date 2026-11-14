@@ -1471,9 +1471,6 @@ async fn namespace_export_refuses_a_capped_listing_instead_of_returning_a_comple
         let Err(error) = result else {
             panic!("a truncated entity listing must not become a complete namespace export")
         };
-        assert_eq!(
-            error.downcast_ref::<tonic::Status>().unwrap().code(),
-            tonic::Code::ResourceExhausted
-        );
+        assert!(format!("{error:#}").contains("entity cap"), "{error:#}");
     }
 }

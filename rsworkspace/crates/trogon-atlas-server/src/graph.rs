@@ -1158,14 +1158,18 @@ pub fn impact(
                 continue;
             }
             let okey = pb::EntityKey::new(ok, oid);
+            let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             if depth >= max_depth {
-                depth_limited |= !expanded.contains(&okey);
+                depth_limited |= if business_edge {
+                    !emitted.contains(&okey)
+                } else {
+                    !expanded.contains(&okey)
+                };
                 continue;
             }
             if expanded.contains(&okey) {
                 continue;
             }
-            let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
             new_path.push(r);
             if business_edge {
@@ -1475,6 +1479,30 @@ mod impact_tests {
         }
     }
 
+    fn stored_schema(ns: &str, slug: &str, targets: &[(&str, &str)]) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Schema(pb::Schema {
+                    id: Some(id(ns, slug)),
+                    property_relationships: targets
+                        .iter()
+                        .map(
+                            |(target_ns, target_slug)| pb::BusinessPropertyRelationship {
+                                target_entity: Some(pb::SchemaRef {
+                                    id: Some(id(target_ns, target_slug)),
+                                }),
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        }
+    }
+
     /// Regression test for the `follow_incoming=true` ref-side bug: an
     /// outbound ref from the root must visit `r.to`, not `r.from`. Before
     /// the fix, every impact traversal with `follow_incoming=true`
@@ -1640,6 +1668,26 @@ mod impact_tests {
         .unwrap();
         assert_eq!(whole.nodes.len(), 3);
         assert!(!whole.depth_limited);
+    }
+
+    #[test]
+    fn impact_does_not_mark_an_emitted_business_target_as_depth_limited() {
+        let all = vec![
+            stored_schema("shop", "root", &[("shop", "target")]),
+            stored_schema("shop", "bridge", &[("shop", "root"), ("shop", "target")]),
+            stored_schema("shop", "target", &[]),
+        ];
+        let bounded = impact(
+            &all,
+            pb::EntityKind::Schema,
+            &id("shop", "root"),
+            1,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(bounded.nodes.len(), 3);
+        assert!(!bounded.depth_limited);
     }
 
     /// `filter_refs_by_kinds` must filter the *other* end of the ref,
