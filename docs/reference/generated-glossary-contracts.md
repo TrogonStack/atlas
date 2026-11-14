@@ -96,9 +96,8 @@ again before persisting the receipt.
 
 Land a branch retirement while the required descriptors remain available, then
 remove the library. A retained review cannot land using types absent from the
-landing's final view. Deleting the already-retired Term before removing its
-branch-only types also provides a cleanup path. Full JSON inspection of retained
-retired metadata still requires its descriptors.
+landing's final view. Full JSON inspection of retained retired metadata still
+requires its descriptors.
 
 Reviews use existing guarded native writes, history and writer authority.
 On a stale etag, refresh and reconsider. After a lost or unavailable response,

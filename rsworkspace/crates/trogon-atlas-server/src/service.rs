@@ -2800,9 +2800,7 @@ impl EventModelServiceImpl {
         };
 
         let status = if delta.tombstone {
-            if delta.base.is_none() && theirs.is_none() {
-                pb::branch_diff_entry::Status::Converged
-            } else if !baseline_moved {
+            if !baseline_moved {
                 pb::branch_diff_entry::Status::Deleted
             } else if theirs.is_some() {
                 pb::branch_diff_entry::Status::ConflictEditDelete

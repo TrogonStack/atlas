@@ -3309,10 +3309,14 @@ async fn tenant_metadata_catalog_reuses_namespace_pools_and_native_catalog_needs
 }
 
 #[tokio::test]
-async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanup() {
+async fn tenant_metadata_retirement_lands_before_its_descriptors_are_removed() {
+    use prost::Message;
+
     let mut client = client().await;
     let source = source(&mut client, "shop", "source", None).await;
     let branch = "glossary-retired-library";
+    let target = id("shop", "purchase", 1);
+    let library = id("shop", "glossary.review", 1);
     create_branch(&mut client, branch).await;
     put(&mut client, tenant_review_library("shop"), "", Some(branch)).await;
     let draft = put(
@@ -3322,20 +3326,14 @@ async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanu
         Some(branch),
     )
     .await;
-    let accepted = review(
-        &mut client,
-        &id("shop", "purchase", 1),
-        &draft.etag,
-        false,
-        Some(branch),
-    )
-    .await
-    .unwrap();
-    client
+    let accepted = review(&mut client, &target, &draft.etag, false, Some(branch))
+        .await
+        .unwrap();
+    let retired = client
         .review_glossary_term(request(
             pb::ReviewGlossaryTermRequest {
                 term: Some(pb::TermRef {
-                    id: Some(id("shop", "purchase", 1)),
+                    id: Some(target.clone()),
                 }),
                 if_match: accepted.etag,
                 disposition: pb::GlossaryReviewDisposition::Rejected as i32,
@@ -3346,12 +3344,13 @@ async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanu
             Some(branch),
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .into_inner();
     client
         .delete_entity(request(
             pb::DeleteEntityRequest {
                 kind: pb::EntityKind::TypeLibrary as i32,
-                id: Some(id("shop", "glossary.review", 1)),
+                id: Some(library.clone()),
                 mode: pb::delete_entity_request::Mode::Force as i32,
                 ..Default::default()
             },
@@ -3379,7 +3378,7 @@ async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanu
                 .get_entity(request(
                     pb::GetEntityRequest {
                         kind: pb::EntityKind::Term as i32,
-                        id: Some(id("shop", "purchase", 1))
+                        id: Some(target.clone())
                     },
                     ADMIN,
                     None
@@ -3390,24 +3389,62 @@ async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanu
             Code::NotFound
         );
     }
+    put(&mut client, tenant_review_library("shop"), "", Some(branch)).await;
+    for dry_run in [true, false] {
+        let merged = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
+                    name: branch.into(),
+                    dry_run,
+                    keep_branch: true,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32
+        );
+        if dry_run {
+            assert_eq!(
+                client
+                    .get_entity(request(
+                        pb::GetEntityRequest {
+                            kind: pb::EntityKind::Term as i32,
+                            id: Some(target.clone()),
+                        },
+                        ADMIN,
+                        None,
+                    ))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::NotFound
+            );
+        }
+    }
+    let landed = read(&mut client, pb::EntityKind::Term, &target, None).await;
+    assert_eq!(
+        term(landed.entity.as_ref().unwrap()).encode_to_vec(),
+        term(retired.entity.as_ref().unwrap()).encode_to_vec()
+    );
+    let entry = detail(&mut client, &target).await.entry.unwrap();
+    assert!(!entry.published);
+    assert_eq!(entry.state, pb::GlossaryEntryState::Rejected as i32);
     client
         .delete_entity(request(
             pb::DeleteEntityRequest {
-                kind: pb::EntityKind::Term as i32,
-                id: Some(id("shop", "purchase", 1)),
+                kind: pb::EntityKind::TypeLibrary as i32,
+                id: Some(library.clone()),
                 mode: pb::delete_entity_request::Mode::Force as i32,
-                ..Default::default()
-            },
-            ADMIN,
-            Some(branch),
-        ))
-        .await
-        .unwrap();
-    client
-        .merge_branch(request(
-            pb::MergeBranchRequest {
-                name: branch.into(),
-                keep_branch: true,
                 ..Default::default()
             },
             ADMIN,
@@ -3415,6 +3452,25 @@ async fn tenant_metadata_negative_landing_requires_its_descriptor_or_term_cleanu
         ))
         .await
         .unwrap();
+    assert_eq!(
+        read(&mut client, pb::EntityKind::Term, &target, None).await,
+        landed
+    );
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::TypeLibrary as i32,
+                    id: Some(library),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
 }
 
 #[tokio::test]
@@ -3551,59 +3607,71 @@ async fn tenant_metadata_descriptor_users_share_one_raw_branch_budget() {
 }
 
 #[tokio::test]
-async fn branch_only_tombstones_converge_without_deleting_independent_baseline_entities() {
-    for foreign_baseline in [false, true] {
-        let mut client = client().await;
-        let branch = "glossary-empty-cleanup";
-        create_branch(&mut client, branch).await;
-        let target = id("shop", "temporary", 1);
-        put(
-            &mut client,
-            entity(pb::entity::Kind::Event(pb::Event {
+async fn branch_only_tombstones_cannot_delete_independent_baseline_entities() {
+    let mut client = client().await;
+    let branch = "glossary-independent-baseline";
+    create_branch(&mut client, branch).await;
+    let target = id("shop", "temporary", 1);
+    put(
+        &mut client,
+        entity(pb::entity::Kind::Event(pb::Event {
+            id: Some(target.clone()),
+            title: "Temporary branch fact".into(),
+            ..Default::default()
+        })),
+        "",
+        Some(branch),
+    )
+    .await;
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Event as i32,
                 id: Some(target.clone()),
-                title: "Temporary branch fact".into(),
+                mode: pb::delete_entity_request::Mode::Force as i32,
                 ..Default::default()
-            })),
-            "",
+            },
+            ADMIN,
             Some(branch),
-        )
-        .await;
-        client
-            .delete_entity(request(
-                pb::DeleteEntityRequest {
-                    kind: pb::EntityKind::Event as i32,
-                    id: Some(target.clone()),
-                    mode: pb::delete_entity_request::Mode::Force as i32,
-                    ..Default::default()
-                },
-                ADMIN,
-                Some(branch),
-            ))
-            .await
-            .unwrap();
-        let independent = if foreign_baseline {
-            Some(
-                put(
-                    &mut client,
-                    entity(pb::entity::Kind::Event(pb::Event {
-                        id: Some(target.clone()),
-                        title: "Independent baseline fact".into(),
-                        ..Default::default()
-                    })),
-                    "",
-                    None,
-                )
-                .await
-                .entity
-                .unwrap(),
-            )
-        } else {
-            None
-        };
-        let diff = client
-            .diff_branch(request(
-                pb::DiffBranchRequest {
+        ))
+        .await
+        .unwrap();
+    put(
+        &mut client,
+        entity(pb::entity::Kind::Event(pb::Event {
+            id: Some(target.clone()),
+            title: "Independent baseline fact".into(),
+            ..Default::default()
+        })),
+        "",
+        None,
+    )
+    .await;
+    let independent = read(&mut client, pb::EntityKind::Event, &target, None).await;
+    let diff = client
+        .diff_branch(request(
+            pb::DiffBranchRequest {
+                name: branch.into(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(diff.entries.len(), 1);
+    assert_eq!(
+        diff.entries[0].status,
+        pb::branch_diff_entry::Status::ConflictEditDelete as i32
+    );
+    for dry_run in [true, false] {
+        let merged = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
                     name: branch.into(),
+                    dry_run,
+                    keep_branch: true,
+                    ..Default::default()
                 },
                 ADMIN,
                 None,
@@ -3611,58 +3679,13 @@ async fn branch_only_tombstones_converge_without_deleting_independent_baseline_e
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(diff.entries.len(), 1);
         assert_eq!(
-            diff.entries[0].status,
-            if foreign_baseline {
-                pb::branch_diff_entry::Status::ConflictEditDelete as i32
-            } else {
-                pb::branch_diff_entry::Status::Converged as i32
-            }
+            merged.status,
+            pb::merge_branch_response::Status::Conflicts as i32
         );
-        for dry_run in [true, false] {
-            let merged = client
-                .merge_branch(request(
-                    pb::MergeBranchRequest {
-                        name: branch.into(),
-                        dry_run,
-                        keep_branch: true,
-                        ..Default::default()
-                    },
-                    ADMIN,
-                    None,
-                ))
-                .await
-                .unwrap()
-                .into_inner();
-            assert_eq!(
-                merged.status,
-                if foreign_baseline {
-                    pb::merge_branch_response::Status::Conflicts as i32
-                } else if dry_run {
-                    pb::merge_branch_response::Status::Validated as i32
-                } else {
-                    pb::merge_branch_response::Status::Applied as i32
-                }
-            );
-            let current = client
-                .get_entity(request(
-                    pb::GetEntityRequest {
-                        kind: pb::EntityKind::Event as i32,
-                        id: Some(target.clone()),
-                    },
-                    ADMIN,
-                    None,
-                ))
-                .await;
-            if let Some(independent) = &independent {
-                assert_eq!(
-                    current.unwrap().into_inner().entity.as_ref(),
-                    Some(independent)
-                );
-            } else {
-                assert_eq!(current.unwrap_err().code(), Code::NotFound);
-            }
-        }
+        assert_eq!(
+            read(&mut client, pb::EntityKind::Event, &target, None).await,
+            independent
+        );
     }
 }
