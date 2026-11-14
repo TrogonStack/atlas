@@ -134,8 +134,11 @@ commands, so they are different automations.
 The storyboard lists the slices in time order. Each AutomationSlice sits
 after the projection of the event that made its row true. The board reads
 as the chain: `calculate-tax`, the progress projection, `capture-payment`,
-and then two branches from the payment projection: `ship-order` and
-`cancel-order`.
+and then the payment outcome projections: `payment.captured` leads to
+`ship-order`, while `payment.failed` leads to `cancel-order`. Each outcome
+has its own ReadModelSlice, even though both update `order-progress`.
+Combining the alternative successors in one slice reports
+`PROJECTION_MERGES_BRANCHES` (Warning).
 
 ## Validate
 

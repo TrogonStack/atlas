@@ -334,3 +334,30 @@ recorded.
 - `trogon-atlas fmt --check` already reports
   `acme-customer-data-deletion/read-model.yaml` as unformatted on main. That
   file is left alone.
+
+## Separate projections for alternative workflow outcomes
+
+`PROJECTION_MERGES_BRANCHES` on the order workflow's
+`progress-payment-rms` identifies a projection slice containing both
+`payment.captured` and `payment.failed`. The order lane declares those
+events as alternative successors of `tax.calculated`; they are different
+branches, not successive moments.
+
+Keep both events, the lane transitions, command scenarios, and the shared
+`order-progress` read model. Give each payment outcome its own
+ReadModelSlice, and include both slices in the EventModel and directly
+after `capture-payment-slice` in the storyboard, before any automation
+acts. The read model can aggregate both outcomes without treating their
+projection as one slice.
+
+Removing a source event or a lane transition would erase the failure or
+success path. Replacing the events with an outcome field would change the
+workflow contract. Splitting only the projection preserves both paths.
+
+The fixture-backed `example_manifests_validate` tests reproduce the
+finding before this repair and validate all example models and the Acme
+project after it. The projection-ordering tests separately retain the
+warning for merged siblings and allow a single branch per slice. Existing
+stores seeded with the former slice need the revised definition and the
+new slice applied together with their model and storyboard references;
+editing seed files does not update a running store.
