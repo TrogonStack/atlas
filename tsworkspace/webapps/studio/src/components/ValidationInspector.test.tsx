@@ -154,3 +154,22 @@ describe('ValidationInspector', () => {
     expect(screen.getByRole('button', { name: 'All (1)' })).toBeDefined();
   });
 });
+
+describe('ValidationInspector acknowledged findings', () => {
+  it('offers a fix prompt only for findings that are not acknowledged', () => {
+    const issues = buildIssueIndex([
+      { ...attached('SEVERITY_INFO', 'READ_MODEL_SHARED_CONSUMERS'), acknowledged: true },
+      attached('SEVERITY_INFO', 'READ_MODEL_MULTIPLE_AUTOMATIONS'),
+    ]);
+    render(
+      <ValidationInspector
+        id="validation-findings"
+        model={model}
+        issues={issues}
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole('button', { name: 'Copy fix prompt' })).toHaveLength(1);
+  });
+});
