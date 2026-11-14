@@ -154,7 +154,14 @@ Expanding it to the whole post-merge model needs its own product answer.
 
 Truncation, depth, and visibility flags must use the same scope and
 snapshot identity vocabulary as coverage, so a truncated empty issue list
-cannot look complete. [Consequence deltas](consequence-delta.md) build on
+cannot look complete. Read paths outside validation follow the same rule:
+`ListEntities`, `ListVersions`, `ListEntitiesByDomain`, `GetImpact`,
+`InferDataFlow` and `CheckInformationCompleteness` carry
+`snapshot_truncated`, and projections and `ExtractSubgraph` fold the cut
+load into their existing `truncated` flag. A short or empty answer under
+either flag says nothing about the entities the load never reached. The
+Rust client refuses to export a namespace from such a listing rather than
+write partial manifests. [Consequence deltas](consequence-delta.md) build on
 the same coverage: each side of the comparison carries its own coverage,
 and a finding missing from an after-scan whose suite did not complete is
 reported as unknown, never as resolved, unless its subject or origin was
