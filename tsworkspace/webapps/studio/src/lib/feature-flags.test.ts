@@ -23,14 +23,14 @@ describe('Studio feature flags', () => {
 
   it('starts disabled and preserves independent choices across remounts', () => {
     const { result, unmount } = renderHook(useStudioFeatureFlags);
-    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false, stateMachine: false });
     act(() => result.current[1]('laneMesh', true));
     act(() => result.current[1]('streamTowers', true));
     act(() => result.current[1]('laneMesh', false));
     unmount();
 
     const reloaded = renderHook(useStudioFeatureFlags);
-    expect(reloaded.result.current[0]).toEqual({ laneMesh: false, streamTowers: true });
+    expect(reloaded.result.current[0]).toEqual({ laneMesh: false, streamTowers: true, stateMachine: false });
   });
 
   it.each(['broken', 'null', '[]', 'true', '{"laneMesh":"true","streamTowers":1}'])(
@@ -38,14 +38,14 @@ describe('Studio feature flags', () => {
     (stored) => {
       window.localStorage.setItem(STORAGE_KEY, stored);
       const { result } = renderHook(useStudioFeatureFlags);
-      expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false });
+      expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false, stateMachine: false });
     },
   );
 
   it.each([
-    ['{"laneMesh":true,"unknown":true}', { laneMesh: true, streamTowers: false }],
-    ['{"laneMesh":true,"streamTowers":"true"}', { laneMesh: true, streamTowers: false }],
-    ['{"laneMesh":1,"streamTowers":true}', { laneMesh: false, streamTowers: true }],
+    ['{"laneMesh":true,"unknown":true}', { laneMesh: true, streamTowers: false, stateMachine: false }],
+    ['{"laneMesh":true,"streamTowers":"true"}', { laneMesh: true, streamTowers: false, stateMachine: false }],
+    ['{"laneMesh":1,"streamTowers":true}', { laneMesh: false, streamTowers: true, stateMachine: false }],
   ] as const)('accepts only explicitly enabled known flags from %s', (stored, expected) => {
     window.localStorage.setItem(STORAGE_KEY, stored);
     const { result } = renderHook(useStudioFeatureFlags);
@@ -58,13 +58,14 @@ describe('Studio feature flags', () => {
     const secondSetter = second.result.current[1];
 
     act(() => first.result.current[1]('laneMesh', true));
-    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
     act(() => secondSetter('streamTowers', true));
-    expect(first.result.current[0]).toEqual({ laneMesh: true, streamTowers: true });
+    expect(first.result.current[0]).toEqual({ laneMesh: true, streamTowers: true, stateMachine: false });
     expect(second.result.current[0]).toBe(first.result.current[0]);
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null')).toEqual({
       laneMesh: true,
       streamTowers: true,
+      stateMachine: false,
     });
   });
 
@@ -74,10 +75,11 @@ describe('Studio feature flags', () => {
 
     act(() => result.current[1]('streamTowers', true));
 
-    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: true });
+    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: true, stateMachine: false });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null')).toEqual({
       laneMesh: true,
       streamTowers: true,
+      stateMachine: false,
     });
   });
 
@@ -87,7 +89,7 @@ describe('Studio feature flags', () => {
       window.localStorage.setItem(STORAGE_KEY, '{"laneMesh":false,"streamTowers":true}');
       changedStorage();
     });
-    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: true });
+    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: true, stateMachine: false });
   });
 
   it.each(['remove', 'clear'] as const)('resets mounted flags after an external %s', (operation) => {
@@ -98,7 +100,7 @@ describe('Studio feature flags', () => {
       else window.localStorage.clear();
       changedStorage(operation === 'clear' ? null : STORAGE_KEY);
     });
-    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false, stateMachine: false });
   });
 
   it('ignores unrelated keys and sessionStorage events', () => {
@@ -111,7 +113,7 @@ describe('Studio feature flags', () => {
       changedStorage(STORAGE_KEY, window.sessionStorage);
     });
     expect(result.current[0]).toBe(snapshot);
-    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false, stateMachine: false });
   });
 
   it('keeps snapshot and setter identities stable when values have not changed', () => {
@@ -147,7 +149,7 @@ describe('Studio feature flags', () => {
       }, []);
       return flags;
     });
-    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
   });
 
   it('removes its shared storage listener after the last consumer unmounts', () => {
@@ -169,7 +171,7 @@ describe('Studio feature flags', () => {
       return JSON.stringify(useStudioFeatureFlags()[0]);
     }
     expect(renderToString(createElement(Flags))).toContain(
-      '{&quot;laneMesh&quot;:false,&quot;streamTowers&quot;:false}',
+      '{&quot;laneMesh&quot;:false,&quot;streamTowers&quot;:false,&quot;stateMachine&quot;:false}',
     );
   });
 
@@ -180,14 +182,14 @@ describe('Studio feature flags', () => {
     const first = renderHook(useStudioFeatureFlags);
     const second = renderHook(useStudioFeatureFlags);
     act(() => first.result.current[1]('laneMesh', true));
-    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
     first.unmount();
     second.unmount();
 
     const reloaded = renderHook(useStudioFeatureFlags);
-    expect(reloaded.result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(reloaded.result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
     act(() => reloaded.result.current[1]('streamTowers', true));
-    expect(reloaded.result.current[0]).toEqual({ laneMesh: true, streamTowers: true });
+    expect(reloaded.result.current[0]).toEqual({ laneMesh: true, streamTowers: true, stateMachine: false });
   });
 
   it('shares in-memory updates when the localStorage getter is blocked', () => {
@@ -197,9 +199,9 @@ describe('Studio feature flags', () => {
     const first = renderHook(useStudioFeatureFlags);
     const second = renderHook(useStudioFeatureFlags);
     act(() => first.result.current[1]('laneMesh', true));
-    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(second.result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
     act(() => second.result.current[1]('streamTowers', true));
-    expect(first.result.current[0]).toEqual({ laneMesh: true, streamTowers: true });
+    expect(first.result.current[0]).toEqual({ laneMesh: true, streamTowers: true, stateMachine: false });
   });
 
   it('merges pending choices with persisted flags once blocked storage becomes readable', () => {
@@ -213,10 +215,11 @@ describe('Studio feature flags', () => {
 
     act(() => result.current[1]('laneMesh', true));
 
-    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: true });
+    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: true, stateMachine: false });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null')).toEqual({
       laneMesh: true,
       streamTowers: true,
+      stateMachine: false,
     });
   });
 
@@ -229,8 +232,8 @@ describe('Studio feature flags', () => {
     });
 
     const { result } = renderHook(useStudioFeatureFlags);
-    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: false, streamTowers: false, stateMachine: false });
     act(() => result.current[1]('laneMesh', true));
-    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: false });
+    expect(result.current[0]).toEqual({ laneMesh: true, streamTowers: false, stateMachine: false });
   });
 });

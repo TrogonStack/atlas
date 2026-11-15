@@ -50,6 +50,7 @@ vi.mock('@tanstack/react-hotkeys', () => ({
 }));
 
 import { api } from '@/lib/api';
+import { buildStateMachinePreviewModel } from '@/lib/feature-preview-model';
 import { buildModel } from '@/lib/model';
 import { watchEntities } from '@/lib/realtime';
 import { storefrontEntities } from '@/lib/scene3d.fixture';
@@ -200,6 +201,23 @@ describe('ModelShell', () => {
     const tab = await screen.findByRole('tab', { name: 'Lane mesh' });
     fireEvent.click(tab);
     expect(await screen.findByTestId('three-view-lanes')).toBeDefined();
+  });
+
+  it('shows the State machine tab only with its preview on and a stream that declares transitions', async () => {
+    const { unmount } = render(<ModelShell model={buildStateMachinePreviewModel()} scopedTitle="Orders" />);
+    await settleBootstrap();
+    expect(modelViews().queryByRole('tab', { name: 'State machine' })).toBeNull();
+    const preview = await openFeaturePreview();
+    fireEvent.click(preview.getByRole('tab', { name: 'State machine' }));
+    fireEvent.click(preview.getByRole('switch', { name: 'Enable State machine' }));
+    await closeFeaturePreview();
+    fireEvent.click(modelViews().getByRole('tab', { name: 'State machine' }));
+    expect(await screen.findByTestId('state-machine')).toBeDefined();
+    unmount();
+
+    render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
+    await settleBootstrap();
+    expect(modelViews().queryByRole('tab', { name: 'State machine' })).toBeNull();
   });
 
   it('hides the experimental views by default even when the model has their content', async () => {
