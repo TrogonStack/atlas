@@ -91,3 +91,25 @@ test('long transition details scroll while the diagram keeps its space', async (
     .evaluate((element) => element.parentElement?.getBoundingClientRect().height);
   expect(paneHeight).toBeGreaterThan(boardBounds.height / 3);
 });
+
+test('alternating guard lists keep badges inside the diagram and expose every number', async ({ page }) => {
+  const destinations = Array.from({ length: 80 }, (_, index) => (index % 2 === 0 ? 'closed' : 'other'));
+  await openLifecycle(page, destinations);
+  const diagram = page.getByRole('region', { name: 'Order lifecycle' });
+  const badges = diagram.locator('svg g');
+  const bounds = await diagram.boundingBox();
+  if (!bounds) throw new Error('Lifecycle diagram has no bounds');
+  await expect(badges).toHaveCount(2);
+  for (let index = 0; index < 2; index++) {
+    const badge = badges.nth(index);
+    const badgeBounds = await badge.boundingBox();
+    if (!badgeBounds) throw new Error('Transition badge has no bounds');
+    expect(badgeBounds.x).toBeGreaterThanOrEqual(bounds.x);
+    expect(badgeBounds.x + badgeBounds.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect((await badge.locator('text').textContent())?.length).toBeLessThanOrEqual(24);
+    await expect(badge.locator('title')).toHaveText(
+      Array.from({ length: 40 }, (_, number) => number * 2 + index + 1).join(', '),
+    );
+  }
+  await expect(page.getByTestId('state-machine-next').getByRole('listitem')).toHaveCount(80);
+});

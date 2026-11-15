@@ -360,13 +360,17 @@ export function StateMachineBoard({
               })}
             {[...badges].map(([target, badge]) => {
               const consecutive = badge.numbers.every((number, index) => number === badge.numbers[0] + index);
+              const fullLabel = badge.numbers.join(', ');
               const label =
                 consecutive && badge.numbers.length > 2
                   ? `${badge.numbers[0]}–${badge.numbers[badge.numbers.length - 1]}`
-                  : badge.numbers.join(', ');
+                  : fullLabel.length > 24
+                    ? `${badge.numbers.length} transitions`
+                    : fullLabel;
               const badgeWidth = Math.max(16, label.length * 6 + 10);
               return (
                 <g key={target} transform={`translate(${badge.x},${badge.y / badge.numbers.length})`}>
+                  <title>{fullLabel}</title>
                   <rect x={8 - badgeWidth} y={-8} width={badgeWidth} height={16} rx={8} style={{ fill: RING }} />
                   <text
                     x={8 - badgeWidth / 2}
