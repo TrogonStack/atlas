@@ -968,3 +968,72 @@ async fn malformed_member_references_remain_errors() {
         assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_scenario_references_are_not_dangling() {
+    let mut fixture = Fixture::new().await;
+    let own = fixture.own.clone();
+    let hidden = fixture.hidden.clone();
+    let command = || pb::CommandRef {
+        id: Some(id(&own, "approve-review")),
+    };
+    fixture
+        .seed(pb::entity::Kind::Command(pb::Command {
+            id: Some(id(&own, "approve-review")),
+            title: "Approve review".into(),
+            ..Default::default()
+        }))
+        .await;
+    fixture
+        .seed(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(id(&own, "approve-review")),
+            title: "Approve review".into(),
+            command: Some(pb::CommandEdge {
+                command: Some(command()),
+                ..Default::default()
+            }),
+            scenarios: vec![pb::CommandScenario {
+                id: "s1".into(),
+                title: "submitted review is approved".into(),
+                given: vec![pb::EventExample {
+                    event: Some(pb::EventRef {
+                        id: Some(id(&hidden, "review.submitted")),
+                    }),
+                    payload: None,
+                }],
+                when: Some(pb::CommandExample {
+                    command: Some(command()),
+                    payload: None,
+                }),
+                then: Some(pb::command_scenario::Then::Reject(pb::Rejection {
+                    reason_code: "already_decided".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }))
+        .await;
+    let model = fixture.model(vec![member(
+        pb::EntityKind::CommandSlice,
+        &own,
+        "approve-review",
+    )]);
+    fixture
+        .seed(pb::entity::Kind::EventModel(model.clone()))
+        .await;
+
+    for issues in fixture.validate(&model, ACME_TOKEN).await {
+        assert_eq!(count(&issues, "SCENARIO_DANGLING_REF"), 0, "{issues:?}");
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "REF_OUTSIDE_VISIBLE_SCOPE"
+                    && issue.subject_field.starts_with("scenarios")),
+            "{issues:?}"
+        );
+    }
+    for issues in fixture.validate(&model, ROOT_TOKEN).await {
+        assert_eq!(count(&issues, "SCENARIO_DANGLING_REF"), 1, "{issues:?}");
+    }
+}

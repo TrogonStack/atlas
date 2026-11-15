@@ -43,7 +43,8 @@ prints, such as `event:shop/order.placed@1`.
 
 `validate <namespace>/<model>[@version]` runs full validation on a stored
 event model: the model-level rules (storyboard entries, projection order,
-field provenance) and the strategic chain of the model's namespace, meaning
+field provenance), the scenario checks of the model's slices against the
+current lanes, and the strategic chain of the model's namespace, meaning
 its BoundedContext, the Subdomains it realizes, their Domains, and any Domain
 declared in the namespace. `apply --dry-run` returns only the request-time
 findings for each write, strategic ones included. They never block the
