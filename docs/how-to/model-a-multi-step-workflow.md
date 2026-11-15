@@ -114,8 +114,8 @@ example, issues `ship-order` on `shipping` and stays idle on `tax` and
 A payment step can succeed or fail. A processor issues exactly one command
 (`PROCESSOR_MULTIPLE_COMMANDS`, Error), so a worker that sends
 `CompletePayment` or `FailPayment` needs two processors. Use one command
-instead. The payment gateway decides the outcome, and the lane's
-transitions declare both outcomes:
+instead when the command itself decides the outcome. Here the payment
+gateway decides it, and the lane's transitions declare both outcomes:
 
 ```yaml
 kind: Swimlane
@@ -132,33 +132,16 @@ The `capture-payment` CommandSlice has one scenario for each event. After
 emits an event the lane does not allow next is reported
 (`SCENARIO_TRANSITION_VIOLATION`, Warning).
 
-### When to fork into two commands
-
-One command fits only when the outcome is decided while the command runs.
-When a read model already holds the outcome before any command is issued,
-fork the step: give each outcome its own AutomationSlice, Processor and
-command, so each CommandSlice emits one event. This is the repair that
-`PROCESSOR_MULTIPLE_COMMANDS` names for branching outcomes.
-
-Two cases put the outcome in a read model first:
-
-- The progress row already says which way to go. In this workflow that is
-  the shipper (`step` is `shipping`) and the canceller (`step` is
-  `cancellation`): they issue different commands, so they are different
-  automations.
-- The model declares the round trip to an external system. The processor
-  that makes the call lists the system in `calls`, and the answer lands in
-  a read model with an `externalSource`. One automation for each answer
-  reads that view and issues the command that records it, for example
-  `complete-payment` and `fail-payment`. See
-  [external read model reported as unsourced](../explanation/validation-repair-patterns.md#external-read-model-reported-as-unsourced).
-  The example does not model the gateway, so it keeps one command.
-
-The fork stays on the lane. `payment.captured` and `payment.failed` remain
-the alternative successors of `tax.calculated`. Both commands append to the
-order stream, and the aggregate accepts only one successor. See
-`Swimlane.transitions` in
-[`moments.proto`](../../proto/trogonatlas/eventmodel/v1alpha1/moments.proto).
+Fork the step into one command for each outcome when a read model already
+holds the outcome before the command is issued. Give each outcome its own
+AutomationSlice, Processor and command. In this workflow that is the
+shipper (`step` is `shipping`) and the canceller (`step` is
+`cancellation`): they issue different commands, so they are different
+automations. The same holds when the model declares the call to an external
+system and the answer lands in a read model, as in
+[external read model reported as unsourced](../explanation/validation-repair-patterns.md#external-read-model-reported-as-unsourced).
+This example does not model the gateway, so `capture-payment` stays one
+command.
 
 ## How routing shows on the board
 
