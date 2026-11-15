@@ -128,6 +128,13 @@ impl Principal {
 #[allow(clippy::match_same_arms)]
 pub fn required_role(grpc_path: &str) -> Option<Role> {
     Some(match grpc_path {
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactStorageInfo"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifact"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactDownload"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactContent" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BeginArtifactUpload"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UploadArtifactContent"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompleteArtifactUpload" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CreateSourceRegistration" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UpdateSourceRegistration" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceRegistration" => Role::Reader,
@@ -170,6 +177,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         // bound inside one may perform it.
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RegisterNamespace" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSnapshotId" => Role::Reader,
         // Protection outranks every writer, so only an admin sets or lifts
         // it; who protected what is readable by anyone who can read.
@@ -179,6 +187,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections" => {
             Role::Reader
         }
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport" => Role::Reader,
 
         // Direct lookup
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity" => Role::Reader,
@@ -196,6 +205,15 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDecisionDetail"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDocumentDetail"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListGlossaryPointers"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetGlossaryDefinition"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CheckGlossaryCodeUsage"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListGlossaryEntries"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetGlossaryTerm"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectGlossarySources"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompareGlossaries"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CheckGlossaryUsage"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectGlossaryRefresh"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDecisionDeclarations"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDocumentDeclarations"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDesignGraphDetail"
@@ -246,6 +264,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
 
         // Mutation
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PutEntity" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ReviewGlossaryTerm" => Role::Writer,
         // DeleteEntity is a single-entity targeted delete and requires Writer
         // (not Admin), matching its scope. Only the bulk/destructive
         // DeleteByQuery path requires Admin. This keeps the common "delete one
@@ -1317,6 +1336,8 @@ namespaces = ["orders/*"]
         for path in [
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteNamespace",
         ] {
             assert_eq!(required_role(path), Some(Role::Admin), "{path}");
         }

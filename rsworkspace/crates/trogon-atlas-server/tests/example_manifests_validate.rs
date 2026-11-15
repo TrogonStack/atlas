@@ -9,7 +9,7 @@ use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl
 
 const PROBLEM_SPACE: &str = "acme";
 
-const NAMESPACES: [(&str, &str); 5] = [
+const NAMESPACES: [(&str, &str); 6] = [
     ("acme-storefront", "acme-storefront-model"),
     ("acme-fulfillment", "acme-fulfillment-model"),
     ("acme-reviews", "acme-reviews-model"),
@@ -18,6 +18,7 @@ const NAMESPACES: [(&str, &str); 5] = [
         "acme-customer-data-deletion-pipeline",
     ),
     ("acme-wishlist", "acme-wishlist-model"),
+    ("acme-order-workflow", "acme-order-workflow-model"),
 ];
 
 fn manifests_dir() -> PathBuf {

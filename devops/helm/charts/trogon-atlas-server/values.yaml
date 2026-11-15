@@ -101,6 +101,15 @@ config:
     existingSecret: ""
     key: change-cursor-key
 
+artifacts:
+  backend:
+    kind: disabled
+    spec: {}
+  catalog:
+    natsKvBucket: atlas_artifact_catalog
+  maxBytes: 16777216
+  uploadTtlSecs: 900
+
 # Delegate the "who may see this namespace" question to SpiceDB.
 #
 # Left off, the server answers it from the registry's own `parent` column:

@@ -1,7 +1,8 @@
 // Core Domain Chart: the knowledge graph (Decision #29) as a glanceable
 // investment map. Subdomains group into classification bands: CORE is
 // where the best people belong, SUPPORTING is built cheaply, GENERIC is
-// bought, and each subdomain shows the bounded contexts realizing it.
+// bought. Each domain is a box holding its own subdomains, grouped by
+// classification, with the bounded contexts realizing each one.
 // Everything derives from Domain/Subdomain/realizes; no new data.
 import type { Edge, Node } from '@xyflow/react';
 import type { ValidateProjectScope } from './api';
@@ -18,18 +19,23 @@ import {
 } from './model';
 
 export const CARD_W = 240;
-export const CARD_H = 96;
+export const CARD_H = 84;
 export const CTX_W = 240;
 export const CTX_H = 68;
-const BAND_PAD = 40;
-const BAND_HEADER = 48;
-const COL_GAP = 48;
-const BAND_GAP = 96;
+// Padding inside a classification section and inside a domain box.
+const BAND_PAD = 16;
+const BAND_HEADER = 32;
+const DOMAIN_PAD = 16;
+// Room for the domain title and two lines of its charter.
+const DOMAIN_HEADER = 72;
+// Gap between subdomains sharing a section, and between domain boxes.
+const COL_GAP = 32;
+const DOMAIN_GAP = 48;
+const BAND_GAP = 16;
 const CTX_GAP = 24;
 // Vertical gap between the subdomain card and the row of bounded
-// contexts realizing it. Was 24 (inline); pulled into a constant and
-// widened so the "realizes" arrows have room to breathe.
-const SD_TO_CTX_GAP = 56;
+// contexts realizing it, so the "realizes" lines have room to breathe.
+const SD_TO_CTX_GAP = 40;
 
 export const SPLIT_CANDIDATE_CODE = 'REALIZES_MIXED_CLASSIFICATIONS';
 
@@ -146,6 +152,13 @@ export interface ContextCardData extends Record<string, unknown> {
   selected?: boolean;
 }
 
+export interface DomainHeaderData extends Record<string, unknown> {
+  /** Absent for the column of subdomains whose domain is not in the model. */
+  entity?: Entity;
+  marker?: ChartMarker;
+  selected?: boolean;
+}
+
 export interface BandData extends Record<string, unknown> {
   label: string;
   hint: string;
@@ -205,133 +218,147 @@ export function buildDomainChart(model: Model, markers: ChartMarkers = NO_MARKER
 
   const nodes: Node[] = [];
   const edges: Edge[] = [];
-  // Pre-compute each band's width so the domain header spans the widest.
+
+  // Each domain is a box holding its own subdomains, so ownership reads
+  // at a glance. Inside it, the subdomains sit in classification sections
+  // (core first) showing how much investment each one deserves; a domain
+  // shows only the classifications it has.
+  const realizersOf = (sd: Entity) => realizedBySub.get(`${sd.id.namespace}/${sd.id.slug}`) ?? [];
+  // Each subdomain gets a footprint wide enough to fan out its realizing
+  // contexts side by side, so every realizes line runs straight up to its
+  // subdomain instead of through sibling contexts.
   const footprintOf = (sd: Entity) => {
-    const n = (realizedBySub.get(`${sd.id.namespace}/${sd.id.slug}`) ?? []).length;
-    const bcsW = n > 0 ? n * (CTX_W + CTX_GAP) - CTX_GAP : 0;
-    return Math.max(CARD_W, bcsW);
+    const n = realizersOf(sd).length;
+    return Math.max(CARD_W, n > 0 ? n * (CTX_W + CTX_GAP) - CTX_GAP : 0);
   };
-  const bandWidthForMembers = (mems: Entity[]) => {
-    const fps = mems.map(footprintOf);
-    return Math.max(fps.reduce((acc, w) => acc + w + COL_GAP, 0) - COL_GAP + BAND_PAD * 2, 3 * (CARD_W + COL_GAP));
+  const rowWidth = (mems: Entity[]) => mems.map(footprintOf).reduce((acc, w) => acc + w + COL_GAP, 0) - COL_GAP;
+
+  const domainByKey = new Map(domains.map((d) => [`${d.id.namespace}/${d.id.slug}`, d]));
+  const NO_DOMAIN = '';
+  const domainKeyOf = (sd: Entity) => {
+    const did = domainOf(sd);
+    const key = did ? `${did.namespace}/${did.slug}` : NO_DOMAIN;
+    return domainByKey.has(key) ? key : NO_DOMAIN;
   };
-  const widestBand = BANDS.reduce(
-    (w, band) => {
-      const mems = subdomains.filter((sd) => (classificationOf(sd) ?? 'unclassified') === band.key);
-      if (mems.length === 0) return w;
-      return Math.max(w, bandWidthForMembers(mems));
-    },
-    4 * (CARD_W + COL_GAP),
-  );
+  const boxes: { key: string; entity?: Entity }[] = [...domains]
+    .sort((a, b) => a.title.localeCompare(b.title))
+    .map((d) => ({ key: `${d.id.namespace}/${d.id.slug}`, entity: d }));
+  if (subdomains.some((sd) => domainKeyOf(sd) === NO_DOMAIN)) boxes.push({ key: NO_DOMAIN });
 
-  let y = 0;
+  let x = 0;
+  let tallest = 0;
+  for (const box of boxes) {
+    const sections = BANDS.map((band) => ({
+      band,
+      members: subdomains
+        .filter((sd) => domainKeyOf(sd) === box.key && bandOf(sd) === band.key)
+        .sort((a, b) => a.title.localeCompare(b.title)),
+    })).filter((sec) => sec.members.length > 0);
 
-  for (const d of domains) {
-    nodes.push({
-      id: `dom:${d.key}`,
+    const sectionW = Math.max(CARD_W, ...sections.map((sec) => rowWidth(sec.members))) + BAND_PAD * 2;
+    const boxW = sectionW + DOMAIN_PAD * 2;
+    const boxId = box.entity ? `dom:${box.entity.key}` : 'dom:none';
+    const boxNode: Node = {
+      id: boxId,
       type: 'domainHeader',
-      position: { x: 0, y },
-      style: { width: widestBand, height: 44 },
-      data: { entity: d, marker: markers.get(d.key) },
+      position: { x, y: 0 },
+      style: { width: boxW, height: 0 },
+      data: {
+        entity: box.entity,
+        marker: box.entity ? markers.get(box.entity.key) : undefined,
+      } satisfies DomainHeaderData,
       draggable: false,
-      zIndex: 2,
-    });
-    y += 44 + 48;
-  }
-
-  for (const band of BANDS) {
-    const members = subdomains.filter((sd) => (classificationOf(sd) ?? 'unclassified') === band.key);
-    if (members.length === 0) continue;
-    members.sort((a, b) => a.title.localeCompare(b.title));
-
-    // Each subdomain has a "footprint" wide enough to fan out its
-    // realizing bounded contexts SIDE BY SIDE in one row, not stacked
-    // in one column. Stacking made every BC->subdomain edge pass
-    // through the BCs sitting between it and the subdomain, reading
-    // as a chain when the relationships are independent in fact.
-    const footprints = members.map(footprintOf);
-
-    // Band height: room for subdomain card + one row of context cards.
-    const hasAnyBcs = members.some((sd) => (realizedBySub.get(`${sd.id.namespace}/${sd.id.slug}`) ?? []).length > 0);
-    const bandH = BAND_HEADER + BAND_PAD + CARD_H + (hasAnyBcs ? SD_TO_CTX_GAP + CTX_H : 0) + BAND_PAD;
-    const bandW = bandWidthForMembers(members);
-
-    nodes.push({
-      id: `band:${band.key}`,
-      type: 'classificationBand',
-      position: { x: 0, y },
-      style: { width: bandW, height: bandH },
-      data: { label: band.label, hint: band.hint, tone: band.tone } satisfies BandData,
-      draggable: false,
-      selectable: false,
+      selectable: box.entity !== undefined,
       zIndex: 0,
-    });
+    };
+    nodes.push(boxNode);
 
-    let cursorX = BAND_PAD;
-    members.forEach((sd, i) => {
-      const footprint = footprints[i];
-      const sdX = cursorX + (footprint - CARD_W) / 2;
-      const sdY = y + BAND_HEADER + BAND_PAD;
+    let y = DOMAIN_HEADER;
+    for (const { band, members } of sections) {
+      const hasAnyBcs = members.some((sd) => realizersOf(sd).length > 0);
+      const bandH = BAND_HEADER + CARD_H + (hasAnyBcs ? SD_TO_CTX_GAP + CTX_H : 0) + BAND_PAD;
+      const bandX = x + DOMAIN_PAD;
       nodes.push({
-        id: `sd:${sd.key}`,
-        type: 'subdomainCard',
-        position: { x: sdX, y: sdY },
-        style: { width: CARD_W, height: CARD_H },
-        data: {
-          entity: sd,
-          classification: classificationOf(sd),
-          marker: markers.get(sd.key),
-        } satisfies SubdomainCardData,
+        id: `band:${box.key || 'none'}:${band.key}`,
+        type: 'classificationBand',
+        position: { x: bandX, y },
+        style: { width: sectionW, height: bandH },
+        data: { label: band.label, hint: band.hint, tone: band.tone } satisfies BandData,
         draggable: false,
-        zIndex: 2,
+        selectable: false,
+        zIndex: 0,
       });
-      const realizers = realizedBySub.get(`${sd.id.namespace}/${sd.id.slug}`) ?? [];
-      const rowW = realizers.length > 0 ? realizers.length * (CTX_W + CTX_GAP) - CTX_GAP : 0;
-      const rowStart = cursorX + (footprint - rowW) / 2;
-      realizers.forEach((bc, j) => {
+
+      let cursorX = bandX + BAND_PAD;
+      for (const sd of members) {
+        const footprint = footprintOf(sd);
+        const sdY = y + BAND_HEADER;
         nodes.push({
-          id: `ctx:${sd.key}:${bc.key}`,
-          type: 'contextCard',
-          position: { x: rowStart + j * (CTX_W + CTX_GAP), y: sdY + CARD_H + SD_TO_CTX_GAP },
-          style: { width: CTX_W, height: CTX_H },
-          data: contextCardData(bc, sd),
+          id: `sd:${sd.key}`,
+          type: 'subdomainCard',
+          position: { x: cursorX + (footprint - CARD_W) / 2, y: sdY },
+          style: { width: CARD_W, height: CARD_H },
+          data: {
+            entity: sd,
+            classification: classificationOf(sd),
+            marker: markers.get(sd.key),
+          } satisfies SubdomainCardData,
           draggable: false,
           zIndex: 2,
         });
-        edges.push({
-          id: `rel:${bc.key}->${sd.key}`,
-          source: `ctx:${sd.key}:${bc.key}`,
-          sourceHandle: 't',
-          target: `sd:${sd.key}`,
-          targetHandle: 'b',
-          animated: false,
-          style: { stroke: '#6366f1', strokeWidth: 1.6 },
-          zIndex: 1,
-          data: {
-            relation: 'realizes',
-            doc: '',
-            metadata: [],
-            source: bc,
-            target: sd,
-            slice: undefined,
-          },
+        const realizers = realizersOf(sd);
+        const ctxRowW = realizers.length > 0 ? realizers.length * (CTX_W + CTX_GAP) - CTX_GAP : 0;
+        const rowStart = cursorX + (footprint - ctxRowW) / 2;
+        realizers.forEach((bc, j) => {
+          nodes.push({
+            id: `ctx:${sd.key}:${bc.key}`,
+            type: 'contextCard',
+            position: { x: rowStart + j * (CTX_W + CTX_GAP), y: sdY + CARD_H + SD_TO_CTX_GAP },
+            style: { width: CTX_W, height: CTX_H },
+            data: contextCardData(bc, sd),
+            draggable: false,
+            zIndex: 2,
+          });
+          edges.push({
+            id: `rel:${bc.key}->${sd.key}`,
+            source: `ctx:${sd.key}:${bc.key}`,
+            sourceHandle: 't',
+            target: `sd:${sd.key}`,
+            targetHandle: 'b',
+            animated: false,
+            style: { stroke: '#6366f1', strokeWidth: 1.6 },
+            zIndex: 1,
+            data: {
+              relation: 'realizes',
+              doc: '',
+              metadata: [],
+              source: bc,
+              target: sd,
+              slice: undefined,
+            },
+          });
         });
-      });
-      cursorX += footprint + COL_GAP;
-    });
-
-    y += bandH + BAND_GAP;
+        cursorX += footprint + COL_GAP;
+      }
+      y += bandH + BAND_GAP;
+    }
+    const boxH = sections.length > 0 ? y - BAND_GAP + DOMAIN_PAD : DOMAIN_HEADER;
+    boxNode.style = { width: boxW, height: boxH };
+    tallest = Math.max(tallest, boxH);
+    x += boxW + DOMAIN_GAP;
   }
+  const gridW = boxes.length > 0 ? x - DOMAIN_GAP : 0;
+  const y = boxes.length > 0 ? tallest + DOMAIN_GAP : 0;
 
   // Contexts realizing nothing: unmapped territory, made visible on purpose.
   const unmapped = contexts.filter((bc) => !mapped.has(bc.key));
   if (unmapped.length > 0) {
-    const unmappedW = Math.max(3 * (CARD_W + COL_GAP), unmapped.length * (CTX_W + COL_GAP) - COL_GAP + BAND_PAD * 2);
+    const unmappedW = Math.max(gridW, unmapped.length * (CTX_W + COL_GAP) - COL_GAP + BAND_PAD * 2);
     nodes.push({
       id: 'band:unmapped',
       type: 'classificationBand',
       position: { x: 0, y },
-      style: { width: unmappedW, height: BAND_HEADER + BAND_PAD * 2 + CTX_H },
+      style: { width: unmappedW, height: BAND_HEADER + CTX_H + BAND_PAD },
       data: {
         label: 'Unmapped contexts',
         hint: 'realize a subdomain or explain why not: silence is not a strategy',
@@ -345,7 +372,7 @@ export function buildDomainChart(model: Model, markers: ChartMarkers = NO_MARKER
       nodes.push({
         id: `ctx:unmapped:${bc.key}`,
         type: 'contextCard',
-        position: { x: BAND_PAD + i * (CTX_W + COL_GAP), y: y + BAND_HEADER + BAND_PAD },
+        position: { x: BAND_PAD + i * (CTX_W + COL_GAP), y: y + BAND_HEADER },
         style: { width: CTX_W, height: CTX_H },
         data: contextCardData(bc),
         draggable: false,

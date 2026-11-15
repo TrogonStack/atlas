@@ -51,6 +51,11 @@ pub struct ListEntitiesParams {
     #[schemars(description = "Restrict by entity kind (optional)")]
     pub kind: Option<String>,
     pub namespace: Option<String>,
+    #[schemars(
+        description = "Return only the highest stored version per identity. This does not imply review or publication. Defaults to false."
+    )]
+    #[serde(default)]
+    pub latest_versions_only: bool,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -132,6 +137,8 @@ struct ImpactParamsDe {
     max_depth: u32,
     #[serde(default)]
     filter_kinds: Option<Vec<String>>,
+    #[serde(default)]
+    include_containers: bool,
 }
 
 #[derive(Debug, schemars::JsonSchema)]
@@ -148,6 +155,11 @@ pub struct ImpactParams {
     #[serde(default)]
     pub max_depth: u32,
     pub filter_kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Also walk down through every member of event models and components reached. Default false, so unrelated sibling members are not reported."
+    )]
+    #[serde(default)]
+    pub include_containers: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -177,6 +189,7 @@ impl<'de> Deserialize<'de> for ImpactParams {
             version: raw.version,
             max_depth: raw.max_depth,
             filter_kinds: raw.filter_kinds,
+            include_containers: raw.include_containers,
         })
     }
 }
@@ -248,6 +261,10 @@ pub struct SearchParams {
     #[schemars(description = "Full-text search query. Maximum 2048 bytes.")]
     pub q: String,
     pub kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Restrict search to these exact namespaces. Omit or pass an empty list for every namespace visible to the caller."
+    )]
+    pub namespaces: Option<Vec<String>>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -883,6 +900,34 @@ pub struct MoveNamespaceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DeleteNamespaceParams {
+    #[schemars(
+        description = "Namespace id, not name; list_namespaces reports the id. The namespace must hold no entity on baseline or on any branch."
+    )]
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetBackingReportParams {
+    #[schemars(
+        description = "Count only subjects in these namespace ids. Omit for every visible namespace. Evidence is read from the whole visible model either way."
+    )]
+    #[serde(default)]
+    pub namespaces: Option<Vec<String>>,
+    #[schemars(
+        description = "Also return an ENTITY_UNBACKED Info finding per subject settled as unbacked. Off by default."
+    )]
+    #[serde(default)]
+    pub include_unbacked_findings: bool,
+    /// When true, return the response as proto3-rendered JSON inside a
+    /// `{ "json": "..." }` envelope instead of `{ "binpb_base64": "..." }`.
+    #[serde(default)]
+    pub json: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetSnapshotIdParams {
     #[schemars(
         description = "Restrict the snapshot to these namespaces. Omit for every namespace. Two snapshot ids are comparable only when taken over the same scope."
@@ -1326,6 +1371,24 @@ pub struct ResponsibilityQueryParams {
 pub struct CatalogQueryParams {
     #[schemars(
         description = "Exact native query request in proto3 JSON. Preserve selector alternatives, UID, local identity, digest pin presence and checked scope. No inferred historical hydration."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GlossaryRequestParams {
+    #[schemars(
+        description = "Exact glossary RPC request in proto3 JSON. Preserve context selection, exact versions and evidence pins. Review requires an authenticated User writer, current ifMatch, disposition and reason; review actor/time/digest are server-owned."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRequestParams {
+    #[schemars(
+        description = "Exact artifact gRPC request in proto3 JSON. begin_artifact_upload requires namespace, filename, mediaType, size in bytes and sha256. complete_artifact_upload requires namespace and uploadId. get_artifact and get_artifact_download require namespace and artifactId. get_artifact_storage_info accepts an empty object. Only directUpload=true allows HTTP PUT to a direct S3 presigned URL. When false or omitted, use UploadArtifactContent gRPC through an SDK or the CLI; no Atlas HTTP transfer endpoint exists. Remote MCP cannot read caller-local file paths."
     )]
     pub request_json: JsonPayload,
 }
