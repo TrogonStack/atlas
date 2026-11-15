@@ -6,189 +6,80 @@ metadata:
 spec:
   doc: One order runs through tax, payment and shipping, and is cancelled when payment fails.
   members:
-  - id:
-      namespace: acme
-      slug: acme
-      version: '1'
+  - id: acme/acme
     kind: ENTITY_KIND_DOMAIN
-  - id:
-      namespace: acme
-      slug: ordering
-      version: '1'
+  - id: acme/ordering
     kind: ENTITY_KIND_SUBDOMAIN
-  - id:
-      namespace: acme-order-workflow
-      slug: acme-order-workflow
-      version: '1'
+  - id: acme-order-workflow
     kind: ENTITY_KIND_BOUNDED_CONTEXT
-  - id:
-      namespace: acme-order-workflow
-      slug: shopper
-      version: '1'
+  - id: shopper
     kind: ENTITY_KIND_PERSONA
-  - id:
-      namespace: acme-order-workflow
-      slug: order
-      version: '1'
+  - id: order
     kind: ENTITY_KIND_SWIMLANE
-  - id:
-      namespace: acme-order-workflow
-      slug: order.placed
-      version: '1'
+  - id: order.placed
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: tax.calculated
-      version: '1'
+  - id: tax.calculated
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: payment.captured
-      version: '1'
+  - id: payment.captured
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: payment.failed
-      version: '1'
+  - id: payment.failed
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: order.shipped
-      version: '1'
+  - id: order.shipped
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: order.cancelled
-      version: '1'
+  - id: order.cancelled
     kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-order-workflow
-      slug: place-order
-      version: '1'
+  - id: place-order
     kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-order-workflow
-      slug: calculate-tax
-      version: '1'
+  - id: calculate-tax
     kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-order-workflow
-      slug: capture-payment
-      version: '1'
+  - id: capture-payment
     kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-order-workflow
-      slug: ship-order
-      version: '1'
+  - id: ship-order
     kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-order-workflow
-      slug: cancel-order
-      version: '1'
+  - id: cancel-order
     kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-order-workflow
-      slug: order-progress
-      version: '1'
+  - id: order-progress
     kind: ENTITY_KIND_READ_MODEL
-  - id:
-      namespace: acme-order-workflow
-      slug: checkout-page
-      version: '1'
+  - id: checkout-page
     kind: ENTITY_KIND_UI
-  - id:
-      namespace: acme-order-workflow
-      slug: tax-worker
-      version: '1'
+  - id: tax-worker
     kind: ENTITY_KIND_PROCESSOR
-  - id:
-      namespace: acme-order-workflow
-      slug: payment-worker
-      version: '1'
+  - id: payment-worker
     kind: ENTITY_KIND_PROCESSOR
-  - id:
-      namespace: acme-order-workflow
-      slug: shipping-worker
-      version: '1'
+  - id: shipping-worker
     kind: ENTITY_KIND_PROCESSOR
-  - id:
-      namespace: acme-order-workflow
-      slug: cancellation-worker
-      version: '1'
+  - id: cancellation-worker
     kind: ENTITY_KIND_PROCESSOR
-  - id:
-      namespace: acme-order-workflow
-      slug: place-order-slice
-      version: '1'
+  - id: place-order-slice
     kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: calculate-tax-slice
-      version: '1'
+  - id: calculate-tax-slice
     kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: capture-payment-slice
-      version: '1'
+  - id: capture-payment-slice
     kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: ship-order-slice
-      version: '1'
+  - id: ship-order-slice
     kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: cancel-order-slice
-      version: '1'
+  - id: cancel-order-slice
     kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: progress-placed-rms
-      version: '1'
+  - id: progress-placed-rms
     kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: progress-taxed-rms
-      version: '1'
+  - id: progress-taxed-rms
     kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: progress-payment-rms
-      version: '1'
+  - id: progress-payment-rms
     kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: progress-shipped-rms
-      version: '1'
+  - id: progress-payment-failed-rms
     kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: progress-cancelled-rms
-      version: '1'
+  - id: progress-shipped-rms
     kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: tax-calculator
-      version: '1'
+  - id: progress-cancelled-rms
+    kind: ENTITY_KIND_READ_MODEL_SLICE
+  - id: tax-calculator
     kind: ENTITY_KIND_AUTOMATION_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: payment-capturer
-      version: '1'
+  - id: payment-capturer
     kind: ENTITY_KIND_AUTOMATION_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: shipper
-      version: '1'
+  - id: shipper
     kind: ENTITY_KIND_AUTOMATION_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: order-canceller
-      version: '1'
+  - id: order-canceller
     kind: ENTITY_KIND_AUTOMATION_SLICE
-  - id:
-      namespace: acme-order-workflow
-      slug: order-workflow
-      version: '1'
+  - id: order-workflow
     kind: ENTITY_KIND_STORYBOARD
   title: Acme Order Workflow

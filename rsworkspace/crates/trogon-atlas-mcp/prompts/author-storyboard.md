@@ -10,7 +10,10 @@ JSON, and write it back with put_entity_json.
 - Projection adjacency: every event's read-model projections come directly
   after the emitting slice, before the next command or automation slice acts.
   Updates from divergent branches (e.g. approve vs reject) are separate slices,
-  never merged.
+  never merged (PROJECTION_MERGES_BRANCHES warns when one slice projects two
+  alternative successors of a lane transition). To project both in one slice,
+  emit one event with an outcome field instead, which drops the fork from the
+  lane's transitions.
 - One processor issues exactly one command; branching outcomes are separate
   automation slices with separate processors. Record 'these ship as one worker'
   with a Component entity listing them as members, not by sharing entities.
