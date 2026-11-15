@@ -144,6 +144,15 @@ export function StateMachineBoard({
   );
   const near = new Set(lc.arrows.filter((a) => hot.has(a.id)).flatMap((a) => [a.from, a.to]));
   const next = current ? lc.arrows.filter((a) => a.from === current.id).sort((a, b) => a.order - b.order) : [];
+  const badges = new Map<string, { x: number; y: number; numbers: number[] }>();
+  next.forEach((arrow, index) => {
+    const end = arrow.points[arrow.points.length - 1];
+    const badge = badges.get(arrow.to);
+    if (badge) {
+      badge.y += end.y;
+      badge.numbers.push(index + 1);
+    } else badges.set(arrow.to, { x: end.x - 10, y: end.y, numbers: [index + 1] });
+  });
   const returns = lc.arrows.filter((a) => a.reentry).length;
   const dim = (id: string) => Boolean(current) && current?.id !== id && !near.has(id);
 
@@ -349,13 +358,23 @@ export function StateMachineBoard({
                   />
                 );
               })}
-            {next.map((a, i) => {
-              const end = a.points[a.points.length - 1];
+            {[...badges].map(([target, badge]) => {
+              const consecutive = badge.numbers.every((number, index) => number === badge.numbers[0] + index);
+              const label =
+                consecutive && badge.numbers.length > 2
+                  ? `${badge.numbers[0]}–${badge.numbers[badge.numbers.length - 1]}`
+                  : badge.numbers.join(', ');
+              const badgeWidth = Math.max(16, label.length * 6 + 10);
               return (
-                <g key={a.id} transform={`translate(${end.x - 10},${end.y})`}>
-                  <circle r={8} style={{ fill: RING }} />
-                  <text textAnchor="middle" dominantBaseline="central" className="fill-white text-[10px] font-semibold">
-                    {i + 1}
+                <g key={target} transform={`translate(${badge.x},${badge.y / badge.numbers.length})`}>
+                  <rect x={8 - badgeWidth} y={-8} width={badgeWidth} height={16} rx={8} style={{ fill: RING }} />
+                  <text
+                    x={8 - badgeWidth / 2}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    className="fill-white text-[10px] font-semibold"
+                  >
+                    {label}
                   </text>
                 </g>
               );
@@ -371,7 +390,10 @@ export function StateMachineBoard({
         </section>
       </div>
       {current ? (
-        <div className="shrink-0 border-t border-border bg-card px-3 py-2 text-[12px]" data-testid="state-machine-next">
+        <div
+          className="max-h-[40%] shrink-0 overflow-y-auto border-t border-border bg-card px-3 py-2 text-[12px]"
+          data-testid="state-machine-next"
+        >
           <div className="font-semibold text-foreground">
             After {current.title}: {KIND_TEXT[current.kind]}
           </div>
