@@ -22,7 +22,15 @@ const PREVIEWS = [
       'See each event stream as a tower, with its events stacked together and relationships connecting the streams.',
     requirement: 'Available when events in the model belong to a swimlane.',
   },
+  {
+    id: 'stateMachine',
+    title: 'State machine',
+    description:
+      "Read a stream's lifecycle as a state diagram: which event may follow which, the guard on each road, and where the lifecycle ends or goes back to an earlier state.",
+    requirement: 'Available when a swimlane declares transitions.',
+  },
 ] as const;
+const PREVIEW_IDS: ReadonlySet<string> = new Set(PREVIEWS.map((preview) => preview.id));
 
 export function FeaturePreviewDialog({
   open,
@@ -67,7 +75,7 @@ export function FeaturePreviewDialog({
           <Tabs.Root
             value={selected}
             onValueChange={(value) => {
-              if (value === 'laneMesh' || value === 'streamTowers') setSelected(value);
+              if (typeof value === 'string' && PREVIEW_IDS.has(value)) setSelected(value as StudioFeatureFlag);
             }}
             orientation="vertical"
             className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[240px_minmax(0,1fr)] md:overflow-hidden"
