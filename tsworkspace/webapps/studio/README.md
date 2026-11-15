@@ -22,16 +22,17 @@ swimlane below), rendered live from the gRPC store.
 ## Feature Preview
 
 Open a model's **More actions** menu and choose **Feature Preview**. Select
-**Lane mesh** or **Stream towers** to see its preview and turn its switch on.
-Both start off. Each preference applies immediately and is saved in your
-browser for Studio at the same address.
+**Lane mesh**, **Stream towers** or **State machine** to see its preview and
+turn its switch on. All start off. Each preference applies immediately and is
+saved in your browser for Studio at the same address.
 
-Each preview uses the same 3D view as its model tab, with fictional example
-data. Drag to rotate the preview, right-drag to pan, or scroll to zoom.
+Each preview uses the same view as its model tab, with fictional example
+data. In the 3D previews, drag to rotate, right-drag to pan, or scroll to zoom.
 
 Lane mesh appears when the model has slices. Stream towers appears when a
-swimlane holds events. Disabling the current view returns to the Board.
-Saved HTML snapshots do not include these views.
+swimlane holds events. State machine appears when a swimlane declares
+transitions. Disabling the current view returns to the Board. Saved HTML
+snapshots do not include the 3D views.
 
 ## Architecture
 

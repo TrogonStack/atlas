@@ -64,4 +64,13 @@ describe('Feature preview renderer', () => {
     expect(await screen.findByText('This view needs WebGL')).toBeDefined();
     expect(renderer.specs).toHaveLength(0);
   });
+
+  it('renders the real State machine view without WebGL', () => {
+    renderer.webgl = false;
+    render(<FeaturePreviewIllustration feature="stateMachine" />);
+    expect(screen.getByRole('region', { name: 'Order lifecycle' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Back to Payment authorized' })).toBeDefined();
+    expect(screen.getByText('Same view, fictional data')).toBeDefined();
+    expect(renderer.specs).toHaveLength(0);
+  });
 });
