@@ -17,8 +17,8 @@ swimlane below), rendered live from the gRPC store.
 - **Export HTML**: saves the open board as one HTML file that opens from
   disk with no backend. The file is a snapshot: it shows when and where it
   was taken and does not update. It holds only the board's read responses
-  and the runtime from `build:snapshot`. The dev server builds that runtime
-  when you export, so you do not run `build:snapshot` by hand.
+  and the runtime from `build:snapshot`. In dev, the server builds that
+  runtime when you export.
 
 ## Feature Preview
 

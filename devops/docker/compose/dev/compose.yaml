@@ -236,8 +236,8 @@ services:
       trogon-atlas-server:
         condition: service_healthy
     restart: unless-stopped
-    # An export runs the snapshot runtime build next to Vite, which adds about
-    # 450 MB at its peak.
+    # Headroom for the snapshot runtime build, which runs next to Vite during
+    # an export.
     deploy:
       resources:
         limits:

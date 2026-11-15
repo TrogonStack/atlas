@@ -1,6 +1,6 @@
 // Builds the runtime a saved board embeds: one script and one stylesheet
 // with fixed names, so Studio can fetch and inline them. The output lands in
-// public/ so the production build serves it. The dev server builds its own copy.
+// public/ so the production build serves it.
 import path from 'node:path';
 import { defineConfig, mergeConfig, type UserConfigFnObject } from 'vite';
 import studio from './vite.config.ts';
