@@ -55,13 +55,13 @@ export function buildSnapshotHtml({
 
 async function fetchRuntime(path: string): Promise<string> {
   const res = await fetch(path);
-  // A server without the build answers a missing file with the app's HTML shell.
-  if (res.headers.get('content-type')?.startsWith('text/html')) {
-    throw new Error('export needs the snapshot runtime: run build:snapshot');
-  }
   // The dev server builds the runtime itself, so a failure there is a failed build.
   if (!res.ok) {
     throw new Error(`export could not load the snapshot runtime (HTTP ${res.status}): see the server log`);
+  }
+  // A server without the build answers a missing file with the app's HTML shell.
+  if (res.headers.get('content-type')?.startsWith('text/html')) {
+    throw new Error('export needs the snapshot runtime: run build:snapshot');
   }
   return res.text();
 }
