@@ -5105,7 +5105,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Run full validation over a stored EventModel: structural findings over the model and its members, plus the strategic chain of the model's namespace (its BoundedContext, the Subdomains it realizes, their Domains, and any Domain declared in the namespace). Fix Errors and Warnings.",
+        description = "Run full validation over a stored EventModel: structural findings over the model and its members, the scenario checks of its slices against the current lanes and commands, plus the strategic chain of the model's namespace (its BoundedContext, the Subdomains it realizes, their Domains, and any Domain declared in the namespace). Fix Errors and Warnings.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5161,7 +5161,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Strategic findings (BoundedContext, Domain, Subdomain, Project rules) appear once, on the store-level report whose event_model_id is empty, not on any model report. A namespace, project or domain scope also covers problem-space namespaces that hold no EventModel, so use it after editing only Project/Domain/Subdomain or BoundedContext entities. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one.",
+        description = "Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists, each with the scenario checks of that model's slices, plus aggregate Error/Warning/Info counts. Strategic findings (BoundedContext, Domain, Subdomain, Project rules) appear once, on the store-level report whose event_model_id is empty, not on any model report. A namespace, project or domain scope also covers problem-space namespaces that hold no EventModel, so use it after editing only Project/Domain/Subdomain or BoundedContext entities. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,

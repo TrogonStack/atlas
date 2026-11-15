@@ -946,6 +946,7 @@ fn check_ref(
     field: &str,
     subject: Option<pb::EntityRef>,
     known: &HashSet<pb::EntityKey>,
+    lens: &Lens,
     issues: &mut Vec<pb::ValidationIssue>,
 ) {
     let Some(id) = id_opt else {
@@ -958,7 +959,9 @@ fn check_ref(
         return;
     };
     let key = pb::EntityKey::new(kind, id);
-    if !known.contains(&key) {
+    // A target the lens hides is absent whether or not it exists; the model
+    // suite reports it as REF_OUTSIDE_VISIBLE_SCOPE, so it is not dangling.
+    if !known.contains(&key) && lens.admits(&id.namespace) {
         issues.push(issue_error(
             "SCENARIO_DANGLING_REF",
             format!(
@@ -2042,6 +2045,7 @@ fn validate_scenarios_within(
                         "scenarios[].given[].event",
                         subject.clone(),
                         &known,
+                        lens,
                         &mut issues,
                     );
                 }
@@ -2058,6 +2062,7 @@ fn validate_scenarios_within(
                     "scenarios[].when.command",
                     subject.clone(),
                     &known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_command_id, cmd_id) {
@@ -2083,6 +2088,7 @@ fn validate_scenarios_within(
                                 "scenarios[].then.emit.events[].event",
                                 subject.clone(),
                                 &known,
+                                lens,
                                 &mut issues,
                             );
                         }
@@ -2238,6 +2244,7 @@ fn validate_scenarios_within(
                         "scenarios[].when[].event",
                         subject.clone(),
                         &known,
+                        lens,
                         &mut issues,
                     );
                 }
@@ -2260,6 +2267,7 @@ fn validate_scenarios_within(
                     "scenarios[].then.read_model",
                     subject.clone(),
                     &known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_rm_id, rm_id) {
@@ -2299,6 +2307,7 @@ fn validate_scenarios_within(
                         "scenarios[].given[].read_model",
                         subject.clone(),
                         &known,
+                        lens,
                         &mut issues,
                     );
                 }
@@ -2327,6 +2336,7 @@ fn validate_scenarios_within(
                     "scenarios[].then.command",
                     subject.clone(),
                     &known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_command_id, cmd_id) {
@@ -2735,6 +2745,7 @@ fn validate_scenarios_within(
                     &format!("items[{i}].subject"),
                     subject.clone(),
                     &known,
+                    lens,
                     &mut issues,
                 );
                 if let Some(id) = subject_ref.id.as_ref() {
@@ -3376,6 +3387,47 @@ pub fn validate_model_within(
         ));
     }
     issues
+}
+
+/// The write-path scenario check over each slice `model` lists in its own
+/// namespace, read against `all` rather than the world the slice was written
+/// into, so a lane or command edit that breaks a stored scenario shows up
+/// before the slice is written again. Also returns the slices checked.
+#[must_use]
+pub fn validate_model_scenarios_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> (Vec<pb::ValidationIssue>, HashSet<pb::EntityKey>) {
+    let mut issues = Vec::new();
+    let mut examined: HashSet<pb::EntityKey> = HashSet::new();
+    for member in &model.members {
+        let Ok(kind) = pb::EntityKind::try_from(member.kind) else {
+            continue;
+        };
+        if !matches!(
+            kind,
+            pb::EntityKind::CommandSlice
+                | pb::EntityKind::ReadModelSlice
+                | pb::EntityKind::AutomationSlice
+        ) {
+            continue;
+        }
+        let Some(id) = member.id.as_ref() else {
+            continue;
+        };
+        if !outbound_pass_walks(model, id) {
+            continue;
+        }
+        // A missing member is the model suite's MEMBER_NOT_FOUND.
+        let Some(stored) = find_stored(all, kind, id) else {
+            continue;
+        };
+        if examined.insert(pb::EntityKey::new(kind, id)) {
+            issues.extend(validate_scenarios_within(&stored.entity, all, lens));
+        }
+    }
+    (issues, examined)
 }
 
 /// Stable suite ids reported on [`pb::ValidationCoverage`]. Keep in sync with
