@@ -283,11 +283,7 @@ impl Scan {
                         validation::validate_model_content(model, world),
                     );
                 }
-                Some(
-                    pb::entity::Kind::CommandSlice(_)
-                    | pb::entity::Kind::ReadModelSlice(_)
-                    | pb::entity::Kind::AutomationSlice(_),
-                ) => {
+                Some(_) if entity_kind(&stored.entity).is_some_and(validation::runs_scenarios) => {
                     slices += 1;
                     tag(
                         validation::CHECK_SCENARIOS,

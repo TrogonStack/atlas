@@ -3942,15 +3942,6 @@ fn snapshot_digest(
     })
 }
 
-fn runs_scenarios(kind: pb::EntityKind) -> bool {
-    matches!(
-        kind,
-        pb::EntityKind::CommandSlice
-            | pb::EntityKind::ReadModelSlice
-            | pb::EntityKind::AutomationSlice
-    )
-}
-
 fn subject_count(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
 }
@@ -7791,7 +7782,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await?,
         );
 
-        let ran_scenarios = runs_scenarios(kind);
+        let ran_scenarios = validation::runs_scenarios(kind);
         let ran_strategic = is_strategic_kind(kind);
         let mut snapshot_truncated = false;
         let mut scenario_issues = if ran_scenarios {
@@ -8758,7 +8749,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validate_entity_content(&entity)?;
                     check_project_namespace_conflict(&entity)?;
                     check_context_slug(&entity)?;
-                    if runs_scenarios(kind) {
+                    if validation::runs_scenarios(kind) {
                         has_scenario_puts = true;
                     }
                     if is_strategic_kind(kind) {
@@ -9126,7 +9117,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             suites.scenarios = validation::SuiteRun::over(
                 metas
                     .iter()
-                    .filter(|m| m.is_put && runs_scenarios(m.kind) && m.entity.is_some())
+                    .filter(|m| {
+                        m.is_put && validation::runs_scenarios(m.kind) && m.entity.is_some()
+                    })
                     .count(),
             );
             let mut validation_ctx: Vec<StoredEntity> = (*pre_all_for_validation).clone();
@@ -9139,7 +9132,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let mut scenario_errors: Vec<pb::ValidationIssue> = Vec::new();
             let mut first_error_index: Option<usize> = None;
             for (i, m) in metas.iter().enumerate() {
-                if !m.is_put || !runs_scenarios(m.kind) {
+                if !m.is_put || !validation::runs_scenarios(m.kind) {
                     continue;
                 }
                 let Some(entity) = m.entity.as_ref() else {

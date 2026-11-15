@@ -1037,3 +1037,94 @@ async fn unreadable_scenario_references_are_not_dangling() {
         assert_eq!(count(&issues, "SCENARIO_DANGLING_REF"), 1, "{issues:?}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validation_checks_stored_scenarios_against_the_current_lane() {
+    let mut fixture = Fixture::new().await;
+    let own = fixture.own.clone();
+    let event = |slug: &str| pb::EventRef {
+        id: Some(id(&own, slug)),
+    };
+    let example = |slug: &str| pb::EventExample {
+        event: Some(event(slug)),
+        payload: None,
+    };
+    for slug in ["review.submitted", "review.approved"] {
+        fixture
+            .seed(pb::entity::Kind::Event(pb::Event {
+                id: Some(id(&own, slug)),
+                title: slug.into(),
+                swimlane: Some(pb::SwimlaneRef {
+                    id: Some(id(&own, "review")),
+                }),
+                ..Default::default()
+            }))
+            .await;
+    }
+    fixture
+        .seed(pb::entity::Kind::Swimlane(pb::Swimlane {
+            id: Some(id(&own, "review")),
+            title: "Review".into(),
+            transitions: vec![pb::swimlane::Transition {
+                after: Some(event("review.submitted")),
+                next: vec![pb::swimlane::transition::Next {
+                    event: Some(event("review.rejected")),
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        }))
+        .await;
+    fixture
+        .seed(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(id(&own, "approve-review")),
+            title: "Approve review".into(),
+            scenarios: vec![pb::CommandScenario {
+                id: "s1".into(),
+                title: "submitted review is approved".into(),
+                given: vec![example("review.submitted")],
+                then: Some(pb::command_scenario::Then::Emit(pb::EmittedEvents {
+                    events: vec![example("review.approved")],
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }))
+        .await;
+    let model = fixture.model(vec![member(
+        pb::EntityKind::CommandSlice,
+        &own,
+        "approve-review",
+    )]);
+    fixture
+        .seed(pb::entity::Kind::EventModel(model.clone()))
+        .await;
+
+    for issues in fixture.validate(&model, ACME_TOKEN).await {
+        assert_eq!(
+            count(&issues, "SCENARIO_TRANSITION_VIOLATION"),
+            1,
+            "{issues:?}"
+        );
+    }
+    let coverage = fixture
+        .client
+        .validate_event_model(authed(
+            pb::ValidateEventModelRequest {
+                event_model: None,
+                event_model_id: model.id.clone(),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .coverage
+        .unwrap();
+    assert!(
+        coverage.checks.iter().any(|c| c.check_id == "scenarios"
+            && c.state == pb::validation_check_result::State::Completed as i32
+            && c.subjects_examined == 1),
+        "{coverage:?}"
+    );
+}

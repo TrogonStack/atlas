@@ -4,6 +4,7 @@ pub mod architecture_resources;
 pub mod finding_evidence;
 
 use std::{
+    cell::OnceCell,
     collections::{BTreeSet, HashMap, HashSet},
     fmt,
 };
@@ -2009,20 +2010,47 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
     validate_scenarios_within(entity, all, &Lens::Everything)
 }
 
+/// Snapshot indexes the scenarios check reads, built once per snapshot so a
+/// loop over many slices does not rebuild them per slice.
+struct ScenarioIndex<'a> {
+    all: &'a [StoredEntity],
+    known: HashSet<pb::EntityKey>,
+    lanes: OnceCell<(HashMap<pb::IdKey, pb::Id>, LaneTransitions<'a>)>,
+}
+
+impl<'a> ScenarioIndex<'a> {
+    fn new(all: &'a [StoredEntity]) -> Self {
+        let known = all
+            .iter()
+            .filter_map(|se| {
+                let k = entity_kind(&se.entity)?;
+                let i = entity_id(&se.entity)?;
+                Some(pb::EntityKey::new(k, i))
+            })
+            .collect();
+        Self {
+            all,
+            known,
+            lanes: OnceCell::new(),
+        }
+    }
+}
+
 fn validate_scenarios_within(
     entity: &pb::Entity,
     all: &[StoredEntity],
     lens: &Lens,
 ) -> Vec<pb::ValidationIssue> {
+    validate_scenarios_indexed(entity, &ScenarioIndex::new(all), lens)
+}
+
+fn validate_scenarios_indexed(
+    entity: &pb::Entity,
+    index: &ScenarioIndex<'_>,
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
-    let known: HashSet<pb::EntityKey> = all
-        .iter()
-        .filter_map(|se| {
-            let k = entity_kind(&se.entity)?;
-            let i = entity_id(&se.entity)?;
-            Some(pb::EntityKey::new(k, i))
-        })
-        .collect();
+    let (all, known) = (index.all, &index.known);
     let subject = slice_ref(entity);
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::CommandSlice(s)) => {
@@ -2044,7 +2072,7 @@ fn validate_scenarios_within(
                         ev.event.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].given[].event",
                         subject.clone(),
-                        &known,
+                        known,
                         lens,
                         &mut issues,
                     );
@@ -2061,7 +2089,7 @@ fn validate_scenarios_within(
                     cmd_id,
                     "scenarios[].when.command",
                     subject.clone(),
-                    &known,
+                    known,
                     lens,
                     &mut issues,
                 );
@@ -2087,7 +2115,7 @@ fn validate_scenarios_within(
                                 ev.event.as_ref().and_then(|r| r.id.as_ref()),
                                 "scenarios[].then.emit.events[].event",
                                 subject.clone(),
-                                &known,
+                                known,
                                 lens,
                                 &mut issues,
                             );
@@ -2120,7 +2148,7 @@ fn validate_scenarios_within(
             // scenario may only emit a legal successor of the last given
             // event on that stream. The swimlane decides the fork; GWTs
             // must not invent roads the aggregate would refuse.
-            let (event_lane, lane_transitions) = lane_maps(all);
+            let (event_lane, lane_transitions) = index.lanes.get_or_init(|| lane_maps(all));
             let key = |i: &pb::Id| pb::IdKey::new(i);
             for sc in &s.scenarios {
                 let mut last_on: HashMap<pb::IdKey, pb::Id> = HashMap::new();
@@ -2243,7 +2271,7 @@ fn validate_scenarios_within(
                         ev.event.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].when[].event",
                         subject.clone(),
-                        &known,
+                        known,
                         lens,
                         &mut issues,
                     );
@@ -2266,7 +2294,7 @@ fn validate_scenarios_within(
                     rm_id,
                     "scenarios[].then.read_model",
                     subject.clone(),
-                    &known,
+                    known,
                     lens,
                     &mut issues,
                 );
@@ -2306,7 +2334,7 @@ fn validate_scenarios_within(
                         rm.read_model.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].given[].read_model",
                         subject.clone(),
-                        &known,
+                        known,
                         lens,
                         &mut issues,
                     );
@@ -2335,7 +2363,7 @@ fn validate_scenarios_within(
                     cmd_id,
                     "scenarios[].then.command",
                     subject.clone(),
-                    &known,
+                    known,
                     lens,
                     &mut issues,
                 );
@@ -2744,7 +2772,7 @@ fn validate_scenarios_within(
                     subject_ref.id.as_ref(),
                     &format!("items[{i}].subject"),
                     subject.clone(),
-                    &known,
+                    known,
                     lens,
                     &mut issues,
                 );
@@ -3399,35 +3427,43 @@ pub fn validate_model_scenarios_within(
     all: &[StoredEntity],
     lens: &Lens,
 ) -> (Vec<pb::ValidationIssue>, HashSet<pb::EntityKey>) {
-    let mut issues = Vec::new();
+    let index = ScenarioIndex::new(all);
+    let stored: HashMap<pb::EntityKey, &StoredEntity> = all
+        .iter()
+        .filter_map(|se| {
+            Some((
+                pb::EntityKey::new(entity_kind(&se.entity)?, entity_id(&se.entity)?),
+                se,
+            ))
+        })
+        .collect();
     let mut examined: HashSet<pb::EntityKey> = HashSet::new();
-    for member in &model.members {
-        let Ok(kind) = pb::EntityKind::try_from(member.kind) else {
-            continue;
-        };
-        if !matches!(
-            kind,
-            pb::EntityKind::CommandSlice
-                | pb::EntityKind::ReadModelSlice
-                | pb::EntityKind::AutomationSlice
-        ) {
-            continue;
-        }
-        let Some(id) = member.id.as_ref() else {
-            continue;
-        };
-        if !outbound_pass_walks(model, id) {
-            continue;
-        }
-        // A missing member is the model suite's MEMBER_NOT_FOUND.
-        let Some(stored) = find_stored(all, kind, id) else {
-            continue;
-        };
-        if examined.insert(pb::EntityKey::new(kind, id)) {
-            issues.extend(validate_scenarios_within(&stored.entity, all, lens));
-        }
-    }
+    let issues = model
+        .members
+        .iter()
+        .filter_map(|m| {
+            let kind = pb::EntityKind::try_from(m.kind)
+                .ok()
+                .filter(|k| runs_scenarios(*k))?;
+            let id = m.id.as_ref().filter(|id| outbound_pass_walks(model, id))?;
+            let key = pb::EntityKey::new(kind, id);
+            // A missing member is the model suite's MEMBER_NOT_FOUND.
+            let se = *stored.get(&key)?;
+            examined.insert(key).then_some(se)
+        })
+        .flat_map(|se| validate_scenarios_indexed(&se.entity, &index, lens))
+        .collect();
     (issues, examined)
+}
+
+/// Slice kinds that carry scenarios, so the scenarios check applies to them.
+pub(crate) fn runs_scenarios(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::CommandSlice
+            | pb::EntityKind::ReadModelSlice
+            | pb::EntityKind::AutomationSlice
+    )
 }
 
 /// Stable suite ids reported on [`pb::ValidationCoverage`]. Keep in sync with
