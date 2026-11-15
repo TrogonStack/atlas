@@ -15,6 +15,8 @@ use trogon_atlas_store::{
     StoredEntity,
 };
 
+use crate::ownership::Lens;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct IssuerId {
     namespace: String,
@@ -386,6 +388,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("DANGLING_REF", Error, "Model carries a dangling reference",
           "An entity reached transitively from this model references something that does not exist in the store.",
           Unspecified, "", "model"),
+        r("REF_OUTSIDE_VISIBLE_SCOPE", Info, "Reference target lies outside the caller's visibility",
+          "A reference or member points into a namespace this caller cannot read, so whether the target exists was not checked. Validate with a caller that can read that namespace to resolve it.",
+          Unspecified, "", "model"),
         r("CROSS_MODEL_BOUNDARY_VIOLATION", Error, "Member belongs to another model",
           "A member of this event model is owned by another event model and no seam is declared between them. Members must respect model ownership.",
           Unspecified, "", "model"),
@@ -744,6 +749,7 @@ mod catalog_drift_tests {
         "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY",
         "READ_MODEL_DUPLICATE_SHAPE",
         "REALIZES_DANGLING",
+        "REF_OUTSIDE_VISIBLE_SCOPE",
         "REALIZES_MISSING_REF",
         "REALIZES_MIXED_CLASSIFICATIONS",
         "REALIZES_MULTIPLE",
@@ -1997,6 +2003,14 @@ fn lane_maps(all: &[StoredEntity]) -> (HashMap<pb::IdKey, pb::Id>, LaneTransitio
 
 #[must_use]
 pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_scenarios_within(entity, all, &Lens::Everything)
+}
+
+fn validate_scenarios_within(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
     let known: HashSet<pb::EntityKey> = all
         .iter()
@@ -2346,7 +2360,13 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     ));
                     continue;
                 };
-                if !known.contains(&pb::EntityKey::new(pb::EntityKind::Subdomain, sid)) {
+                if !lens.admits(&sid.namespace) {
+                    issues.push(outside_visible_scope(
+                        subject.clone(),
+                        format!("realizes[{i}]"),
+                        &format!("subdomain {}/{}@{}", sid.namespace, sid.slug, sid.version),
+                    ));
+                } else if !known.contains(&pb::EntityKey::new(pb::EntityKind::Subdomain, sid)) {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "REALIZES_DANGLING".into(),
@@ -2398,6 +2418,17 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         format!("relationships[{i}] points at this context itself; a context needs no agreement with itself"),
                         subject.clone(),
                         &format!("relationships[{i}].upstream"),
+                    ));
+                    continue;
+                }
+                if !lens.admits(&uid.namespace) {
+                    issues.push(outside_visible_scope(
+                        subject.clone(),
+                        format!("relationships[{i}].upstream"),
+                        &format!(
+                            "bounded_context:{}/{}@{}",
+                            uid.namespace, uid.slug, uid.version
+                        ),
                     ));
                     continue;
                 }
@@ -2900,6 +2931,14 @@ pub fn strategic_chain_issues<'a>(
     namespaces: impl IntoIterator<Item = &'a str>,
     all: &[StoredEntity],
 ) -> Vec<pb::ValidationIssue> {
+    strategic_chain_issues_within(namespaces, all, &Lens::Everything)
+}
+
+pub(crate) fn strategic_chain_issues_within<'a>(
+    namespaces: impl IntoIterator<Item = &'a str>,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let namespaces: HashSet<&str> = namespaces.into_iter().collect();
     let latest = latest_strategic_versions(all);
     let declared_here = |kind: pb::EntityKind, id: Option<&pb::Id>| {
@@ -2977,7 +3016,7 @@ pub fn strategic_chain_issues<'a>(
         .filter(|(kind, se)| {
             entity_id(&se.entity).is_some_and(|id| seen.insert(pb::EntityKey::new(*kind, id)))
         })
-        .flat_map(|(_, se)| validate_scenarios(&se.entity, all))
+        .flat_map(|(_, se)| validate_scenarios_within(&se.entity, all, lens))
         .collect()
 }
 
@@ -3315,9 +3354,26 @@ pub fn strategic_issues_for_deletes(
 /// problem space are not hidden until someone validates those entities.
 #[must_use]
 pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
-    let mut issues = validate_model_content(model, all);
+    validate_model_within(model, all, &Lens::Everything)
+}
+
+/// [`validate_model`] for a caller that reads only the namespaces `lens`
+/// admits. A target in a namespace the lens excludes is absent from `all`
+/// whether or not it exists, so it is reported as outside the caller's
+/// visibility instead of as missing.
+#[must_use]
+pub fn validate_model_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_model_content_within(model, all, lens);
     if let Some(id) = model.id.as_ref() {
-        issues.extend(strategic_chain_issues([id.namespace.as_str()], all));
+        issues.extend(strategic_chain_issues_within(
+            [id.namespace.as_str()],
+            all,
+            lens,
+        ));
     }
     issues
 }
@@ -3509,6 +3565,41 @@ pub fn validate_model_content(
     model: &pb::EventModel,
     all: &[StoredEntity],
 ) -> Vec<pb::ValidationIssue> {
+    validate_model_content_within(model, all, &Lens::Everything)
+}
+
+fn outside_visible_scope(
+    subject: Option<pb::EntityRef>,
+    subject_field: String,
+    target: &str,
+) -> pb::ValidationIssue {
+    pb::ValidationIssue {
+        severity: pb::validation_issue::Severity::Info as i32,
+        code: "REF_OUTSIDE_VISIBLE_SCOPE".into(),
+        message: format!(
+            "{target} lies in a namespace outside this caller's visibility, so it was not resolved"
+        ),
+        subject,
+        subject_field,
+        ..Default::default()
+    }
+}
+
+/// Members from another context are validated by their own model, so the
+/// outbound-ref pass only walks members in the model's namespace.
+fn outbound_pass_walks(model: &pb::EventModel, member: &pb::Id) -> bool {
+    model
+        .id
+        .as_ref()
+        .is_none_or(|i| i.namespace == member.namespace)
+}
+
+#[must_use]
+pub fn validate_model_content_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
 
     let known: HashSet<pb::EntityKey> = all
@@ -3558,7 +3649,19 @@ pub fn validate_model_content(
             continue;
         };
         let key = pb::EntityKey::new(k, id);
-        if !known.contains(&key) {
+        if !lens.admits(&id.namespace) {
+            issues.push(outside_visible_scope(
+                Some(m.clone()),
+                String::new(),
+                &format!(
+                    "member {}:{}/{}@{}",
+                    trogon_atlas_proto::canonical::kind_short(k),
+                    id.namespace,
+                    id.slug,
+                    id.version
+                ),
+            ));
+        } else if !known.contains(&key) {
             issues.push(pb::ValidationIssue {
                 severity: pb::validation_issue::Severity::Error as i32,
                 code: "MEMBER_NOT_FOUND".into(),
@@ -3576,6 +3679,15 @@ pub fn validate_model_content(
         }
     }
 
+    let visible_members = || {
+        model.members.iter().filter(move |member| {
+            member
+                .id
+                .as_ref()
+                .is_none_or(|id| lens.admits(&id.namespace))
+        })
+    };
+
     // Invariant: a processor issues exactly ONE command. Branching outcomes
     // (e.g. approve vs reject) are different scenarios and must be modeled as
     // separate automation slices with separate processors.
@@ -3585,7 +3697,7 @@ pub fn validate_model_content(
     // that splitting per consumer produces.
     let mut processor_commands: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
     let mut read_model_automations: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::AutomationSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3780,7 +3892,7 @@ pub fn validate_model_content(
         .filter_map(|r| r.id.as_ref())
         .map(|i| (i.namespace.clone(), i.slug.clone()))
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3824,7 +3936,7 @@ pub fn validate_model_content(
         .filter_map(|cr| cr.id.as_ref())
         .map(pb::IdKey::new)
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3883,7 +3995,7 @@ pub fn validate_model_content(
             ))
         })
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4083,7 +4195,7 @@ pub fn validate_model_content(
         }
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(cmd_id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4187,7 +4299,7 @@ pub fn validate_model_content(
             _ => {}
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(cmd_id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4270,7 +4382,7 @@ pub fn validate_model_content(
             }
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4310,7 +4422,7 @@ pub fn validate_model_content(
     // bookmark that resolves to nothing: it cannot be verified for drift,
     // queried, or rendered. Walk every member entity's metadata. Malformed
     // payloads are treated as absent: they must not panic.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(m_id), Ok(m_kind)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -4840,7 +4952,7 @@ pub fn validate_model_content(
             _ => None,
         })
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4967,7 +5079,7 @@ pub fn validate_model_content(
             _ => {}
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ui_id), Ok(pb::EntityKind::Ui)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5023,7 +5135,7 @@ pub fn validate_model_content(
     }
 
     // EVENT_FIELD_UNSOURCED: per emitted event in each CommandSlice.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5113,7 +5225,7 @@ pub fn validate_model_content(
     // AUTOMATION_COMMAND_FIELD_UNSOURCED: per field of the command an
     // AutomationSlice emits, must be present in the union of fields of
     // source_read_models or annotated as derived.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::AutomationSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5186,7 +5298,7 @@ pub fn validate_model_content(
     // lanes. Otherwise the RM is lying: the projection cannot
     // populate the field, and any AutomationSlice that consumes the
     // RM is reading a value that doesn't actually exist.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5201,6 +5313,21 @@ pub fn validate_model_content(
             .external_source
             .as_ref()
             .is_some_and(|src| src.system.is_some())
+        {
+            continue;
+        }
+        if rm
+            .source_events
+            .iter()
+            .filter_map(|sr| sr.id.as_ref())
+            .any(|id| {
+                !lens.admits(&id.namespace)
+                    || events_by_id
+                        .get(&pb::IdKey::new(id))
+                        .and_then(|event| event.swimlane.as_ref())
+                        .and_then(|lane| lane.id.as_ref())
+                        .is_some_and(|lane| !lens.admits(&lane.namespace))
+            })
         {
             continue;
         }
@@ -5253,7 +5380,7 @@ pub fn validate_model_content(
     //     key cannot have its row identity validated. Surfaced as Info
     //     during the migration window; candidate for Warning once the
     //     store is fully migrated.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5312,7 +5439,7 @@ pub fn validate_model_content(
     // events are one view drawn several times. External feeds have no
     // source events to compare, so they are skipped.
     let mut shape_groups: Vec<(ReadModelShape, Vec<pb::IdKey>)> = Vec::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5367,7 +5494,7 @@ pub fn validate_model_content(
     //
     // One issue per (slice, event, missing key field) so the caller
     // can see exactly which (event, field) pair is incomplete.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5402,6 +5529,9 @@ pub fn validate_model_content(
             let Some(ev_id) = se_ref.event.as_ref().and_then(|r| r.id.as_ref()) else {
                 continue;
             };
+            if !lens.admits(&ev_id.namespace) {
+                continue;
+            }
             let ev_fields: HashSet<&str> = events_by_id
                 .get(&pb::IdKey::new(ev_id))
                 .map(|ev| {
@@ -5453,7 +5583,7 @@ pub fn validate_model_content(
     // of the slice's emitted_events OR appear in the command's
     // swimlane.state. Otherwise the runtime takes the value in and
     // the model has no record of what was done with it.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5587,7 +5717,7 @@ pub fn validate_model_content(
         .filter_map(|ui| ui.id.as_ref())
         .map(pb::IdKey::new)
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Ui)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
             continue;
@@ -5628,7 +5758,7 @@ pub fn validate_model_content(
     // Uuidv5IdentityAnnotation on the swimlane itself. Inline expressions
     // ("{uuidv5(...)}") are malformed: register the identity once under a
     // name and reference the name.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(lane_id), Ok(pb::EntityKind::Swimlane)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5758,7 +5888,7 @@ pub fn validate_model_content(
     // consume. Within a storyboard, a read-model slice must come after the
     // slice emitting its source event, and no command or automation slice may
     // run in between, otherwise the board can no longer tell the order.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(sb_ref_id), Ok(pb::EntityKind::Storyboard)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6043,7 +6173,7 @@ pub fn validate_model_content(
     // transition merges the fork into one moment.
     {
         let (event_lane, lane_transitions) = lane_maps(all);
-        for m in &model.members {
+        for m in visible_members() {
             let (Some(rs_id), Ok(pb::EntityKind::ReadModelSlice)) =
                 (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
             else {
@@ -6133,7 +6263,7 @@ pub fn validate_model_content(
     // affordances, deep links). A hop the storyboards already explain via
     // a command path is derived; declaring it again is managed duplication
     // that drifts the moment the storyboard changes.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ui_id), Ok(pb::EntityKind::Ui)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6176,6 +6306,19 @@ pub fn validate_model_content(
                 continue;
             };
             if !known.contains(&pb::EntityKey::new(pb::EntityKind::Ui, to_id)) {
+                if !lens.admits(&to_id.namespace) {
+                    if !outbound_pass_walks(model, ui_id) {
+                        issues.push(outside_visible_scope(
+                            Some(pb::EntityRef {
+                                kind: pb::EntityKind::Ui as i32,
+                                id: Some(ui_id.clone()),
+                            }),
+                            format!("transitions[{ti}].to"),
+                            &format!("ui:{}/{}@{}", to_id.namespace, to_id.slug, to_id.version),
+                        ));
+                    }
+                    continue;
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Error as i32,
                     code: "UI_TRANSITION_DANGLING".into(),
@@ -6243,7 +6386,7 @@ pub fn validate_model_content(
         pb::EntityKind::AutomationSlice,
         pb::EntityKind::UiSlice,
     ];
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -6268,7 +6411,7 @@ pub fn validate_model_content(
         });
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -6322,7 +6465,7 @@ pub fn validate_model_content(
     // A storyboard walking a slice the EventModel has not claimed is a
     // curation gap: the storyboard knows the moment, the model does
     // not. Mirror of SLICE_NOT_IN_STORYBOARD.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(sb_id), Ok(pb::EntityKind::Storyboard)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6380,7 +6523,7 @@ pub fn validate_model_content(
     //
     // (rm key) → events some in-model rmSlice consumes for it
     let mut rm_consumed_by_slices: HashMap<pb::IdKey, HashSet<pb::IdKey>> = HashMap::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rs_id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6475,7 +6618,7 @@ pub fn validate_model_content(
     // is the workflow-state pattern: the entity says "I consume X" but
     // the curated story never walks that projection. Either add a slice
     // or drop the event from the RM.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6583,7 +6726,7 @@ pub fn validate_model_content(
     // subscription pattern and validated by their owning model. Skip
     // them here.
     let mut events_consumed_locally: HashSet<pb::IdKey> = HashSet::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6614,7 +6757,7 @@ pub fn validate_model_content(
         }
     }
     let model_ns = model.id.as_ref().map_or("", |i| i.namespace.as_str());
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -6646,7 +6789,7 @@ pub fn validate_model_content(
         });
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -6669,10 +6812,8 @@ pub fn validate_model_content(
         // subscription view names) is validated by ITS model; walking its
         // internals from here only produces noise about a boundary we
         // deliberately do not own.
-        if let Some(model_ns) = model.id.as_ref().map(|i| i.namespace.as_str()) {
-            if id.namespace != model_ns {
-                continue;
-            }
+        if !outbound_pass_walks(model, id) {
+            continue;
         }
         let Ok(outbound) = try_outbound_refs(&se.entity) else {
             issues.push(pb::ValidationIssue {
@@ -6778,6 +6919,19 @@ pub fn validate_model_content(
                 Some(k) => trogon_atlas_proto::canonical::kind_short(k),
             };
             match resolved {
+                None if !lens.admits(&o.to_id.namespace) => {
+                    issues.push(outside_visible_scope(
+                        Some(pb::EntityRef {
+                            kind: k as i32,
+                            id: Some(id.clone()),
+                        }),
+                        o.from_field.clone(),
+                        &format!(
+                            "{}:{}/{}@{}",
+                            to_kind_label, o.to_id.namespace, o.to_id.slug, o.to_id.version,
+                        ),
+                    ));
+                }
                 None => {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
@@ -6864,7 +7018,7 @@ pub fn validate_model_content(
             set.insert(pb::EntityKey::new(kind, i));
         }
     };
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -7052,7 +7206,7 @@ pub fn validate_model_content(
         pb::EntityKind::Ui,
         pb::EntityKind::Persona,
     ];
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -7152,7 +7306,7 @@ pub fn validate_model_content(
     // land on any member. A member listed twice still reports each
     // annotation once.
     let mut annotated = HashSet::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -7195,7 +7349,7 @@ pub fn validate_model_content(
     // Decision #33: shape is declared, not inferred. Two entities
     // pointing at the same schema `type_url` are nominally same-type
     // by declaration, so no twin warning is needed.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -7244,7 +7398,7 @@ pub fn validate_model_content(
         }
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -7716,7 +7870,7 @@ pub fn validate_model_content(
                 false
             };
 
-        for m in &model.members {
+        for m in visible_members() {
             let (Some(sli_id), Ok(pb::EntityKind::ServiceLevelIndicator)) =
                 (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
             else {
@@ -7737,7 +7891,18 @@ pub fn validate_model_content(
             let mut journey_end: Option<pb::Id> = None;
             let mut journey_correlate_on: Vec<String> = Vec::new();
 
-            match sli.connection.as_ref().and_then(|c| c.kind.as_ref()) {
+            let connection = sli.connection.as_ref().and_then(|c| c.kind.as_ref());
+            let slice_target = match connection {
+                Some(pb::connection::Kind::CommandHandling(ch)) => ch.command_slice.as_ref(),
+                Some(pb::connection::Kind::Projection(p)) => p.read_model_slice.as_ref(),
+                Some(pb::connection::Kind::Reaction(r)) => r.automation_slice.as_ref(),
+                Some(pb::connection::Kind::Display(d)) => d.ui_slice.as_ref(),
+                _ => None,
+            };
+            let connection_visible = slice_target
+                .and_then(|slice| slice.id.as_ref())
+                .is_none_or(|id| lens.admits(&id.namespace));
+            match connection.filter(|_| connection_visible) {
                 Some(pb::connection::Kind::CommandHandling(ch)) => {
                     let Some(slice_id) = ch.command_slice.as_ref().and_then(|s| s.id.as_ref())
                     else {
@@ -8098,7 +8263,7 @@ pub fn validate_model_content(
             }
         }
 
-        for m in &model.members {
+        for m in visible_members() {
             let (Some(slo_id), Ok(pb::EntityKind::ServiceLevelObjective)) =
                 (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
             else {
@@ -8113,20 +8278,26 @@ pub fn validate_model_content(
             });
             let label = format!("{}/{}@{}", slo_id.namespace, slo_id.slug, slo_id.version);
 
-            let is_latency = slo
+            let indicator_visible = slo
                 .indicator
                 .as_ref()
                 .and_then(|r| r.id.as_ref())
-                .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
-                .is_some_and(|sli| {
-                    matches!(
-                        sli.measure,
-                        Some(pb::service_level_indicator::Measure::Latency(_))
-                    )
-                });
+                .is_none_or(|id| lens.admits(&id.namespace));
+            let is_latency = indicator_visible.then(|| {
+                slo.indicator
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
+                    .is_some_and(|sli| {
+                        matches!(
+                            sli.measure,
+                            Some(pb::service_level_indicator::Measure::Latency(_))
+                        )
+                    })
+            });
 
             for (i, obj) in slo.objectives.iter().enumerate() {
-                if is_latency && obj.threshold.is_none() {
+                if is_latency == Some(true) && obj.threshold.is_none() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
@@ -8138,7 +8309,7 @@ pub fn validate_model_content(
                         ..Default::default()
                     });
                 }
-                if !is_latency && obj.threshold.is_some() {
+                if is_latency == Some(false) && obj.threshold.is_some() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
@@ -8671,6 +8842,160 @@ mod boundary_tests {
 
     fn count(issues: &[pb::ValidationIssue], code: &str) -> usize {
         issues.iter().filter(|i| i.code == code).count()
+    }
+
+    fn subscriber(source_ns: &str) -> (pb::EventModel, pb::Entity) {
+        let view = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("downstream", "orders.delivered")),
+                title: "orders.delivered".into(),
+                source_events: vec![pb::EventRef {
+                    id: Some(id(source_ns, "order.fulfilled")),
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::ReadModel,
+                "downstream",
+                "orders.delivered",
+            )],
+            ..Default::default()
+        };
+        (model, view)
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn lens_over(namespaces: &[&str]) -> Lens {
+        Lens::Only(std::sync::Arc::new(
+            namespaces
+                .iter()
+                .map(|ns| trogon_atlas_core::NamespaceId::parse(ns).unwrap())
+                .collect(),
+        ))
+    }
+
+    #[test]
+    fn missing_target_inside_the_visible_scope_is_dangling() {
+        let (model, view) = subscriber("downstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn visible_cross_namespace_seam_resolves() {
+        let (model, view) = subscriber("upstream");
+        let all = vec![stored(view), stored(event("upstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream", "upstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn target_outside_the_visible_scope_is_not_called_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn member_outside_the_visible_scope_is_not_called_missing() {
+        let (mut model, view) = subscriber("downstream");
+        model
+            .members
+            .push(member(pb::EntityKind::Event, "upstream", "order.fulfilled"));
+        let all = vec![stored(view), stored(event("downstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "MEMBER_NOT_FOUND"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_transition_outside_the_visible_scope_is_not_called_dangling() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("downstream", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "downstream", "home")],
+            ..Default::default()
+        };
+        let issues = validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_member_from_another_visible_namespace_classifies_its_hidden_transition() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("shell", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "shell", "home")],
+            ..Default::default()
+        };
+        let issues =
+            validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream", "shell"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(outside[0].subject_field, "transitions[0].to");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn full_visibility_reports_a_missing_cross_namespace_target_as_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &Lens::Everything);
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
     }
 
     #[test]

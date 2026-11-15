@@ -10660,7 +10660,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (all, snapshot_truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
-        let issues = validation::validate_model(&model, &all);
+        let lens = self.lens(&vis).await?;
+        let issues = validation::validate_model_within(&model, &all, &lens);
         let mut checks = vec![validation::ran_against_snapshot(
             validation::CHECK_MODEL,
             1,
@@ -10734,6 +10735,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (all, snapshot_truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
+        let lens = self.lens(&vis).await?;
 
         let architecture_context = self
             .architecture_validation_context(&all, branch.as_deref(), &vis)
@@ -10801,7 +10803,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if !in_scope {
                 continue;
             }
-            let issues = validation::validate_model_content(em, all.as_ref());
+            let issues = validation::validate_model_content_within(em, all.as_ref(), &lens);
             scoped_namespaces.insert(id.namespace.clone());
             reports.push(ModelReport {
                 event_model_id: Some(id.clone()),
@@ -10812,9 +10814,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // The strategic chain belongs to the namespaces, not to any one
         // model, so it is reported once beside the store-level issues
         // instead of repeating in every model that shares a domain.
-        let chain_issues = validation::strategic_chain_issues(
+        let chain_issues = validation::strategic_chain_issues_within(
             scoped_namespaces.iter().map(String::as_str),
             all.as_ref(),
+            &lens,
         );
         let already_reported: Vec<_> = store_issues.clone();
         store_issues.extend(chain_issues.into_iter().filter(|chain| {

@@ -18,7 +18,13 @@ spec:
         uuid: {}
     - name: step
       type:
-        string: {}
+        enumeration:
+          values:
+          - tax
+          - payment
+          - shipping
+          - cancellation
+          - done
   sourceEvents:
   - id:
       namespace: acme-order-workflow
