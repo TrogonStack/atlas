@@ -10814,9 +10814,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // The strategic chain belongs to the namespaces, not to any one
         // model, so it is reported once beside the store-level issues
         // instead of repeating in every model that shares a domain.
-        let chain_issues = validation::strategic_chain_issues(
+        let chain_issues = validation::strategic_chain_issues_within(
             scoped_namespaces.iter().map(String::as_str),
             all.as_ref(),
+            &lens,
         );
         let already_reported: Vec<_> = store_issues.clone();
         store_issues.extend(chain_issues.into_iter().filter(|chain| {
