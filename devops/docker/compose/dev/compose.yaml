@@ -236,10 +236,12 @@ services:
       trogon-atlas-server:
         condition: service_healthy
     restart: unless-stopped
+    # Headroom for the snapshot runtime build, which runs next to Vite during
+    # an export.
     deploy:
       resources:
         limits:
-          memory: 1g
+          memory: 1536m
           cpus: "1.0"
     # Port 80 is Vite, which proxies only /api, so the probe asks the bridge
     # directly.

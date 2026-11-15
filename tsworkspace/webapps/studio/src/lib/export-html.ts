@@ -8,6 +8,7 @@ import { SNAPSHOT_VERSION, type SnapshotManifests, type StudioSnapshot, snapshot
 
 const RUNTIME_JS = '/snapshot/runtime.js';
 const RUNTIME_CSS = '/snapshot/runtime.css';
+const RUNTIME_DEV = '/snapshot/runtime';
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -53,20 +54,46 @@ export function buildSnapshotHtml({
   ].join('\n');
 }
 
-async function fetchRuntime(path: string): Promise<string> {
+async function fetchRuntimeResponse(path: string): Promise<Response> {
   const res = await fetch(path);
+  // The dev server builds the runtime itself, so a failure there is a failed build.
+  if (!res.ok) {
+    throw new Error(`export could not load the snapshot runtime (HTTP ${res.status}): see the server log`);
+  }
   // A server without the build answers a missing file with the app's HTML shell.
-  if (!res.ok || res.headers.get('content-type')?.startsWith('text/html')) {
+  if (res.headers.get('content-type')?.startsWith('text/html')) {
     throw new Error('export needs the snapshot runtime: run build:snapshot');
   }
-  return res.text();
+  return res;
+}
+
+async function fetchRuntimeAsset(path: string): Promise<string> {
+  return (await fetchRuntimeResponse(path)).text();
+}
+
+async function fetchRuntime(): Promise<[string, string]> {
+  if (import.meta.env.DEV) {
+    const body: unknown = await (await fetchRuntimeResponse(RUNTIME_DEV)).json();
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      typeof (body as { js?: unknown }).js !== 'string' ||
+      typeof (body as { css?: unknown }).css !== 'string'
+    ) {
+      throw new Error('export received an invalid snapshot runtime');
+    }
+    const bundle = body as { js: string; css: string };
+    return [bundle.js, bundle.css];
+  }
+  return Promise.all([fetchRuntimeAsset(RUNTIME_JS), fetchRuntimeAsset(RUNTIME_CSS)]);
 }
 
 let runtime: Promise<[string, string]> | undefined;
 
-/** The runtime does not change while Studio is open, so it is fetched once. */
+/** Production assets are immutable; development fetches the current pair per export. */
 function loadRuntime(): Promise<[string, string]> {
-  runtime ??= Promise.all([fetchRuntime(RUNTIME_JS), fetchRuntime(RUNTIME_CSS)]).catch((e: unknown) => {
+  if (!import.meta.env.PROD) return fetchRuntime();
+  runtime ??= fetchRuntime().catch((e: unknown) => {
     runtime = undefined;
     throw e;
   });
