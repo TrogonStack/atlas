@@ -180,7 +180,7 @@ export function StateMachineBoard({
         data-problem={s.problem}
         onClick={(e) => choose(e, s)}
         className={cn(
-          'absolute flex items-center gap-1 rounded-[5px] border pr-3 pl-2.5 text-left outline-none',
+          'pointer-events-auto absolute flex items-center gap-1 rounded-[5px] border pr-3 pl-2.5 text-left outline-none',
           'focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-pointer',
           s.problem === 'missing' ? 'border-amber-500 bg-card' : [EVENT.bg, EVENT.border],
           s.problem && 'border-dashed',
@@ -214,7 +214,7 @@ export function StateMachineBoard({
         data-stub={s.id}
         onClick={(e) => choose(e, target)}
         className={cn(
-          'absolute flex items-center gap-1.5 rounded-[14px] border border-dashed border-orange-400 bg-orange-50 px-3 text-left text-[12px] text-zinc-800 outline-none',
+          'pointer-events-auto absolute flex items-center gap-1.5 rounded-[14px] border border-dashed border-orange-400 bg-orange-50 px-3 text-left text-[12px] text-zinc-800 outline-none',
           'focus-visible:ring-2 focus-visible:ring-ring enabled:cursor-pointer',
           current?.id === s.returnsTo && 'border-2 border-ring',
           current && !lit && 'opacity-35',
@@ -385,7 +385,7 @@ export function StateMachineBoard({
             })}
           </svg>
           <div
-            className="absolute top-0 left-0 origin-top-left"
+            className="pointer-events-none absolute top-0 left-0 origin-top-left"
             style={{ width: lc.width, height: lc.height, transform: `scale(${scale})` }}
           >
             {lc.states.map(renderState)}

@@ -63,6 +63,14 @@ for (const [description, destination] of [
     for (let number = 1; number <= 4; number++) {
       await expect(page.getByTestId('state-machine-next').getByText(`Guard ${number}`, { exact: true })).toBeVisible();
     }
+    await diagram.locator('[data-state="other"]').click();
+    await expect(page.getByTestId('state-machine-next')).toContainText('After other: final, nothing comes next');
+    if (destination === 'opened') {
+      await diagram.locator('[data-stub]').click();
+      await expect(page.getByTestId('state-machine-next')).toContainText(
+        'After opened: the table lists what comes next',
+      );
+    }
   });
 }
 
@@ -110,6 +118,13 @@ test('alternating guard lists keep badges inside the diagram and expose every nu
     await expect(badge.locator('title')).toHaveText(
       Array.from({ length: 40 }, (_, number) => number * 2 + index + 1).join(', '),
     );
+    const receivesPointer = await badge.evaluate((element) => {
+      const rect = element.querySelector('rect');
+      if (!rect) throw new Error('Transition badge has no visible shape');
+      const bounds = rect.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(bounds.right - 6, bounds.y + bounds.height / 2));
+    });
+    expect(receivesPointer).toBe(true);
   }
   await expect(page.getByTestId('state-machine-next').getByRole('listitem')).toHaveCount(80);
 });
