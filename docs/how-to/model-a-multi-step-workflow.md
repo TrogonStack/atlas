@@ -132,10 +132,33 @@ The `capture-payment` CommandSlice has one scenario for each event. After
 emits an event the lane does not allow next is reported
 (`SCENARIO_TRANSITION_VIOLATION`, Warning).
 
-Use one automation for each outcome only when the read model decides the
-outcome before the worker runs. In this workflow that is the shipper
-(row says paid) and the canceller (row says failed): they issue different
-commands, so they are different automations.
+### When to fork into two commands
+
+One command fits only when the outcome is decided while the command runs.
+When a read model already holds the outcome before any command is issued,
+fork the step: give each outcome its own AutomationSlice, Processor and
+command, so each CommandSlice emits one event. This is the repair that
+`PROCESSOR_MULTIPLE_COMMANDS` names for branching outcomes.
+
+Two cases put the outcome in a read model first:
+
+- The progress row already says which way to go. In this workflow that is
+  the shipper (`step` is `shipping`) and the canceller (`step` is
+  `cancellation`): they issue different commands, so they are different
+  automations.
+- The model declares the round trip to an external system. The processor
+  that makes the call lists the system in `calls`, and the answer lands in
+  a read model with an `externalSource`. One automation for each answer
+  reads that view and issues the command that records it, for example
+  `complete-payment` and `fail-payment`. See
+  [external read model reported as unsourced](../explanation/validation-repair-patterns.md#external-read-model-reported-as-unsourced).
+  The example does not model the gateway, so it keeps one command.
+
+The fork stays on the lane. `payment.captured` and `payment.failed` remain
+the alternative successors of `tax.calculated`. Both commands append to the
+order stream, and the aggregate accepts only one successor. See
+`Swimlane.transitions` in
+[`moments.proto`](../../proto/trogonatlas/eventmodel/v1alpha1/moments.proto).
 
 ## How routing shows on the board
 
