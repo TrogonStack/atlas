@@ -10661,12 +10661,18 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
         let lens = self.lens(&vis).await?;
-        let issues = validation::validate_model_within(&model, &all, &lens);
-        let mut checks = vec![validation::ran_against_snapshot(
-            validation::CHECK_MODEL,
-            1,
-            snapshot_truncated,
-        )];
+        let mut issues = validation::validate_model_within(&model, &all, &lens);
+        let (scenario_issues, slices) =
+            validation::validate_model_scenarios_within(&model, &all, &lens);
+        issues.extend(scenario_issues);
+        let mut checks = vec![
+            validation::ran_against_snapshot(validation::CHECK_MODEL, 1, snapshot_truncated),
+            validation::ran_against_snapshot(
+                validation::CHECK_SCENARIOS,
+                subject_count(slices.len()),
+                snapshot_truncated,
+            ),
+        ];
         match model.id.as_ref() {
             Some(_) => checks.push(validation::ran_against_snapshot(
                 validation::CHECK_STRATEGIC,
@@ -10781,6 +10787,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (_subdomain_domain, bc_domain) = build_domain_maps(all.as_ref());
 
         let mut reports: Vec<ModelReport> = Vec::new();
+        let mut slices_examined: std::collections::HashSet<pb::EntityKey> =
+            std::collections::HashSet::new();
         // Problem-space namespaces carry no event model, so the scope
         // seeds the namespaces itself instead of waiting for a model to
         // vouch for them: the requested namespace, or the namespaces of the
@@ -10803,7 +10811,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if !in_scope {
                 continue;
             }
-            let issues = validation::validate_model_content_within(em, all.as_ref(), &lens);
+            let mut issues = validation::validate_model_content_within(em, all.as_ref(), &lens);
+            let (scenario_issues, slices) =
+                validation::validate_model_scenarios_within(em, all.as_ref(), &lens);
+            issues.extend(scenario_issues);
+            slices_examined.extend(slices);
             scoped_namespaces.insert(id.namespace.clone());
             reports.push(ModelReport {
                 event_model_id: Some(id.clone()),
@@ -10908,6 +10920,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 validation::ran_against_snapshot(
                     validation::CHECK_MODEL,
                     models_examined,
+                    snapshot_truncated,
+                ),
+                validation::ran_against_snapshot(
+                    validation::CHECK_SCENARIOS,
+                    subject_count(slices_examined.len()),
                     snapshot_truncated,
                 ),
                 validation::ran_against_snapshot(
