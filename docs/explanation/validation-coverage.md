@@ -24,7 +24,7 @@ into suites a coverage report can name:
 | --- | --- | --- |
 | `request_shape` | Per-entity structural and admission checks (`validate_entity_content`, context/project slug gates, type-library admit) | Usually hard `Status` refusal on write; rarely soft issues |
 | `architecture` | Architecture resource rules and diagnostics | Write/landing: hard refusal; ValidateProject: soft issues on resource scan |
-| `scenarios` | Gherkin / slice scenario rules | Errors refuse Put/Batch for applicable slice kinds; Warning/Info ride `validation[]` |
+| `scenarios` | Gherkin / slice scenario rules | Errors refuse Put/Batch for applicable slice kinds; Warning/Info ride `validation[]`; soft issues on Validate* |
 | `store_hygiene` | Cross-store consistency (`validate_store_hygiene`) | Soft issues; Merge treats Error as `STATUS_INVALID` |
 | `model` | Per-EventModel content passes (`validate_model_content`) | Soft issues on Validate* |
 | `strategic` | Bounded context / domain / subdomain chain findings | Advisory on Put/Batch/Merge; included in Validate* via strategic chain |
@@ -39,8 +39,8 @@ Inventoried at `23ade8f` (post [#263](https://github.com/TrogonStack/atlas/pull/
 
 | Entry point | Suites that run | Scope | Response today |
 | --- | --- | --- | --- |
-| `ValidateEventModel` | `model` always; strategic chain only when `EventModel.id` is set (ID-less inline bodies skip the chain) | Branch snapshot + visibility; in-body model or by-id | `issues[]` + `coverage` (`model` / `strategic`, `snapshot_truncated`) |
-| `ValidateProject` | `store_hygiene` + architecture resource diagnostics once (including data-product Event confirmation); `model` per in-scope EventModel; strategic once | Project / domain / namespace | `reports[]` + severity totals + `coverage` |
+| `ValidateEventModel` | `model` and `scenarios` always; strategic chain only when `EventModel.id` is set (ID-less inline bodies skip the chain) | Branch snapshot + visibility; in-body model or by-id | `issues[]` + `coverage` (`model` / `scenarios` / `strategic`, `snapshot_truncated`) |
+| `ValidateProject` | `store_hygiene` + architecture resource diagnostics once (including data-product Event confirmation); `model` and `scenarios` per in-scope EventModel; strategic once | Project / domain / namespace | `reports[]` + severity totals + `coverage` |
 | `PutEntity` (apply and `validate_only`) | `request_shape`; architecture admission on arch kinds; `scenarios` Errors on applicable slices; advisory `scenarios`/`strategic` | Slice/strategic use the branch snapshot | `validation[]` + `coverage`; hard refusals as Status |
 | `BatchMutate` (apply and `validate_only`) | Same as Put for ops; strategic and scenario on overlay | Post-lock snapshot + overlay | Per-op `validation[]` / batch failure + `coverage` |
 | `MergeBranch` (apply and dry-run) | Architecture landing on landed arch resources; blocking `store_hygiene` Errors; advisory `strategic` | Baseline visibility + projected post-merge world | `validation[]` + merge status + `coverage` |
@@ -72,8 +72,19 @@ validation, such as on a stale `if_match`, still reports the suites that ran.
   findings from the suites that write path runs," not "the model is
   clean."
 - **ValidateEventModel does not run** store hygiene (that is
-  ValidateProject) and does not re-scan every member through full
-  `SCENARIO_*` emission the way write-path `validate_scenarios` does.
+  ValidateProject).
+- **Validate\* runs `scenarios` on slice members.** `ValidateEventModel`
+  and `ValidateProject` run the write-path scenario check on each command,
+  read-model and automation slice the model lists in its own namespace.
+  A slice in another namespace is checked by its own model. The check
+  reads the current snapshot, so a lane edit that breaks a stored scenario
+  is reported without a new write to the slice. For example, if the
+  `review` lane drops `review.submitted -> review.approved`, a scenario
+  that emits `review.approved` after `review.submitted` now reports
+  `SCENARIO_TRANSITION_VIOLATION`. `subjects_examined` counts the distinct
+  slices checked. A scenario reference into a namespace the caller cannot
+  read is not called dangling. The `model` suite reports it as
+  `REF_OUTSIDE_VISIBLE_SCOPE`.
 - **Coverage is not a finding.** `ValidateProject` can still surface an
   incomplete Event confirmation scan as the finding
   `DATA_PRODUCT_CONFIRMATION_INCOMPLETE` (budget or discovery exhaustion),
