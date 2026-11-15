@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+message Artifact {
+  string namespace = 1;
+  string artifact_id = 2;
+  string filename = 3;
+  string media_type = 4;
+  uint64 size = 5;
+  string sha256 = 6;
+  reserved 7;
+  reserved "content_url";
+}
+
+message GetArtifactStorageInfoRequest {}
+message GetArtifactStorageInfoResponse {
+  bool enabled = 1;
+  string backend = 2;
+  uint64 max_bytes = 3;
+  uint64 upload_ttl_seconds = 4;
+  bool direct_upload = 5;
+}
+
+message BeginArtifactUploadRequest {
+  string namespace = 1;
+  string filename = 2;
+  string media_type = 3;
+  uint64 size = 4;
+  string sha256 = 5;
+}
+message BeginArtifactUploadResponse {
+  string upload_id = 1;
+  // S3 presigned PUT target only. Empty when direct_upload=false; send
+  // content through UploadArtifactContent instead.
+  string upload_url = 2;
+  map<string, string> headers = 3;
+  int64 expires_unix_seconds = 4;
+  bool direct_upload = 5;
+}
+
+message UploadArtifactContentRequest {
+  string namespace = 1;
+  string upload_id = 2;
+  bytes content = 3;
+}
+message UploadArtifactContentResponse {}
+
+message CompleteArtifactUploadRequest {
+  string namespace = 1;
+  string upload_id = 2;
+}
+message CompleteArtifactUploadResponse {
+  Artifact artifact = 1;
+}
+
+message GetArtifactRequest {
+  string namespace = 1;
+  string artifact_id = 2;
+}
+message GetArtifactResponse {
+  Artifact artifact = 1;
+}
+
+message GetArtifactDownloadRequest {
+  string namespace = 1;
+  string artifact_id = 2;
+}
+message GetArtifactDownloadResponse {
+  // S3 presigned GET target only. Backends without direct downloads refuse
+  // this RPC with FAILED_PRECONDITION; use GetArtifactContent instead.
+  string url = 1;
+  map<string, string> headers = 2;
+  int64 expires_unix_seconds = 3;
+}
+
+message GetArtifactContentRequest {
+  string namespace = 1;
+  string artifact_id = 2;
+}
+message GetArtifactContentResponse {
+  Artifact artifact = 1;
+  bytes content = 2;
+}

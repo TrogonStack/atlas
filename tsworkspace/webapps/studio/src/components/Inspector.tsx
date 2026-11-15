@@ -437,13 +437,18 @@ function AnnotationView({
         </div>
       );
     case 'NoteAnnotation':
-    case 'OpenQuestionAnnotation':
+    case 'OpenQuestionAnnotation': {
+      // Only open questions carry owner and due; the due date is a CalendarDate message.
+      const due = (d.due as { value?: string } | undefined)?.value;
       return (
         <div className="rounded-md border border-border px-2 py-1.5 text-xs">
           <p className="leading-snug">{String(d.text ?? d.question ?? '')}</p>
           {d.author ? <p className="mt-0.5 text-[10px] text-muted-foreground">({String(d.author)})</p> : null}
+          {d.owner ? <p className="mt-0.5 text-[10px] text-muted-foreground">Owner: {String(d.owner)}</p> : null}
+          {due ? <p className="mt-0.5 text-[10px] text-muted-foreground">Due: {due}</p> : null}
         </div>
       );
+    }
     default: {
       const entries = Object.entries(d).filter(([, v]) => v !== null && v !== undefined && v !== '');
       return (
@@ -521,8 +526,9 @@ export function Inspector({
   };
   const ownSlice = useMemo(() => model.slices.find((s) => s.entity.key === entity.key), [model, entity]);
   const sliceScenarios = ownSlice?.scenarios ?? [];
+  const showScenarios = Boolean(ownSlice);
   const activeTab =
-    (requestedTab === 'scenarios' && sliceScenarios.length === 0) || (requestedTab === 'validation' && !showValidation)
+    (requestedTab === 'scenarios' && !showScenarios) || (requestedTab === 'validation' && !showValidation)
       ? 'details'
       : requestedTab;
   const previousActiveTab = useRef<InspectorTab>('details');
@@ -614,7 +620,7 @@ export function Inspector({
       >
         <TabsList variant="underline" className="overflow-x-auto px-4">
           <TabsTab value="details">Details</TabsTab>
-          {sliceScenarios.length > 0 ? <TabsTab value="scenarios">Scenarios ({sliceScenarios.length})</TabsTab> : null}
+          {showScenarios ? <TabsTab value="scenarios">Scenarios ({sliceScenarios.length})</TabsTab> : null}
           {showValidation ? (
             <TabsTab value="validation">
               Validation
@@ -1283,11 +1289,17 @@ export function Inspector({
             </section>
           ) : null}
         </TabsPanel>
-        <TabsPanel value="scenarios" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-4 text-sm">
-          {sliceScenarios.map((s, i) => (
-            <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
-          ))}
-        </TabsPanel>
+        {showScenarios ? (
+          <TabsPanel value="scenarios" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-4 text-sm">
+            {sliceScenarios.length === 0 ? (
+              <p className="text-[11px] italic text-muted-foreground">This slice has no scenarios.</p>
+            ) : (
+              sliceScenarios.map((s, i) => (
+                <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
+              ))
+            )}
+          </TabsPanel>
+        ) : null}
         {showValidation ? (
           <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
             <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />

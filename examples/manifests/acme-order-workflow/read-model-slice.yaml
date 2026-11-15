@@ -1,0 +1,77 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-placed-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order appears as waiting for tax.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - order.placed
+  title: 'Progress: order.placed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-taxed-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order moves to waiting for payment.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - tax.calculated
+  title: 'Progress: tax.calculated'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-payment-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order moves to paid.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - payment.captured
+  title: 'Progress: payment.captured'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-payment-failed-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order moves to payment failed.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - payment.failed
+  title: 'Progress: payment.failed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-shipped-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order is done.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - order.shipped
+  title: 'Progress: order.shipped'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: progress-cancelled-rms
+  namespace: acme-order-workflow
+spec:
+  doc: The order is cancelled.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel: order-progress
+  sourceEvents:
+  - order.cancelled
+  title: 'Progress: order.cancelled'

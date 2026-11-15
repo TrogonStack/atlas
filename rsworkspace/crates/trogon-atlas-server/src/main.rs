@@ -22,6 +22,8 @@ use trogon_atlas_store::{
 #[derive(Parser, Debug, Clone)]
 #[command(name = "trogon-atlas-server")]
 struct Args {
+    #[command(flatten)]
+    artifacts: trogon_atlas_server::artifacts::config::ArtifactConfig,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
@@ -704,6 +706,13 @@ async fn run(
     )
     .context("constructing event modeling service")?
     .with_baseline_protection(baseline_protection.clone());
+    if let Some(artifacts) = args
+        .artifacts
+        .open(&args.nats_url, args.max_message_bytes, store.clone())
+        .await?
+    {
+        svc = svc.with_artifacts(artifacts);
+    }
     match args.change_cursor_key.as_deref() {
         Some(encoded) => {
             let key = trogon_atlas_server::change_cursor::ChangeCursorKey::from_base64(encoded)
@@ -989,7 +998,10 @@ async fn run(
     >;
     let grpc_service = ServiceServer::new(svc)
         .max_decoding_message_size(args.max_message_bytes)
-        .max_encoding_message_size(args.max_message_bytes);
+        .max_encoding_message_size(
+            args.artifacts
+                .max_encoding_message_bytes(args.max_message_bytes)?,
+        );
 
     let health = trogon_atlas_server::health::Health::new().await;
 
@@ -1331,7 +1343,7 @@ async fn restore_namespace_snapshot(
                 return Err(anyhow::anyhow!(
                     "restoring namespace {}: {err}",
                     record.id.as_str()
-                ))
+                ));
             }
         }
     }

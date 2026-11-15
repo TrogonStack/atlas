@@ -78,7 +78,7 @@ impl NatsStore {
     pub(super) async fn set_source_gate(&self, expected: u64, gate: Gate) -> StoreResult<u64> {
         self.require_writer()?;
         self.lease
-            .verify_epoch(&self.lease_kv, self.lease.current_epoch())
+            .verify_epoch(&self.js, &self.lease_kv, self.lease.current_epoch())
             .await?;
         let bytes = Bytes::from(gate.encode_to_vec());
         if expected == 0 {

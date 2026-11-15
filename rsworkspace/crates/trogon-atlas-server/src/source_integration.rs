@@ -390,6 +390,42 @@ async fn load(
         state,
     })
 }
+/// The id of a live source registration that names `namespace` as its
+/// administration or a destination namespace. Reads every registration
+/// without the caller's visibility: a namespace another owner's source targets
+/// is in use whether or not this caller can see that source.
+pub(super) async fn registration_naming(
+    service: &EventModelServiceImpl,
+    namespace: &str,
+) -> Result<Option<String>, Status> {
+    let mut cursor = None;
+    loop {
+        let roots = service
+            .store
+            .source_list(cursor.as_deref(), 500)
+            .await
+            .map_err(store_err)?;
+        for key in roots.keys {
+            let Some(document) = service.store.source_get(&key).await.map_err(store_err)? else {
+                continue;
+            };
+            let state = SourceState::decode(document.bytes.as_slice())
+                .map_err(|_| Status::unavailable("source state cannot be reconstructed"))?;
+            let Ok(value) = registration(&state) else {
+                continue;
+            };
+            if value.administration_namespace == namespace
+                || value.destination_namespaces.iter().any(|d| d == namespace)
+            {
+                return Ok(Some(value.id.clone()));
+            }
+        }
+        cursor = roots.next_cursor;
+        if cursor.is_none() {
+            return Ok(None);
+        }
+    }
+}
 async fn save(service: &EventModelServiceImpl, doc: &mut Document) -> Result<(), Status> {
     expire(&mut doc.state);
     let limit = registration(&doc.state)
@@ -992,7 +1028,7 @@ fn native_relationships_only(
     let has_native_authoring = |entity: &pb::Entity| -> Result<bool, Status> {
         Ok(
             matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
-                || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some())
+                || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some() || term.glossary.is_some())
                 || matches!(&entity.kind, Some(pb::entity::Kind::SystemGroup(v)) if !v.members.is_empty() || !v.relationships.is_empty() || !v.actors.is_empty())
                 || matches!(&entity.kind, Some(pb::entity::Kind::Domain(v)) if !v.members.is_empty())
                 || !trogon_atlas_core::architectural_relationships::relationships(entity)

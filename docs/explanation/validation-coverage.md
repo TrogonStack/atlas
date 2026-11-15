@@ -143,10 +143,12 @@ coverage as complete, so history and CI agree on what counts as a pass.
 
 ### Enforcement is a separate decision
 
-Reporting that Merge only ran hygiene does not by itself expand Merge to
-`validate_model`. Expanding enforcement needs its own product answer
-(whole post-merge model vs newly introduced errors vs current hygiene
-subset). Coverage work makes that answer observable either way.
+Merge runs hygiene on the baseline and on the post-merge world. It
+refuses only errors that the merge adds. Findings are matched by code,
+subject, field and evidence, ignoring entity versions. An error that was
+already in the baseline does not refuse the merge. It stays in
+`validation[]` with severity `INFO`. Merge does not run `validate_model`.
+Expanding it to the whole post-merge model needs its own product answer.
 
 ## Relation to truncation and consequence deltas
 

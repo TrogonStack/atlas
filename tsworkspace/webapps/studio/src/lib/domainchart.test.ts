@@ -56,8 +56,8 @@ describe('buildDomainChart', () => {
   it('places a subdomain card under the band matching its classification', () => {
     const model = buildModel(fixtureEntities() as never);
     const { nodes } = buildDomainChart(model);
-    const coreBand = nodes.find((n) => n.id === 'band:core');
-    const supportingBand = nodes.find((n) => n.id === 'band:supporting');
+    const coreBand = nodes.find((n) => n.id === 'band:shop/shop:core');
+    const supportingBand = nodes.find((n) => n.id === 'band:shop/shop:supporting');
     const identitySd = nodes.find((n) => n.id.startsWith('sd:') && n.id.includes('identity'));
     const billingSd = nodes.find((n) => n.id.startsWith('sd:') && n.id.includes('billing'));
     expect(coreBand).toBeDefined();
@@ -74,6 +74,60 @@ describe('buildDomainChart', () => {
     };
     expect(inBand(identitySd as never, coreBand as never)).toBe(true);
     expect(inBand(billingSd as never, supportingBand as never)).toBe(true);
+  });
+
+  it('places each subdomain inside the box of the domain it belongs to', () => {
+    const entities = fixtureEntities();
+    entities.push(
+      { domain: { id: id('ops', 'ops'), title: 'ops' } },
+      {
+        subdomain: {
+          id: id('ops', 'alerting'),
+          title: 'alerting',
+          domain: { id: id('ops', 'ops') },
+          classification: 'CORE',
+        },
+      },
+    );
+    const { nodes } = buildDomainChart(buildModel(entities as never));
+    const inside = (n: (typeof nodes)[number] | undefined, box: (typeof nodes)[number] | undefined) => {
+      if (!n || !box) return false;
+      const { width = 0, height = 0 } = box.style as { width?: number; height?: number };
+      const { width: nw = 0, height: nh = 0 } = n.style as { width?: number; height?: number };
+      return (
+        n.position.x >= box.position.x &&
+        n.position.x + nw <= box.position.x + width &&
+        n.position.y >= box.position.y &&
+        n.position.y + nh <= box.position.y + height
+      );
+    };
+    const shop = nodes.find((n) => n.type === 'domainHeader' && n.id.includes('shop'));
+    const ops = nodes.find((n) => n.type === 'domainHeader' && n.id.includes('ops'));
+    const node = (prefix: string, slug: string) => nodes.find((n) => n.id.startsWith(prefix) && n.id.includes(slug));
+    expect(inside(node('sd:', 'identity'), shop)).toBe(true);
+    expect(inside(node('sd:', 'billing'), shop)).toBe(true);
+    expect(inside(node('ctx:', 'accounts'), shop)).toBe(true);
+    expect(inside(node('sd:', 'alerting'), ops)).toBe(true);
+    expect(inside(node('sd:', 'alerting'), shop)).toBe(false);
+  });
+
+  it('gives a domain only the classification sections it has', () => {
+    const entities = fixtureEntities();
+    entities.push(
+      { domain: { id: id('ops', 'ops'), title: 'ops' } },
+      {
+        subdomain: {
+          id: id('ops', 'alerting'),
+          title: 'alerting',
+          domain: { id: id('ops', 'ops') },
+          classification: 'CORE',
+        },
+      },
+    );
+    const { nodes } = buildDomainChart(buildModel(entities as never));
+    const bands = nodes.filter((n) => n.type === 'classificationBand').map((n) => n.id);
+    // Boxes run in domain title order; sections run core first.
+    expect(bands).toEqual(['band:ops/ops:core', 'band:shop/shop:core', 'band:shop/shop:supporting']);
   });
 
   it('emits a realizes edge from the context card up to its subdomain', () => {
@@ -158,6 +212,7 @@ describe('buildDomainChart', () => {
       field: 'realizes',
       ruleTitle: '',
       ruleCategory: 'strategic',
+      acknowledged: false,
       subject: { kind: 'boundedContext', id: { namespace: slug, slug, version: '1' } },
     });
 
@@ -239,6 +294,7 @@ function strategicIssue(overrides: Partial<Issue> = {}): Issue {
     field: '',
     ruleTitle: '',
     ruleCategory: 'strategic',
+    acknowledged: false,
     subject: { kind: 'domain', id: { namespace: 'accounts', slug: 'accounts', version: '1' } },
     ...overrides,
   };

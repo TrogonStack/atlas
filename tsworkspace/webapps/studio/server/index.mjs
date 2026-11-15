@@ -323,6 +323,11 @@ function currentPrincipalToken() {
 // refused here until someone decides it is a read.
 const READ_RPCS = new Set([
   "getSourceRegistration",
+  "listGlossaryEntries",
+  "getGlossaryTerm",
+  "inspectGlossarySources",
+  "compareGlossaries",
+  "inspectGlossaryRefresh",
   "listSourceRegistrations",
   "getSourceSnapshot",
   "listSourceSnapshots",
@@ -1976,6 +1981,28 @@ const CATALOG_QUERIES = new Map([
   ["design-topology", "traverseDesignGraphTopology"],
   ["incoming-subflows", "listIncomingDesignGraphSubflows"],
 ]);
+
+const GLOSSARY_QUERIES = new Map([
+  ["entries", "listGlossaryEntries"],
+  ["term", "getGlossaryTerm"],
+  ["sources", "inspectGlossarySources"],
+  ["compare", "compareGlossaries"],
+  ["refresh", "inspectGlossaryRefresh"],
+  ["usage", "getEntity"],
+]);
+
+app.get("/api/glossary/:query", branchHandler((req) => {
+  const method = GLOSSARY_QUERIES.get(String(req.params.query));
+  const reject = () => { throw Object.assign(new TypeError("invalid glossary inspection request"), { status: 400 }); };
+  if (!method || req.query.asOf !== undefined) return reject();
+  if (typeof req.query.request !== "string" || Buffer.byteLength(req.query.request) > 65536) return reject();
+  let input;
+  try { input = JSON.parse(req.query.request); } catch { return reject(); }
+  const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+  try { validateSourceRequest(requestType, input); } catch { return reject(); }
+  if (method === "getEntity" && (!/^[1-9][0-9]*$/.test(String(input.id?.version ?? "")) || input.kind === "ENTITY_KIND_UNSPECIFIED" || input.kind === 0)) return reject();
+  return call(method, input);
+}));
 
 app.get(
   "/api/catalog/:query",

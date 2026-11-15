@@ -183,6 +183,19 @@ actor discovery, persisted composite interaction subjects and ExternalSystem
 hosting remain deferred. Checked per-owner revisions describe a read set, not
 an atomic multi-owner snapshot or evidence of a human's runtime permissions.
 
+## Visual product documentation
+
+Screens and DesignGraph provide composition and authored topology. The
+[visual product proposal](visual-product-atlas.md) and
+[delivery roadmap](visual-product-atlas-roadmap.md) describe the remaining
+page/state, flow and email inspection capabilities. The proposed
+[state and capture contracts](../reference/visual-state-contracts.md) and
+[email contracts](../reference/email-catalog-contracts.md) connect their native
+identities, evidence and projections to exact behavioral subjects and graph
+occurrences. The implemented artifact service supplies byte storage and
+transfer; typed attachments, image verification and these product surfaces
+remain proposed.
+
 ## Atlas Linter comes after the architecture resources
 
 The [remaining contract boundaries](../reference/architecture-resource-coverage.md#remaining-contract-boundaries)

@@ -1,0 +1,115 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Project
+metadata: {namespace: glossary-fixture, name: glossary-fixture}
+spec:
+  title: Shipping glossary fixture
+  doc: Controlled material for contextual vocabulary extraction and review.
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata: {namespace: glossary-fixture, name: glossary-fixture}
+spec:
+  title: Shipping
+  doc: Prepare and track shipments while preserving operational and customer language.
+  project: {id: {namespace: glossary-fixture, slug: glossary-fixture, version: '1'}}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata: {namespace: glossary-fixture, name: shipping}
+spec:
+  title: Shipping
+  doc: Prepare parcels and communicate their progress.
+  domain: {id: {namespace: glossary-fixture, slug: glossary-fixture, version: '1'}}
+  classification: CLASSIFICATION_SUPPORTING
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {namespace: glossary-fulfillment, name: glossary-fulfillment}
+spec:
+  title: Fulfillment vocabulary
+  doc: Operational meanings for preparing parcels and reserving carrier handoff slots.
+  realizes: [{id: {namespace: glossary-fixture, slug: shipping, version: '1'}}]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {namespace: glossary-customer, name: glossary-customer}
+spec:
+  title: Customer vocabulary
+  doc: Customer-facing meanings for packages and delivery progress.
+  realizes: [{id: {namespace: glossary-fixture, slug: shipping, version: '1'}}]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Document
+metadata: {namespace: glossary-fulfillment, name: source}
+spec:
+  title: {value: Fulfillment language snapshot}
+  subjects:
+    - subject:
+        entity:
+          kind: ENTITY_KIND_BOUNDED_CONTEXT
+          id: {namespace: glossary-fulfillment, slug: glossary-fulfillment, version: '1'}
+  retained:
+    mediaType: {value: text/plain}
+    content: |
+      A parcel is a shipment handled by fulfillment. Ready to ship means that payment is accepted and packing is complete. A booking is a reserved carrier handoff slot, not a customer purchase. Consignment is an old internal label for parcel and should not appear in new operational copy.
+    digest: {sha256: 0d3e0d541cec1eff0308e23cb5e91bbd9521c70950a4c93b86d5e9bbfd2dad20}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Document
+metadata: {namespace: glossary-customer, name: source}
+spec:
+  title: {value: Customer language snapshot}
+  subjects:
+    - subject:
+        entity:
+          kind: ENTITY_KIND_BOUNDED_CONTEXT
+          id: {namespace: glossary-customer, slug: glossary-customer, version: '1'}
+  retained:
+    mediaType: {value: text/plain}
+    content: |
+      A parcel is the package a customer can track. Ready to ship means the package is waiting for handoff to a carrier. Delivery means the package reached the customer, not the internal carrier handoff.
+    digest: {sha256: 1c80fe0552841139971259ac77ba6af6d48aff657765346f56671066da1e1b0f}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Document
+metadata: {namespace: glossary-fulfillment, name: code-source}
+spec:
+  title: {value: Readiness code snapshot}
+  subjects:
+    - subject:
+        entity:
+          kind: ENTITY_KIND_BOUNDED_CONTEXT
+          id: {namespace: glossary-fulfillment, slug: glossary-fulfillment, version: '1'}
+  metadata:
+    - '@type': type.googleapis.com/trogonatlas.annotation.v1alpha1.CodeRefAnnotation
+      repo: glossary-fixture
+      path: examples/glossary/shipment.rs
+      symbol: ready_to_ship
+  retained:
+    mediaType: {value: text/plain}
+    content: |
+      pub struct Parcel {
+          pub payment_accepted: bool,
+          pub packing_complete: bool,
+      }
+
+      pub fn ready_to_ship(parcel: &Parcel) -> bool {
+          parcel.payment_accepted && parcel.packing_complete
+      }
+    digest: {sha256: 0789bd0c472869badce9462a5753ca7c0aad1007ec69aaa8858fdb75bd6ee6dc}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Document
+metadata: {namespace: glossary-customer, name: customer-language-policy}
+spec:
+  title: {value: Customer language policy snapshot}
+  subjects:
+    - subject:
+        entity:
+          kind: ENTITY_KIND_BOUNDED_CONTEXT
+          id: {namespace: glossary-customer, slug: glossary-customer, version: '1'}
+  retained:
+    mediaType: {value: text/plain}
+    content: |
+      Booking is an internal label for a reserved carrier handoff slot. Customer-facing copy must not use Booking and should use Pickup slot instead. A pickup slot is the scheduled time window when a customer can hand a package to a carrier.
+    digest: {sha256: 07dbf598735aecb830b99454dc274b142688e3efc9c01fbd05a9f9c8933101e2}
