@@ -39,6 +39,11 @@ kind: ReadModel
 metadata: { name: order-progress, namespace: acme-order-workflow }
 spec:
   key: [order_id]
+  schema:
+    fields:
+    - { name: order_id, type: { uuid: {} } }
+    - name: step # same values as the lane's step state
+      type: { enumeration: { values: [tax, payment, shipping, cancellation, done] } }
   sourceEvents: # order.placed, tax.calculated, payment.captured,
                 # payment.failed, order.shipped, order.cancelled
   # ...
@@ -65,7 +70,7 @@ spec:
   scenarios:
   - id: ok
     given: [{ readModel: { id: { slug: order-progress, ... } } }]
-    whenDoc: The order row says tax is next.
+    whenDoc: The order row says step is tax.
     then: { command: { id: { slug: calculate-tax, ... } } }
 ```
 
@@ -93,13 +98,16 @@ spec:
   - id: failed
     title: Payment failed
     given: [{ readModel: { id: { slug: order-progress, ... } } }]
-    whenDoc: The order row says payment.failed.
+    whenDoc: The order row says step is cancellation.
     noCommand: { doc: 'Given payment.failed, the shipper does not run.' }
 ```
 
 A scenario with neither outcome is an error (`SCENARIO_MISSING_THEN`). The
 `noCommand` scenarios are where the routing is checked: each step names the
-rows on which it stays idle.
+rows on which it stays idle. Together, one automation's scenarios cover
+every value of `step`, so no row is left unexplained. The shipper, for
+example, issues `ship-order` on `shipping` and stays idle on `tax` and
+`payment`, on `cancellation`, and on `done`.
 
 ## 4. Let one command emit either outcome
 
