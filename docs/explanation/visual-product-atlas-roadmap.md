@@ -5,6 +5,14 @@ Status: proposed implementation work. This roadmap accompanies the
 documents does not implement the listed capabilities or settle their wire
 shapes. Each unchecked item needs connected verification before completion.
 
+The proposed [state contract](../reference/visual-state-contracts.md),
+[artifact integration contract](../reference/visual-artifact-integration.md)
+and [email contract](../reference/email-catalog-contracts.md) define semantic
+shapes and bounded behavior for review before implementation. The
+[visual acceptance requirements](../reference/visual-state-acceptance.md) and
+[email acceptance requirements](../reference/email-catalog-acceptance.md)
+remain open verification work.
+
 ## Start a contribution
 
 Choose a delivery slice below, describe its assumptions and dependencies in the
@@ -52,6 +60,9 @@ separate while confirmed files are retained under the
 | Visual flow targets and projections | State identity | DesignGraph target union, traversal, exact step resolution and backend projections | Repeated states, equal-endpoint interactions, cycles, branches and subflows retain distinct occurrence identity. |
 | Discovery and native clients | Stable state/capture/flow contracts | Backend catalogs and inverse associations, pagination, CLI/MCP | Authorized scoped counts and stable pages preserve completeness and comparison target; public authoring/inspection round trips pass. |
 | Studio review surfaces | Backend projections and settled browser delivery | Pages list/grid, Flows map, evidence inspector and accessible navigation | A connected authenticated browser can inspect exact states and occurrences, including missing/unresolved evidence, without authoring model changes directly. |
+| Email definitions | Agreed native template and occurrence identity | EmailTemplate variants, source/copy/lifecycle and trigger/timing declarations; core, backend, lifecycle and native clients | Exact variants and trigger selectors survive guarded writes, branches, references and manifest round trips without sending email or evaluating copy. |
+| Email sequences and discovery | Email definitions and shared capture contracts | Typed DesignGraph email targets, explicit sequence classification, catalog and inverse occurrence queries | Repeated variants retain distinct step and timing context; authorized search, pagination, counts and sequence badges expose complete scope or explicit incompleteness. |
+| Email review and PDF | Email queries, verified imagery and settled delivery | Studio email list/grid, inert previews, sequence inspection and bounded PDF generation | Authenticated inspection and actual PDF bytes preserve frozen input identity, independent statuses and every required input's authority; hostile HTML cannot execute or load remote content. |
 | Connected acceptance and scale | Implemented delivery slices | Native fixtures, browser workflows, measured loading/layout/decoding | The complete fixture and failure matrix below pass with retained receipts and explicit unverified limits. |
 
 Presentation prototypes can proceed alongside contract discussion. A prototype
@@ -60,20 +71,26 @@ contract and passes connected acceptance.
 
 ## Decisions to settle before dependent implementation
 
-- [ ] Finalize VisualState context, identified subject associations, capture and
-  typed artifact-reference shapes; allocate schema fields against current main.
-- [ ] Define capture profiles, source/build identity, required checked bindings
-  and comparison targets. Specify deterministic precedence when evidence is
-  missing, stale, unknown or a newer attempt fails.
-- [ ] Define guarded baseline selection independently from successful capture
-  ingestion, including concurrent edits and replay behavior.
-- [ ] Choose authenticated browser image delivery and caching rules, including
-  current authorization and historical-read limits for every referenced input.
+- [ ] Review the proposed VisualState context, subject, capture and typed
+  artifact-reference shapes, then allocate schema fields against current main.
+- [ ] Adopt or refine the proposed capture profile, source/build identity,
+  required bindings, candidate acceptance ordering and comparison precedence.
+  Preserve Missing, Stale, Unknown and latest-attempt distinctions.
+- [ ] Implement the proposed guarded baseline selection separately from
+  successful capture ingestion, including concurrent edits and replay behavior.
+- [ ] Verify the proposed authenticated browser bridge and caching rules,
+  including current authority and historical limits for every transitive input.
 - [ ] Set byte, dimension, decoded-memory, processing and concurrency limits for
   image verification and thumbnails. Measure rather than borrow limits from
   unrelated workloads.
 - [ ] Define query filters, pagination scope and authorized aggregate behavior,
   with explicit incomplete and unavailable results.
+- [ ] Review EmailTemplate source/variant/trigger identity and copy/lifecycle
+  semantics, then allocate native fields and typed DesignGraph email targets.
+- [ ] Settle email-sequence classification and exact trigger selection without
+  inferring scheduling from step order or provider metadata.
+- [ ] Validate inert preview and frozen-input PDF limits against a measured
+  prototype before accepting export performance or safety claims.
 
 Implementers should turn settled decisions into maintained schema/core contracts
 and public-seam tests. Keep unresolved decisions visible in review rather than
@@ -112,6 +129,15 @@ application states, not a requirement to build Atlas authentication in this work
 - [ ] Measure the representative hundreds-of-pages/states and dozens-of-flows
   fixture, including incremental loading, layout, image decoding, pan/zoom and
   inspection. Record budgets and observed limits with the implementation.
+
+The [email acceptance fixture](../reference/email-catalog-acceptance.md) extends
+this evidence discipline with retained/source-only/undefined copy, dynamic
+subjects, provider-account key collisions, repeated reminders with distinct
+trigger timing, retired-but-inspectable variants and independent lifecycle and
+capture status. It requires actual inert preview/PDF paths, frozen input
+revisions and current cross-namespace input authority. Native declarations can
+be supplied without a provider connector; delivery, scheduling and live provider
+synchronization remain separately scoped capabilities.
 
 ## Reporting completion
 
