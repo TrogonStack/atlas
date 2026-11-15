@@ -40,7 +40,16 @@ point.
 Do not repair a `REF_OUTSIDE_VISIBLE_SCOPE` finding by editing the reference.
 It means your key cannot read the target's namespace, not that the target is
 missing. Rerun validation with a key that can read that namespace; only a
-`DANGLING_REF`, `MEMBER_NOT_FOUND` or `UI_TRANSITION_DANGLING` from that run is a defect to repair.
+reference or content defect confirmed against readable definitions is a
+candidate for repair.
+
+The same limit applies when a finding depends on a referenced schema or
+indicator measure. Do not add fields, change projection keys, replace a
+connection, or remove an objective threshold merely because the referenced
+definition is unreadable. Inspect the exact dependency with an authorized
+caller and revalidate. Preserve independent findings on the visible
+definition, such as an invalid key declaration or target ratio. See
+[unreadable dependencies](../explanation/validation-repair-patterns.md#unreadable-dependencies-reported-as-content-defects).
 
 To survey a whole namespace instead, run `validate_project` with `namespace`
 set to it and `json: true`: every EventModel in the namespace is validated in

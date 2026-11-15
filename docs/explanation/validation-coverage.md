@@ -181,6 +181,20 @@ namespaces still resolves or dangles as before, and a caller with full
 visibility never sees the new code. To settle an unresolved reference,
 validate with a caller that can read the target namespace.
 
+Content-dependent checks also need readable dependencies. Read-model field
+provenance cannot conclude that a field is unsourced when a source event,
+or that event's state-contributing swimlane, is outside the lens. Projection
+key checks skip unreadable source-event schemas individually, while still
+reporting missing keys on readable sources. Reliability connection checks
+do not call an excluded slice nonexistent, and objective threshold checks
+leave an excluded indicator's measure unknown.
+
+These limits do not suppress independent findings on visible definitions.
+Read-model key declarations, projection roles, indicator signals and
+objective target ranges still receive their usual checks. An informational
+visibility finding does not establish that the hidden definition is valid;
+rerun with access to the dependency before assessing its contents.
+
 ## Where the code lives
 
 - Catalogue and model/hygiene passes:

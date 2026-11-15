@@ -5316,6 +5316,21 @@ pub fn validate_model_content_within(
         {
             continue;
         }
+        if rm
+            .source_events
+            .iter()
+            .filter_map(|sr| sr.id.as_ref())
+            .any(|id| {
+                !lens.admits(&id.namespace)
+                    || events_by_id
+                        .get(&pb::IdKey::new(id))
+                        .and_then(|event| event.swimlane.as_ref())
+                        .and_then(|lane| lane.id.as_ref())
+                        .is_some_and(|lane| !lens.admits(&lane.namespace))
+            })
+        {
+            continue;
+        }
         // Union of (source event field names) + (each source event's
         // lane's state field names).
         let mut available: HashSet<String> = HashSet::new();
@@ -5514,6 +5529,9 @@ pub fn validate_model_content_within(
             let Some(ev_id) = se_ref.event.as_ref().and_then(|r| r.id.as_ref()) else {
                 continue;
             };
+            if !lens.admits(&ev_id.namespace) {
+                continue;
+            }
             let ev_fields: HashSet<&str> = events_by_id
                 .get(&pb::IdKey::new(ev_id))
                 .map(|ev| {
@@ -7873,7 +7891,18 @@ pub fn validate_model_content_within(
             let mut journey_end: Option<pb::Id> = None;
             let mut journey_correlate_on: Vec<String> = Vec::new();
 
-            match sli.connection.as_ref().and_then(|c| c.kind.as_ref()) {
+            let connection = sli.connection.as_ref().and_then(|c| c.kind.as_ref());
+            let slice_target = match connection {
+                Some(pb::connection::Kind::CommandHandling(ch)) => ch.command_slice.as_ref(),
+                Some(pb::connection::Kind::Projection(p)) => p.read_model_slice.as_ref(),
+                Some(pb::connection::Kind::Reaction(r)) => r.automation_slice.as_ref(),
+                Some(pb::connection::Kind::Display(d)) => d.ui_slice.as_ref(),
+                _ => None,
+            };
+            let connection_visible = slice_target
+                .and_then(|slice| slice.id.as_ref())
+                .is_none_or(|id| lens.admits(&id.namespace));
+            match connection.filter(|_| connection_visible) {
                 Some(pb::connection::Kind::CommandHandling(ch)) => {
                     let Some(slice_id) = ch.command_slice.as_ref().and_then(|s| s.id.as_ref())
                     else {
@@ -8249,20 +8278,26 @@ pub fn validate_model_content_within(
             });
             let label = format!("{}/{}@{}", slo_id.namespace, slo_id.slug, slo_id.version);
 
-            let is_latency = slo
+            let indicator_visible = slo
                 .indicator
                 .as_ref()
                 .and_then(|r| r.id.as_ref())
-                .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
-                .is_some_and(|sli| {
-                    matches!(
-                        sli.measure,
-                        Some(pb::service_level_indicator::Measure::Latency(_))
-                    )
-                });
+                .is_none_or(|id| lens.admits(&id.namespace));
+            let is_latency = indicator_visible.then(|| {
+                slo.indicator
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
+                    .is_some_and(|sli| {
+                        matches!(
+                            sli.measure,
+                            Some(pb::service_level_indicator::Measure::Latency(_))
+                        )
+                    })
+            });
 
             for (i, obj) in slo.objectives.iter().enumerate() {
-                if is_latency && obj.threshold.is_none() {
+                if is_latency == Some(true) && obj.threshold.is_none() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
@@ -8274,7 +8309,7 @@ pub fn validate_model_content_within(
                         ..Default::default()
                     });
                 }
-                if !is_latency && obj.threshold.is_some() {
+                if is_latency == Some(false) && obj.threshold.is_some() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
