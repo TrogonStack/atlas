@@ -114,8 +114,8 @@ example, issues `ship-order` on `shipping` and stays idle on `tax` and
 A payment step can succeed or fail. A processor issues exactly one command
 (`PROCESSOR_MULTIPLE_COMMANDS`, Error), so a worker that sends
 `CompletePayment` or `FailPayment` needs two processors. Use one command
-instead. The payment gateway decides the outcome, and the lane's
-transitions declare both outcomes:
+instead when the command itself decides the outcome. Here the payment
+gateway decides it, and the lane's transitions declare both outcomes:
 
 ```yaml
 kind: Swimlane
@@ -132,10 +132,16 @@ The `capture-payment` CommandSlice has one scenario for each event. After
 emits an event the lane does not allow next is reported
 (`SCENARIO_TRANSITION_VIOLATION`, Warning).
 
-Use one automation for each outcome only when the read model decides the
-outcome before the worker runs. In this workflow that is the shipper
-(row says paid) and the canceller (row says failed): they issue different
-commands, so they are different automations.
+Fork the step into one command for each outcome when a read model already
+holds the outcome before the command is issued. Give each outcome its own
+AutomationSlice, Processor and command. In this workflow that is the
+shipper (`step` is `shipping`) and the canceller (`step` is
+`cancellation`): they issue different commands, so they are different
+automations. The same holds when the model declares the call to an external
+system and the answer lands in a read model, as in
+[external read model reported as unsourced](../explanation/validation-repair-patterns.md#external-read-model-reported-as-unsourced).
+This example does not model the gateway, so `capture-payment` stays one
+command.
 
 ## How routing shows on the board
 
