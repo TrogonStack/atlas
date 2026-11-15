@@ -44,22 +44,19 @@ export function snapshotRuntime(): Plugin {
       server.watcher.on('all', (_event, file) => {
         if (sources.some((source) => file.startsWith(source))) runtime = undefined;
       });
-      const serve =
-        (key: keyof Runtime, type: string): Connect.NextHandleFunction =>
-        async (_req, res, next) => {
-          try {
-            runtime ??= build(root);
-            const body = (await runtime)[key];
-            res.setHeader('Content-Type', type);
-            res.setHeader('Cache-Control', 'no-cache');
-            res.end(body);
-          } catch (e) {
-            runtime = undefined;
-            next(e);
-          }
-        };
-      server.middlewares.use('/snapshot/runtime.js', serve('js', 'text/javascript'));
-      server.middlewares.use('/snapshot/runtime.css', serve('css', 'text/css'));
+      const serve: Connect.NextHandleFunction = async (_req, res, next) => {
+        try {
+          runtime ??= build(root);
+          const { js, css } = await runtime;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.end(JSON.stringify({ js: js.toString('utf8'), css: css.toString('utf8') }));
+        } catch (e) {
+          runtime = undefined;
+          next(e);
+        }
+      };
+      server.middlewares.use('/snapshot/runtime', serve);
     },
   };
 }
