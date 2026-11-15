@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Selection } from '@/components/canvas/Board';
 import { buildStateMachinePreviewModel } from '@/lib/feature-preview-model';
 import { buildModel, type EntityId, entityKey } from '@/lib/model';
@@ -13,8 +13,35 @@ const state = (slug: string) => {
   return el as HTMLButtonElement;
 };
 
+const scrollIntoView = vi.fn();
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
 describe('StateMachineBoard', () => {
-  afterEach(cleanup);
+  beforeEach(() => {
+    scrollIntoView.mockReset();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.callback(
+            [{ target, contentRect: { width: 800, height: 400 } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  afterEach(() => {
+    cleanup();
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it('draws every state of the lifecycle with its kind', () => {
     render(<StateMachineBoard model={buildStateMachinePreviewModel()} selections={[]} onSelect={vi.fn()} />);
@@ -77,7 +104,121 @@ describe('StateMachineBoard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
     expect(screen.getByRole('region', { name: 'Refund lifecycle' })).toBeDefined();
     expect(state('refund.ghost').dataset.problem).toBe('missing');
-    expect(state('refund.ghost').disabled).toBe(true);
+    expect(state('refund.ghost').disabled).toBe(false);
+  });
+
+  it('reveals a focused state again on each request without repanning on model refresh', () => {
+    const key = eventKey('order.delivered');
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <StateMachineBoard
+        model={buildStateMachinePreviewModel()}
+        selections={[]}
+        onSelect={onSelect}
+        focus={{ key, n: 1 }}
+      />,
+    );
+    expect(scrollIntoView.mock.contexts).toEqual([state('order.delivered')]);
+    scrollIntoView.mockClear();
+    rerender(
+      <StateMachineBoard
+        model={buildStateMachinePreviewModel()}
+        selections={[]}
+        onSelect={onSelect}
+        focus={{ key, n: 1 }}
+      />,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    rerender(
+      <StateMachineBoard
+        model={buildStateMachinePreviewModel()}
+        selections={[]}
+        onSelect={onSelect}
+        focus={{ key, n: 2 }}
+      />,
+    );
+    expect(scrollIntoView.mock.contexts).toEqual([state('order.delivered')]);
+  });
+
+  it('reveals the target after switching to its stream', () => {
+    const id = (slug: string): EntityId => ({ namespace: 'acme', slug, version: '1' });
+    const ref = (slug: string) => ({ id: id(slug) });
+    const model = buildModel([
+      { swimlane: { id: id('cart'), title: 'Cart', order: 1, transitions: [{ after: ref('cart.opened'), next: [] }] } },
+      {
+        swimlane: {
+          id: id('refund'),
+          title: 'Refund',
+          order: 2,
+          transitions: [{ after: ref('refund.requested'), next: [] }],
+        },
+      },
+      { event: { id: id('cart.opened'), title: 'Cart opened', swimlane: ref('cart') } },
+      { event: { id: id('refund.requested'), title: 'Refund requested', swimlane: ref('refund') } },
+    ]);
+    const onSelect = vi.fn();
+    const { rerender } = render(<StateMachineBoard model={model} selections={[]} onSelect={onSelect} />);
+    const key = entityKey('event', id('refund.requested'));
+    rerender(<StateMachineBoard model={model} selections={[]} onSelect={onSelect} focus={{ key, n: 1 }} />);
+    expect(screen.getByRole('region', { name: 'Refund lifecycle' })).toBeDefined();
+    expect(scrollIntoView.mock.contexts).toEqual([state('refund.requested')]);
+  });
+
+  it('keeps a tall lifecycle readable and scrollable while thumbnails can fit the whole drawing', () => {
+    const id = (slug: string): EntityId => ({ namespace: 'acme', slug, version: '1' });
+    const ref = (slug: string) => ({ id: id(slug) });
+    const successors = Array.from({ length: 12 }, (_, i) => `closed-${i}`);
+    const model = buildModel([
+      {
+        swimlane: {
+          id: id('fan-out'),
+          title: 'Fan out',
+          transitions: [
+            { after: ref('opened'), next: successors.map((slug) => ({ event: ref(slug) })) },
+            ...successors.map((slug) => ({ after: ref(slug), next: [] })),
+          ],
+        },
+      },
+      ...['opened', ...successors].map((slug) => ({ event: { id: id(slug), title: slug, swimlane: ref('fan-out') } })),
+    ]);
+    const { rerender } = render(<StateMachineBoard model={model} selections={[]} onSelect={vi.fn()} />);
+    const scale = () => Number(state('opened').parentElement?.style.transform.match(/scale\(([^)]+)\)/)?.[1]);
+    expect(scale()).toBeGreaterThanOrEqual(0.8);
+    expect(screen.getByRole('region', { name: 'Fan out lifecycle' }).parentElement?.className).toContain(
+      'overflow-auto',
+    );
+    rerender(<StateMachineBoard model={model} selections={[]} onSelect={vi.fn()} fitWhole />);
+    expect(scale()).toBeLessThan(0.8);
+  });
+
+  it('lets a missing state and its return stub expose guards without selecting an absent entity', () => {
+    const id = (slug: string): EntityId => ({ namespace: 'acme', slug, version: '1' });
+    const ref = (slug: string) => ({ id: id(slug) });
+    const model = buildModel([
+      {
+        swimlane: {
+          id: id('refund'),
+          title: 'Refund',
+          transitions: [
+            { after: ref('refund.ghost'), next: [{ event: ref('refund.requested'), doc: 'A refund was requested.' }] },
+            { after: ref('refund.requested'), next: [{ event: ref('refund.ghost'), doc: 'The refund is retried.' }] },
+          ],
+        },
+      },
+      { event: { id: id('refund.requested'), title: 'Refund requested', swimlane: ref('refund') } },
+    ]);
+    const onSelect = vi.fn();
+    const { rerender } = render(<StateMachineBoard model={model} selections={[]} onSelect={onSelect} />);
+    fireEvent.click(state('refund.ghost'));
+    expect(within(screen.getByTestId('state-machine-next')).getByText('A refund was requested.')).toBeDefined();
+    expect(state('refund.ghost').getAttribute('aria-pressed')).toBe('true');
+    expect(onSelect).not.toHaveBeenCalled();
+    const selections: Selection[] = [{ type: 'entity', key: entityKey('event', id('refund.requested')) }];
+    rerender(<StateMachineBoard model={model} selections={selections} onSelect={onSelect} />);
+    expect(state('refund.requested').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to refund.ghost' }));
+    expect(within(screen.getByTestId('state-machine-next')).getByText('A refund was requested.')).toBeDefined();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('shows an empty state when no stream declares transitions', () => {

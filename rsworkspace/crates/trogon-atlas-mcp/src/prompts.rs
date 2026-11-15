@@ -17,6 +17,31 @@ pub struct TaskPrompt {
 
 pub const TASK_PROMPTS: &[TaskPrompt] = &[
     TaskPrompt {
+        name: "generate-glossary",
+        title: "Generate and maintain a contextual glossary",
+        description: "Extract contextual vocabulary from pinned sources, obtain explicit expert review, retrieve selectively and refresh without losing publication.",
+        body: include_str!("../prompts/generate-glossary.md"),
+        tools: &[
+            "who_am_i",
+            "inspect_glossary_sources",
+            "put_entity_json",
+            "get_glossary_term",
+            "get_glossary_definition",
+            "review_glossary_term",
+            "list_glossary_entries",
+            "list_glossary_pointers",
+            "compare_glossaries",
+            "check_glossary_usage",
+            "check_glossary_code_usage",
+            "inspect_glossary_refresh",
+            "validate_project",
+            "create_branch",
+            "diff_branch",
+            "get_entity_history",
+            "export_namespace",
+        ],
+    },
+    TaskPrompt {
         name: "author-storyboard",
         title: "Author a storyboard",
         description: "The storyboard authoring rules validation enforces, and the follow-up after each mutation.",

@@ -1,9 +1,8 @@
 // The state machine view (see lib/statemachine.ts): one stream's lifecycle
-// at a time, with time running left to right. The drawing fits the pane. A
-// lifecycle too wide to fit at a readable size scrolls sideways, never
-// down. Arrows and marks are one SVG layer; states are buttons placed over
-// it. The guards of the selected state are listed under the drawing, so the
-// arrows themselves carry no text.
+// at a time, with time running left to right. A lifecycle too large to fit
+// at a readable size scrolls in either direction. Arrows and marks are one
+// SVG layer; states are buttons placed over it. The guards of the selected
+// state are listed under the drawing, so the arrows themselves carry no text.
 
 import { CornerUpLeft, Workflow } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -17,8 +16,8 @@ import { arrowPath, buildLifecycle, type LifecycleState, type LifecycleStub, lif
 import { cn } from '@/lib/utils';
 import type { FocusRequest } from './useFocusNode';
 
-// Below this scale the labels get too small to read, so the drawing keeps
-// its height and scrolls sideways instead of shrinking further.
+// Below this scale the labels get too small to read, so the drawing scrolls
+// instead of shrinking further.
 const MIN_SCALE = 0.8;
 const FIT_MARGIN = 16;
 const RING = 'var(--ring)';
@@ -87,6 +86,13 @@ export function StateMachineBoard({
   const issues = useIssues();
   const markerId = useId().replace(/:/g, '');
 
+  const [localStateId, setLocalStateId] = useState<string>();
+  const stateEls = useRef(new Map<string, HTMLButtonElement>());
+  const [scrollTarget, setScrollTarget] = useState<{ key: string; n: number }>();
+  useEffect(() => {
+    if (scrollTarget) stateEls.current.get(scrollTarget.key)?.scrollIntoView?.({ block: 'center', inline: 'center' });
+  }, [scrollTarget]);
+
   const selected = useMemo(
     () => new Set(selections.filter((s) => s.type === 'entity').map((s) => s.key)),
     [selections],
@@ -103,9 +109,15 @@ export function StateMachineBoard({
     const { model: m, lanes: ls } = latest.current;
     const entity = m.byKey.get(focusKey);
     const home = entity?.kind === 'swimlane' ? entity.id : entity?.swimlane;
-    if (home && ls.some((l) => slugKey('swimlane', l.id) === slugKey('swimlane', home)))
+    if (entity && home && ls.some((l) => slugKey('swimlane', l.id) === slugKey('swimlane', home))) {
       setLaneKey(slugKey('swimlane', home));
+      setScrollTarget({ key: slugKey(entity.kind, entity.id), n: focusN });
+    }
   }, [focusKey, focusN]);
+
+  useEffect(() => {
+    setLocalStateId(undefined);
+  }, [selections, focusKey, focusN, laneKey]);
 
   const pane = useRef<HTMLDivElement>(null);
   const size = useBoxSize(pane);
@@ -120,12 +132,13 @@ export function StateMachineBoard({
 
   const byHeight = size ? Math.min(1, (size.h - FIT_MARGIN) / lc.height) : 1;
   const byWidth = size ? (size.w - FIT_MARGIN) / lc.width : 1;
-  const scale = Math.max(0.1, fitWhole || byWidth >= MIN_SCALE ? Math.min(byHeight, byWidth) : byHeight);
+  const scale = Math.max(fitWhole ? 0.1 : MIN_SCALE, Math.min(byHeight, byWidth));
   const width = Math.round(lc.width * scale);
   const height = Math.round(lc.height * scale);
 
   const stateById = new Map(lc.states.map((s) => [s.id, s]));
-  const current = lc.states.find((s) => s.entity && selected.has(s.entity.key));
+  const current =
+    lc.states.find((s) => s.id === localStateId) ?? lc.states.find((s) => s.entity && selected.has(s.entity.key));
   const hot = new Set(
     current ? lc.arrows.filter((a) => a.from === current.id || a.target === current.id).map((a) => a.id) : [],
   );
@@ -135,7 +148,9 @@ export function StateMachineBoard({
   const dim = (id: string) => Boolean(current) && current?.id !== id && !near.has(id);
 
   const choose = (e: React.MouseEvent, state: LifecycleState | undefined) => {
-    if (state?.entity) onSelect(state.entity.key, undefined, e.metaKey || e.ctrlKey || e.shiftKey);
+    if (!state) return;
+    setLocalStateId(state.entity ? undefined : state.id);
+    if (state.entity) onSelect(state.entity.key, undefined, e.metaKey || e.ctrlKey || e.shiftKey);
   };
 
   const renderState = (s: LifecycleState) => {
@@ -144,7 +159,10 @@ export function StateMachineBoard({
       <button
         key={s.id}
         type="button"
-        disabled={!s.entity}
+        ref={(el) => {
+          if (el) stateEls.current.set(s.id, el);
+          else stateEls.current.delete(s.id);
+        }}
         aria-pressed={isCurrent}
         aria-label={`${s.title}: ${KIND_TEXT[s.kind]}${s.problem ? `. ${PROBLEM_TEXT[s.problem]}` : ''}`}
         title={s.problem ? `${s.ref.slug}. ${PROBLEM_TEXT[s.problem]}` : s.ref.slug}
@@ -181,7 +199,7 @@ export function StateMachineBoard({
       <button
         key={s.id}
         type="button"
-        disabled={!target?.entity}
+        disabled={!target}
         aria-label={`Back to ${s.title}`}
         title={`Back to ${s.title}`}
         data-stub={s.id}
@@ -272,7 +290,7 @@ export function StateMachineBoard({
           </KeyItem>
         </span>
       </div>
-      <div ref={pane} className="flex min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+      <div ref={pane} className="flex min-h-0 flex-1 overflow-auto">
         <section aria-label={`${lane.title} lifecycle`} className="relative m-auto shrink-0" style={{ width, height }}>
           <svg
             aria-hidden

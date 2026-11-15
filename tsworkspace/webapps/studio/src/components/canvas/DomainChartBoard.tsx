@@ -20,13 +20,14 @@ import {
   CARD_W,
   type ChartMarker,
   type ContextCardData,
+  type DomainHeaderData,
   CTX_H,
   CTX_W,
   chartMarkers,
   markerTooltip,
   type SubdomainCardData,
 } from '@/lib/domainchart';
-import type { Entity, Model } from '@/lib/model';
+import type { Model } from '@/lib/model';
 import { cn } from '@/lib/utils';
 import { typedNode } from './nodeTypes';
 import { type FocusRequest, useFocusNode } from './useFocusNode';
@@ -67,27 +68,43 @@ function FindingMarker({ marker }: { marker?: ChartMarker }) {
 function ClassificationBandNode({ data }: NodeProps & { data: BandData }) {
   const tone = TONE[data.tone];
   return (
-    <div className={cn('h-full w-full rounded-xl border-2 px-4 py-2', tone.band)}>
-      <span className={cn('text-sm font-bold uppercase tracking-wide', tone.label)}>{data.label}</span>
-      <span className="ml-3 text-[11px] text-muted-foreground">{data.hint}</span>
+    <div className={cn('flex h-full w-full items-start gap-3 rounded-xl border-2 px-4 py-1.5', tone.band)}>
+      <span className={cn('shrink-0 text-sm font-bold uppercase tracking-wide', tone.label)}>{data.label}</span>
+      <span title={data.hint} className="min-w-0 truncate pt-0.5 text-[11px] text-muted-foreground">
+        {data.hint}
+      </span>
     </div>
   );
 }
 
-function DomainHeaderNode({
-  data,
-}: NodeProps & { data: { entity: Entity; marker?: ChartMarker; selected?: boolean } }) {
+// The domain is a box around its own subdomains; the header fills the
+// strip the layout reserves above the first classification section.
+function DomainBoxNode({ data }: NodeProps & { data: DomainHeaderData }) {
+  if (!data.entity) {
+    return (
+      <div className="h-full w-full rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50/60 px-4 pt-3">
+        <div className="text-base font-bold text-zinc-600">No domain</div>
+        <p className="text-[11px] text-muted-foreground">subdomains whose domain is not in the model</p>
+      </div>
+    );
+  }
   return (
     <div
       className={cn(
-        'flex h-full w-full cursor-pointer items-center gap-2 rounded-lg border-2 border-indigo-300 bg-indigo-50 px-4',
+        'h-full w-full cursor-pointer rounded-2xl border-2 border-indigo-300 bg-indigo-50/60 px-4 pt-3',
         data.selected && 'ring-2 ring-ring',
       )}
     >
-      <Globe className="h-4 w-4 shrink-0 text-indigo-600" />
-      <span className="whitespace-nowrap text-sm font-bold text-indigo-900">{data.entity.title}</span>
-      <span className="min-w-0 truncate text-[11px] text-indigo-700/70">{data.entity.doc}</span>
-      <FindingMarker marker={data.marker} />
+      <div className="flex items-center gap-2">
+        <Globe className="h-4 w-4 shrink-0 text-indigo-600" />
+        <span className="truncate text-base font-bold text-indigo-900">{data.entity.title}</span>
+        <FindingMarker marker={data.marker} />
+      </div>
+      {data.entity.doc ? (
+        <p title={data.entity.doc} className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-indigo-700/70">
+          {data.entity.doc}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -105,21 +122,6 @@ function SubdomainCardNode({ data }: NodeProps & { data: SubdomainCardData }) {
       <div className="flex items-center gap-2">
         <span className="truncate text-xs font-semibold">{data.entity.title}</span>
         <FindingMarker marker={data.marker} />
-        {data.classification ? (
-          <span
-            className={cn(
-              'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase',
-              !data.marker && 'ml-auto',
-              data.classification === 'core'
-                ? 'bg-amber-100 text-amber-800'
-                : data.classification === 'generic'
-                  ? 'bg-zinc-100 text-zinc-600'
-                  : 'bg-sky-100 text-sky-700',
-            )}
-          >
-            {data.classification}
-          </span>
-        ) : null}
       </div>
       <p className="mt-1 line-clamp-3 text-[10px] leading-snug text-muted-foreground">{data.entity.doc}</p>
     </div>
@@ -160,7 +162,7 @@ function ContextCardNode({ data }: NodeProps & { data: ContextCardData }) {
 
 const nodeTypes: NodeTypes = {
   classificationBand: typedNode(ClassificationBandNode),
-  domainHeader: typedNode(DomainHeaderNode),
+  domainHeader: typedNode(DomainBoxNode),
   subdomainCard: typedNode(SubdomainCardNode),
   contextCard: typedNode(ContextCardNode),
 };
@@ -235,11 +237,11 @@ export function DomainChartBoard({
       <div className="absolute bottom-3 right-3 flex flex-col gap-1 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-indigo-400" />
-          where investment goes: subdomains by classification, contexts realizing them
+          realizes: the bounded context below implements the subdomain above
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-4 rounded-sm border border-fuchsia-300 bg-fuchsia-50" />a context
-          realizing several subdomains appears under each one
+          <span className="inline-block h-2.5 w-4 rounded-sm border border-fuchsia-300 bg-fuchsia-50" />
+          bounded context, repeated under every subdomain it realizes
         </div>
       </div>
     </div>

@@ -187,7 +187,7 @@ export function buildLifecycle(model: Model, lane: Entity): Lifecycle {
     rows.set(from, list);
     for (const n of r.next) {
       const to = see(n.ref);
-      if (!list.some((x) => x.to === to)) list.push({ to, guard: n.guard });
+      if (!list.some((x) => x.to === to && x.guard === n.guard)) list.push({ to, guard: n.guard });
     }
   }
 

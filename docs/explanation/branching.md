@@ -142,10 +142,13 @@ Detection alone is half a design; this section is the other half.
    sides gave the same command an issuer. For a conflict-free merge that
    also passes type-library, namespace, and architecture-admission checks,
    the merge gate runs `store_hygiene` on the post-merge world (an
-   in-memory overlay for a dry run, a projected world for a real merge),
-   then reports advisory strategic findings. Conflicts or those earlier
-   check failures stop the merge as an RPC error before any hygiene
-   `validation[]` is produced. The gate is **not** a full-model validate:
+   in-memory overlay for a dry run, a projected world for a real merge)
+   and on the baseline before the merge. The merge is refused only for
+   errors that the merge adds. An error that was already in the baseline,
+   in any namespace, stays in `validation[]` with severity `INFO` and a
+   note that it predates the merge. The gate then reports advisory
+   strategic findings. Conflicts or those earlier check failures stop the
+   merge as an RPC error before any hygiene `validation[]` is produced. The gate is **not** a full-model validate:
    EventModel-wide rules, scenarios, and most dangling-reference passes
    still require `ValidateEventModel` / `ValidateProject` (or a future,
    deliberate expansion of the merge gate). See

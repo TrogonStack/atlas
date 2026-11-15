@@ -137,6 +137,62 @@ describe('lifecycle layout', () => {
     expect(out.map((a) => a.guard)).toEqual(['Payment clears before the hold expires.', 'The hold expires first.']);
   });
 
+  it('keeps distinct guards for a repeated destination within one row', () => {
+    const lc = build([
+      [
+        'placed',
+        [
+          ['paid', 'The card payment clears.'],
+          ['paid', 'The bank transfer settles.'],
+          ['paid', 'The card payment clears.'],
+        ],
+      ],
+    ]);
+    const out = lc.arrows.filter((a) => a.from === `event:${NS}/placed`).sort((a, b) => a.order - b.order);
+    expect(out.map((a) => [a.target, a.guard])).toEqual([
+      [`event:${NS}/paid`, 'The card payment clears.'],
+      [`event:${NS}/paid`, 'The bank transfer settles.'],
+    ]);
+  });
+
+  it('keeps distinct guards when merging rows for the same source event', () => {
+    const lc = build([
+      ['placed', [['paid', 'The card payment clears.']]],
+      [
+        'placed',
+        [
+          ['paid', 'The bank transfer settles.'],
+          ['paid', 'The card payment clears.'],
+        ],
+      ],
+    ]);
+    const out = lc.arrows.filter((a) => a.from === `event:${NS}/placed`).sort((a, b) => a.order - b.order);
+    expect(out.map((a) => a.guard)).toEqual(['The card payment clears.', 'The bank transfer settles.']);
+  });
+
+  it('keeps distinct guards on returns to the same state', () => {
+    const lc = build([
+      [
+        'retried',
+        [
+          ['retried', 'The request times out.'],
+          ['retried', 'The service is unavailable.'],
+          ['done', 'The request succeeds.'],
+        ],
+      ],
+    ]);
+    const returns = lc.arrows.filter((a) => a.reentry).sort((a, b) => a.order - b.order);
+    expect(returns.map((a) => [a.target, a.guard])).toEqual([
+      [`event:${NS}/retried`, 'The request times out.'],
+      [`event:${NS}/retried`, 'The service is unavailable.'],
+    ]);
+    expect(new Set(returns.map((a) => a.id)).size).toBe(2);
+    for (const arrow of returns) {
+      expect(lc.stubs.find((stub) => stub.id === arrow.to)?.returnsTo).toBe(arrow.target);
+      for (let i = 1; i < arrow.points.length; i++) expect(arrow.points[i].x).toBeGreaterThan(arrow.points[i - 1].x);
+    }
+  });
+
   it('routes an arrow that skips a column through a waypoint', () => {
     const lc = build([
       ['a', ['b', 'c']],

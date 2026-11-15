@@ -8,7 +8,7 @@
 // Renders without loading the whole store: only EventModel entities and
 // the problem-space namespaces (Decision #29).
 import { ReactFlowProvider } from '@xyflow/react';
-import { Boxes, Library, Search, SearchX } from 'lucide-react';
+import { BookOpen, Boxes, Library, Search, SearchX } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { Selection } from '@/components/canvas/Board';
 import { ContextMapBoard } from '@/components/canvas/ContextMapBoard';
@@ -437,6 +437,13 @@ export function OverviewPage() {
                 ))}
               </TabsList>
             </Tabs>
+            <a
+              href={withBranchQuery('/glossary', branch)}
+              className={buttonVariants({ variant: 'outline', size: 'sm' })}
+            >
+              <BookOpen aria-hidden="true" />
+              Glossary
+            </a>
             <a href="/namespaces" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
               <Library aria-hidden="true" />
               Namespaces
