@@ -458,7 +458,8 @@ enum Cmd {
         unbacked_findings: bool,
     },
     /// Run full validation on a stored event model: the rules that need the
-    /// whole model in view, which `apply --dry-run` does not run, plus the
+    /// whole model in view, which `apply --dry-run` does not run, the
+    /// scenario checks of its slices against the current lanes, plus the
     /// strategic chain of the model's namespace (its BoundedContext, the
     /// Subdomains it realizes, their Domains, and Domains declared in the
     /// namespace). Exits 1 when any finding is an error, otherwise 11 when
@@ -506,9 +507,10 @@ enum Cmd {
         #[arg(long = "trusted-key")]
         trusted_keys: Vec<PathBuf>,
     },
-    /// Validate every event model in a namespace, domain or project, plus
-    /// the strategic findings (BoundedContext, Domain, Subdomain, Project
-    /// rules), which print once in a store-level section. Use it after
+    /// Validate every event model in a namespace, domain or project, with
+    /// the scenario checks of each model's slices, plus the strategic
+    /// findings (BoundedContext, Domain, Subdomain, Project rules), which
+    /// print once in a store-level section. Use it after
     /// editing only problem-space entities or a BoundedContext, when there
     /// may be no event model to run `validate` on. Exits 1 when any
     /// finding is an error, otherwise 11 when the server's coverage shows
