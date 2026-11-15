@@ -143,20 +143,57 @@ coverage as complete, so history and CI agree on what counts as a pass.
 
 ### Enforcement is a separate decision
 
-Reporting that Merge only ran hygiene does not by itself expand Merge to
-`validate_model`. Expanding enforcement needs its own product answer
-(whole post-merge model vs newly introduced errors vs current hygiene
-subset). Coverage work makes that answer observable either way.
+Merge runs hygiene on the baseline and on the post-merge world. It
+refuses only errors that the merge adds. Findings are matched by code,
+subject, field and evidence, ignoring entity versions. An error that was
+already in the baseline does not refuse the merge. It stays in
+`validation[]` with severity `INFO`. Merge does not run `validate_model`.
+Expanding it to the whole post-merge model needs its own product answer.
 
 ## Relation to truncation and consequence deltas
 
 Truncation, depth, and visibility flags must use the same scope and
 snapshot identity vocabulary as coverage, so a truncated empty issue list
-cannot look complete. [Consequence deltas](consequence-delta.md) build on
+cannot look complete. Read paths outside validation follow the same rule:
+`ListEntities`, `ListVersions`, `ListEntitiesByDomain`, `GetImpact`,
+`InferDataFlow` and `CheckInformationCompleteness` carry
+`snapshot_truncated`, and projections and `ExtractSubgraph` fold the cut
+load into their existing `truncated` flag. A short or empty answer under
+either flag says nothing about the entities the load never reached. The
+Rust client refuses to export a namespace from such a listing rather than
+write partial manifests. [Consequence deltas](consequence-delta.md) build on
 the same coverage: each side of the comparison carries its own coverage,
 and a finding missing from an after-scan whose suite did not complete is
 reported as unknown, never as resolved, unless its subject or origin was
 removed, in which case it is reported as subject removed.
+
+## References outside the caller's visibility
+
+A caller whose lens covers only some namespaces validates against a snapshot
+that omits every other namespace. A reference into an omitted namespace looks
+exactly like a reference to something that does not exist, so calling it
+`DANGLING_REF`, `MEMBER_NOT_FOUND` or `UI_TRANSITION_DANGLING` would assert a defect the caller has no evidence for. `ValidateEventModel` and `ValidateProject` instead report such a reference as `REF_OUTSIDE_VISIBLE_SCOPE` at Info severity: the target was not resolved, not found missing.
+
+The classification looks only at the target's namespace, never at whether the
+target exists. Checking existence on the caller's behalf would reveal the
+contents of a namespace the caller cannot read. A reference inside the visible
+namespaces still resolves or dangles as before, and a caller with full
+visibility never sees the new code. To settle an unresolved reference,
+validate with a caller that can read the target namespace.
+
+Content-dependent checks also need readable dependencies. Read-model field
+provenance cannot conclude that a field is unsourced when a source event,
+or that event's state-contributing swimlane, is outside the lens. Projection
+key checks skip unreadable source-event schemas individually, while still
+reporting missing keys on readable sources. Reliability connection checks
+do not call an excluded slice nonexistent, and objective threshold checks
+leave an excluded indicator's measure unknown.
+
+These limits do not suppress independent findings on visible definitions.
+Read-model key declarations, projection roles, indicator signals and
+objective target ranges still receive their usual checks. An informational
+visibility finding does not establish that the hidden definition is valid;
+rerun with access to the dependency before assessing its contents.
 
 ## Where the code lives
 

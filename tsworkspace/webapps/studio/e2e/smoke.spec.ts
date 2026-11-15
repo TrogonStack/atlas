@@ -51,7 +51,7 @@ test.describe('Real-stack smoke', () => {
     failOnConsoleErrors(page, errors);
 
     await page.goto(EM_PATH);
-    await expect(page.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Atlas', level: 1 })).toBeVisible();
     // The one Event member of the fixture EventModel renders as a sticky
     // with its title visible on the board.
     await expect(page.getByText('Order Placed')).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('Real-stack smoke', () => {
 
   test('(c) ?branch= names the branch on the switcher with the read-only hint', async ({ page }) => {
     await page.goto(`${EM_PATH}?branch=${encodeURIComponent(FIXTURE_BRANCH.name)}`);
-    await expect(page.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Atlas', level: 1 })).toBeVisible();
 
     // The switcher itself carries the branch name (font-mono span inside BranchBar).
     await expect(page.getByText(FIXTURE_BRANCH.name, { exact: true })).toBeVisible();

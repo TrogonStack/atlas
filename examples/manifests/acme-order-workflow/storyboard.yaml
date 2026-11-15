@@ -1,0 +1,33 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: order-workflow
+  namespace: acme-order-workflow
+spec:
+  doc: A placed order is taxed, paid and shipped. A declined payment cancels it.
+  entry:
+    human:
+      persona: shopper
+      ui: checkout-page
+    readModel: order-progress
+  outcome:
+    events:
+    - order.shipped
+    - order.cancelled
+  slices:
+  - place-order-slice
+  - progress-placed-rms
+  - tax-calculator
+  - calculate-tax-slice
+  - progress-taxed-rms
+  - payment-capturer
+  - capture-payment-slice
+  - progress-payment-rms
+  - progress-payment-failed-rms
+  - shipper
+  - ship-order-slice
+  - progress-shipped-rms
+  - order-canceller
+  - cancel-order-slice
+  - progress-cancelled-rms
+  title: Order workflow

@@ -5,6 +5,56 @@ They complement the [repair playbook](../how-to/repair-validation-findings.md).
 They are precedents for investigation, not commands to replay without
 checking current definitions.
 
+## Unreadable dependencies reported as content defects
+
+### Symptom and applicability
+
+A scoped caller can read the subject but cannot read an exact dependency:
+
+- A ReadModel sources an excluded event, or a readable source event draws
+  state from an excluded swimlane. An empty field union can produce
+  `READ_MODEL_FIELD_UNSOURCED` without evidence that the field is absent.
+- A ReadModelSlice projects an excluded event into a visible keyed view.
+  Treating the unavailable schema as empty produces `RM_SLICE_KEY_UNSOURCED`.
+- A ServiceLevelIndicator names an excluded CommandHandling, Projection,
+  Reaction or Display slice. A filtered lookup can incorrectly produce
+  `SLI_CONNECTION_UNRESOLVED` and claim the target does not exist.
+- A ServiceLevelObjective references an excluded indicator. Treating its
+  unknown measure as non-latency incorrectly produces
+  `SLO_THRESHOLD_MISMATCH` for an objective with a threshold.
+
+Confirm the target namespace is outside the caller's lens. A missing
+definition inside the lens remains a normal validation problem. Do not
+probe an excluded namespace to distinguish a hidden target from an absent
+one.
+
+### Behavior-preserving decision
+
+Repair the validator's inference rather than changing the model to satisfy
+an incomplete snapshot. Skip only the conclusion that requires unreadable
+contents. Keep the informational visibility finding, inspect each readable
+projection source independently, and retain local key, role, signal and
+target-range checks. Full-visibility and write validation retain their
+existing behavior.
+
+Inventing source fields, removing keys, replacing connections or dropping
+thresholds would change the modeled behavior without evidence. Globally
+suppressing errors would also hide defects that the caller can verify.
+
+### Verification and limits
+
+The authenticated public RPC regressions in
+[`scoped_validation.rs`](../../rsworkspace/crates/trogon-atlas-server/tests/scoped_validation.rs)
+exercise inline and by-ID `ValidateEventModel` plus `ValidateProject`.
+Hidden-present and hidden-absent cases must produce equivalent scoped
+findings. Full-visibility controls retain real missing-source, wrong-kind
+and threshold errors; mixed-source and malformed local definitions retain
+their independent findings.
+
+This pattern concerns explicitly referenced dependencies. Inferring the
+absence of an inverse trigger, observer or path can require a broader
+inventory guarantee; these regressions do not establish that policy.
+
 ## Upstream subscription at a local storyboard entry
 
 ### Symptom and evidence
@@ -334,3 +384,30 @@ recorded.
 - `trogon-atlas fmt --check` already reports
   `acme-customer-data-deletion/read-model.yaml` as unformatted on main. That
   file is left alone.
+
+## Separate projections for alternative workflow outcomes
+
+`PROJECTION_MERGES_BRANCHES` on the order workflow's
+`progress-payment-rms` identifies a projection slice containing both
+`payment.captured` and `payment.failed`. The order lane declares those
+events as alternative successors of `tax.calculated`; they are different
+branches, not successive moments.
+
+Keep both events, the lane transitions, command scenarios, and the shared
+`order-progress` read model. Give each payment outcome its own
+ReadModelSlice, and include both slices in the EventModel and directly
+after `capture-payment-slice` in the storyboard, before any automation
+acts. The read model can aggregate both outcomes without treating their
+projection as one slice.
+
+Removing a source event or a lane transition would erase the failure or
+success path. Replacing the events with an outcome field would change the
+workflow contract. Splitting only the projection preserves both paths.
+
+The fixture-backed `example_manifests_validate` tests reproduce the
+finding before this repair and validate all example models and the Acme
+project after it. The projection-ordering tests separately retain the
+warning for merged siblings and allow a single branch per slice. Existing
+stores seeded with the former slice need the revised definition and the
+new slice applied together with their model and storyboard references;
+editing seed files does not update a running store.

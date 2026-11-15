@@ -1,0 +1,75 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: order
+  namespace: acme-order-workflow
+spec:
+  doc: One order, from placement to shipment or cancellation.
+  order: 1
+  state:
+  - name: step
+    type:
+      enumeration:
+        values:
+        - tax
+        - payment
+        - shipping
+        - cancellation
+        - done
+  streamId: order-{order_id}
+  title: Order
+  transitions:
+  - after:
+      id:
+        namespace: acme-order-workflow
+        slug: order.placed
+        version: '1'
+    next:
+    - doc: Tax is calculated first.
+      event:
+        id:
+          namespace: acme-order-workflow
+          slug: tax.calculated
+          version: '1'
+  - after:
+      id:
+        namespace: acme-order-workflow
+        slug: tax.calculated
+        version: '1'
+    next:
+    - doc: The gateway accepts the payment.
+      event:
+        id:
+          namespace: acme-order-workflow
+          slug: payment.captured
+          version: '1'
+    - doc: The gateway declines the payment.
+      event:
+        id:
+          namespace: acme-order-workflow
+          slug: payment.failed
+          version: '1'
+  - after:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.captured
+        version: '1'
+    next:
+    - doc: A paid order ships.
+      event:
+        id:
+          namespace: acme-order-workflow
+          slug: order.shipped
+          version: '1'
+  - after:
+      id:
+        namespace: acme-order-workflow
+        slug: payment.failed
+        version: '1'
+    next:
+    - doc: A declined order is cancelled.
+      event:
+        id:
+          namespace: acme-order-workflow
+          slug: order.cancelled
+          version: '1'

@@ -70,7 +70,7 @@ test.describe('Overview to board flow', () => {
     await page.getByRole('link', { name: /order service/i }).click();
 
     // The TopBar heading confirms we are on the EventModel page.
-    await expect(page.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Atlas', level: 1 })).toBeVisible();
 
     // The scoped title in the TopBar shows the model name.
     await expect(page.getByText('Order Service', { exact: true }).first()).toBeVisible();
@@ -108,7 +108,7 @@ test.describe('Overview to board flow', () => {
     await page.goto('/?mode=chart');
     const search = page.getByRole('textbox', { name: 'Search models and entities' });
     const chartCard = page.getByText('No domains mapped yet');
-    const chartLegend = page.getByText(/where investment goes/);
+    const chartLegend = page.getByText(/^realizes: /);
     await expect(chartCard).toBeVisible();
 
     const searchBox = await search.boundingBox();

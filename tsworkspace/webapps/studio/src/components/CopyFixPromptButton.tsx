@@ -5,6 +5,8 @@ import type { Model } from '@/lib/model';
 import { validationFixPrompt } from '@/lib/validation-context';
 
 export function CopyFixPromptButton({ model, issue, momentKey }: { model: Model; issue: Issue; momentKey?: string }) {
+  // A declared finding has nothing to repair, and a fix prompt would push an agent to change a correct model.
+  if (issue.acknowledged) return null;
   return (
     <CopyContextButton
       label="Copy fix prompt"

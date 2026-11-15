@@ -10,6 +10,8 @@ use trogon_atlas_client::{
 };
 use trogon_atlas_proto as pb;
 
+mod glossary;
+
 /// kubectl-style CLI for the trogon-atlas server: declarative YAML manifests
 /// in, idempotent BatchMutate out.
 #[derive(Parser)]
@@ -72,7 +74,48 @@ enum Format {
 }
 
 #[derive(Subcommand)]
+enum ArtifactCmd {
+    /// Discover the deployment's artifact backend and upload limits.
+    Info,
+    /// Upload a local file and return its verified durable artifact reference.
+    Upload {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        media_type: Option<String>,
+    },
+    /// Inspect an accepted artifact without fetching its bytes.
+    Get {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+    },
+    /// Download and verify an artifact into a new file.
+    Download {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
+    /// Review and inspect contextual vocabulary, source evidence and usage policy.
+    Glossary {
+        #[command(subcommand)]
+        command: glossary::GlossaryCmd,
+    },
+    /// Upload and retrieve files using the server-configured object storage.
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactCmd,
+    },
     /// Read the exact bounded operation and guard page for a source preview.
     ListSourceRunOperations {
         #[arg(long)]
@@ -401,6 +444,19 @@ enum Cmd {
     },
     /// List the namespaces the caller can see, with their ids and entity counts.
     Namespaces,
+    /// Report which entities carry an accepted Decision, a Document or a
+    /// complete code reference. Exits 11 when any subject could not be
+    /// settled or the snapshot was truncated, so a gate never reads a
+    /// partial count as a rate. With --branch, reports the branch's view.
+    BackingReport {
+        /// Count only subjects in this namespace id. Repeat for several;
+        /// omit for every visible namespace.
+        #[arg(long = "namespace")]
+        namespaces: Vec<String>,
+        /// Also return an `ENTITY_UNBACKED` Info finding per unbacked subject.
+        #[arg(long)]
+        unbacked_findings: bool,
+    },
     /// Run full validation on a stored event model: the rules that need the
     /// whole model in view, which `apply --dry-run` does not run, plus the
     /// strategic chain of the model's namespace (its BoundedContext, the
@@ -785,9 +841,9 @@ const EXIT_FINDINGS: u8 = 1;
 
 /// Exit code for an answer the server could not finish: a `validate` /
 /// `validate-project` run with no Error finding whose coverage shows a
-/// suite or the snapshot was not fully examined, or a protection read with
-/// unknown state. A gate never mistakes "nothing found in part of the
-/// model" for a pass.
+/// suite or the snapshot was not fully examined, a protection read with
+/// unknown state, or a `backing-report` that leaves a subject unsettled.
+/// A gate never mistakes "nothing found in part of the model" for a pass.
 const EXIT_INCOMPLETE: u8 = 11;
 
 /// Exit code for a `classify-impact` run where no dependent provably breaks
@@ -930,6 +986,46 @@ fn attested_outcome(
         ExitCode::from(EXIT_INCOMPLETE)
     };
     (code, Some(data))
+}
+
+fn print_backing_report(report: &trogon_atlas_client::backing::BackingReport) {
+    let response = report.response();
+    let totals = response.totals.unwrap_or_default();
+    let rate = totals.unbacked_rate.map_or_else(
+        || "not established".to_owned(),
+        |rate| format!("{:.1}%", rate * 100.0),
+    );
+    let scope = if response.namespaces.is_empty() {
+        "all visible namespaces".to_owned()
+    } else {
+        response.namespaces.join(", ")
+    };
+    println!(
+        "snapshot {}: {} subjects, {} backed, {} unbacked, {} unknown, unbacked rate {rate}",
+        response.snapshot_id, totals.total, totals.backed, totals.unbacked, totals.unknown
+    );
+    println!("subjects: {scope}");
+    for kind in &response.kinds {
+        let name = pb::EntityKind::try_from(kind.kind)
+            .map_or("unknown", |kind| kind.as_str_name())
+            .trim_start_matches("ENTITY_KIND_")
+            .to_lowercase();
+        let totals = kind.totals.unwrap_or_default();
+        println!(
+            "  {name}: {} subjects, {} backed, {} unbacked, {} unknown",
+            totals.total, totals.backed, totals.unbacked, totals.unknown
+        );
+    }
+    for reason in &response.incomplete_reasons {
+        let name = pb::BackingIncompleteReason::try_from(*reason)
+            .map_or("UNRECOGNIZED", |reason| reason.as_str_name())
+            .trim_start_matches("BACKING_INCOMPLETE_REASON_")
+            .to_lowercase();
+        println!("incomplete: {name}");
+    }
+    for issue in &response.findings {
+        println!("{}", apply::format_issue(issue));
+    }
 }
 
 fn print_coverage_gaps(completeness: &validate::Completeness) {
@@ -1267,6 +1363,109 @@ async fn run(
     // Local validation (paths, flags, kind parse) runs before connect so an
     // unreachable --endpoint cannot mask authoring errors.
     match cmd {
+        Cmd::Glossary { command } => {
+            let command = command.prepare()?;
+            let mut client = match command.mutation_preview() {
+                Some(validate_only) => {
+                    connect_mutating_client(
+                        &endpoint,
+                        auth_token.as_deref(),
+                        rpc_timeout_secs,
+                        branch,
+                        validate_only,
+                    )
+                    .await?
+                }
+                None => {
+                    connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
+                        .await?
+                }
+            };
+            let result = command.execute(&mut client).await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::Artifacts { command } => {
+            if let ArtifactCmd::Upload { ref file, .. } = command {
+                let metadata = std::fs::symlink_metadata(file).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("artifact file unavailable")
+                })?;
+                if !metadata.is_file()
+                    || metadata.len() > trogon_atlas_client::artifacts::MAX_TRANSFER_BYTES as u64
+                {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact must be a regular file within the client transfer limit",
+                    ));
+                }
+                if metadata.len() == 0 {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact file must not be empty",
+                    ));
+                }
+            }
+            let mut client = client::connect_with_options(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                client::ConnectOptions {
+                    request_id_prefix: Some("trogon-atlas-artifacts"),
+                    max_message_bytes: Some(trogon_atlas_client::artifacts::MAX_MESSAGE_BYTES),
+                    branch,
+                },
+            )
+            .await?;
+            let result = match command {
+                ArtifactCmd::Info => {
+                    trogon_atlas_client::artifacts::get_artifact_storage_info(
+                        &mut client,
+                        pb::GetArtifactStorageInfoRequest {},
+                    )
+                    .await?
+                }
+                ArtifactCmd::Upload {
+                    namespace,
+                    file,
+                    media_type,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::upload_file(
+                        &client,
+                        &namespace,
+                        &file,
+                        media_type.as_deref(),
+                        std::time::Duration::from_secs(rpc_timeout_secs),
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+                ArtifactCmd::Get { namespace, id } => {
+                    trogon_atlas_client::artifacts::get_artifact(
+                        &mut client,
+                        pb::GetArtifactRequest {
+                            namespace,
+                            artifact_id: id,
+                        },
+                    )
+                    .await?
+                }
+                ArtifactCmd::Download {
+                    namespace,
+                    id,
+                    output,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::download_file(
+                        &client, &namespace, &id, &output,
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+            };
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::Schema => {
             let schema = manifest_schema::generate()?;
             if text {
@@ -2544,6 +2743,30 @@ async fn run(
             }
             Ok((ExitCode::SUCCESS, Some(view::namespaces_json(&namespaces))))
         }
+        Cmd::BackingReport {
+            namespaces,
+            unbacked_findings,
+        } => {
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let report = trogon_atlas_client::backing::get_backing_report(
+                &mut client,
+                pb::GetBackingReportRequest {
+                    namespaces,
+                    include_unbacked_findings: unbacked_findings,
+                },
+            )
+            .await?;
+            if text {
+                print_backing_report(&report);
+            }
+            let code = if report.is_complete() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(EXIT_INCOMPLETE)
+            };
+            Ok((code, Some(report.to_json()?)))
+        }
         Cmd::Validate { model } => {
             let address = validate::parse_model_address(&model)?;
             let mut client =
@@ -3360,5 +3583,62 @@ mod secret_env_help_guard {
             offenders.is_empty(),
             "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod artifact_command_tests {
+    use clap::Parser;
+
+    use super::{Args, ArtifactCmd, Cmd};
+
+    #[test]
+    fn artifact_upload_requires_local_file_and_namespace_without_backend_credentials() {
+        let args = Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample",
+            "--file",
+            "capture.png",
+        ])
+        .unwrap_or_else(|error| panic!("artifact upload should parse: {error}"));
+        assert!(matches!(
+            args.cmd,
+            Cmd::Artifacts {
+                command: ArtifactCmd::Upload { .. }
+            }
+        ));
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--file",
+            "capture.png"
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn artifact_download_requires_explicit_destination() {
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "download",
+            "--namespace",
+            "sample",
+            "--id",
+            "capture",
+        ])
+        .is_err());
     }
 }

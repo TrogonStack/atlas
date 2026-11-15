@@ -35,13 +35,13 @@ pub struct ReverseIndex {
 
 impl ReverseIndex {
     pub fn build(all: &[StoredEntity]) -> Result<Self, Status> {
-        Self::build_counted(all, responsibility_occurrence_count(all)?)
+        Self::build_counted(all, responsibility_occurrence_count(all)?, &[])
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
         let occurrences = responsibility_occurrence_count(all)?;
         check_responsibility_occurrence_count(occurrences)?;
-        Self::build_counted(all, occurrences)
+        Self::build_counted(all, occurrences, &[])
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
@@ -54,10 +54,12 @@ impl ReverseIndex {
     fn build_counted(
         all: &[StoredEntity],
         responsibility_occurrences: usize,
+        extra_known: &[pb::EntityKey],
     ) -> Result<Self, Status> {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
-        let known: HashSet<pb::EntityKey> = all
+        // `extra_known` keeps a target resolvable after this world has deleted it.
+        let mut known: HashSet<pb::EntityKey> = all
             .iter()
             .filter_map(|se| {
                 let k = ref_entity_kind(&se.entity)?;
@@ -65,6 +67,7 @@ impl ReverseIndex {
                 Some(pb::EntityKey::new(k, i))
             })
             .collect();
+        known.extend(extra_known.iter().cloned());
         let mut by_target: HashMap<pb::EntityKey, Vec<pb::Reference>> = HashMap::new();
         for se in all {
             let (Some(from_kind), Some(from_id)) =
@@ -287,10 +290,45 @@ pub const SCHEMA_FIELD: &str = "schema";
 
 pub struct LoadAllResult {
     pub entities: Vec<StoredEntity>,
-    /// True when the store returned exactly the cap, meaning more entities
-    /// may exist beyond what was loaded. Callers that need the complete set
-    /// (e.g. `delete_by_query`) must treat a truncated snapshot as an error.
+    /// True when the store held more entities than the cap, so `entities`
+    /// is a prefix of the view. Callers that need the complete set (e.g.
+    /// `delete_by_query`) must treat a truncated load as an error.
     pub truncated: bool,
+}
+
+/// What one snapshot load covered: the cap it ran under, whether the view
+/// held more entities than that, and which view it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadCoverage {
+    pub cap: usize,
+    pub truncated: bool,
+    pub branch: Option<String>,
+}
+
+/// Entities from one load, kept with that same load's coverage so a reader
+/// can never pair one load's entities with another load's flag.
+#[derive(Clone)]
+pub struct LoadedSnapshot {
+    pub entities: Arc<Vec<StoredEntity>>,
+    pub coverage: LoadCoverage,
+}
+
+impl LoadedSnapshot {
+    pub async fn load(
+        store: &Arc<dyn Store>,
+        cap: usize,
+        branch: Option<&str>,
+    ) -> Result<Self, Status> {
+        let result = load_all_with_cap(store, cap, branch).await?;
+        Ok(Self {
+            entities: Arc::new(result.entities),
+            coverage: LoadCoverage {
+                cap,
+                truncated: result.truncated,
+                branch: branch.map(str::to_owned),
+            },
+        })
+    }
 }
 
 pub async fn load_all(
@@ -300,21 +338,32 @@ pub async fn load_all(
     load_all_with_cap(store, crate::service::MAX_PROJECTION_ENTITIES, branch).await
 }
 
+/// Loads at most `cap` entities, probing one past the cap so a view of
+/// exactly `cap` entities is not mistaken for a truncated one.
+///
+/// When the probe exceeds the store's own list ceiling the store cannot
+/// return it, so a load that fills the cap is reported as truncated.
 pub async fn load_all_with_cap(
     store: &Arc<dyn Store>,
     cap: usize,
     branch: Option<&str>,
 ) -> Result<LoadAllResult, Status> {
-    let entities = store
-        .list(ListFilter::default(), Some(cap), branch)
+    let probe = cap.saturating_add(1);
+    let mut entities = store
+        .list(ListFilter::default(), Some(probe), branch)
         .await
         .map_err(store_err)?;
-    let truncated = entities.len() >= cap;
+    let truncated = if probe > trogon_atlas_store::store::LIST_HARD_CAP {
+        entities.len() >= cap
+    } else {
+        entities.len() > cap
+    };
+    entities.truncate(cap);
     if truncated {
         tracing::warn!(
             cap,
-            "snapshot loaded exactly the entity cap; store may have more entities \
-             than are visible to read paths"
+            "snapshot hit the entity cap; store has more entities than are \
+             visible to read paths"
         );
     }
     Ok(LoadAllResult {
@@ -562,6 +611,100 @@ pub fn supersession_descendants(
         }
     }
     out
+}
+
+/// Referrer entries one unbridged-removal report may carry before it stops
+/// and marks itself incomplete.
+pub const UNBRIDGED_REFERRER_BUDGET: usize = 4_096;
+
+pub struct UnbridgedReport {
+    pub removals: Vec<pb::UnbridgedRemoval>,
+    pub incomplete: bool,
+}
+
+/// Retired versions that no entity in `world` supersedes while the latest
+/// version of some other entity still references them. `world` is the store
+/// as it will be once the change lands.
+pub fn unbridged_removals(
+    world: &[StoredEntity],
+    retired: &[pb::EntityRef],
+) -> Result<UnbridgedReport, Status> {
+    let mut bridged: HashSet<pb::EntityKey> = HashSet::new();
+    let mut latest: HashMap<(pb::EntityKind, &str, &str), u64> = HashMap::new();
+    for se in world {
+        let (Some(kind), Some(id)) = (ref_entity_kind(&se.entity), ref_entity_id(&se.entity))
+        else {
+            continue;
+        };
+        if let Some(parent) = supersedes_of(&se.entity) {
+            bridged.insert(pb::EntityKey::new(kind, parent));
+        }
+        let version = latest
+            .entry((kind, id.namespace.as_str(), id.slug.as_str()))
+            .or_default();
+        *version = (*version).max(id.version);
+    }
+    let is_live = |r: &pb::EntityRef| {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(r.kind), r.id.as_ref()) else {
+            return false;
+        };
+        latest.get(&(kind, id.namespace.as_str(), id.slug.as_str())) == Some(&id.version)
+    };
+    let retired_keys: Vec<pb::EntityKey> = retired
+        .iter()
+        .filter_map(|entity| {
+            let kind = pb::EntityKind::try_from(entity.kind).ok()?;
+            let id = entity.id.as_ref()?;
+            Some(pb::EntityKey::new(kind, id))
+        })
+        .collect();
+    let index = ReverseIndex::build_counted(
+        world,
+        responsibility_occurrence_count(world)?,
+        &retired_keys,
+    )?;
+    let mut report = UnbridgedReport {
+        removals: Vec::new(),
+        incomplete: false,
+    };
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    let mut emitted = 0;
+    for entity in retired {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(entity.kind), entity.id.as_ref())
+        else {
+            continue;
+        };
+        let key = pb::EntityKey::new(kind, id);
+        if bridged.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        let room = UNBRIDGED_REFERRER_BUDGET - emitted;
+        let referrers: Vec<pb::Reference> = index
+            .incoming(kind, id)
+            .iter()
+            .filter(|r| r.from_field != "supersedes")
+            .filter(|r| {
+                r.from
+                    .as_ref()
+                    .is_some_and(|from| from != entity && is_live(from))
+            })
+            .take(room + 1)
+            .cloned()
+            .collect();
+        if referrers.is_empty() {
+            continue;
+        }
+        if referrers.len() > room {
+            report.incomplete = true;
+            break;
+        }
+        emitted += referrers.len();
+        report.removals.push(pb::UnbridgedRemoval {
+            entity: Some(entity.clone()),
+            remaining_referrers: referrers,
+        });
+    }
+    Ok(report)
 }
 
 #[must_use]
@@ -896,15 +1039,36 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
     }
 }
 
+/// True for the outbound ref a container uses to list one of its members.
+fn is_container_member_ref(source: pb::EntityKind, from_field: &str) -> bool {
+    match source {
+        pb::EntityKind::EventModel | pb::EntityKind::Component => {
+            from_field.starts_with("members[")
+        }
+        pb::EntityKind::Storyboard => {
+            from_field.starts_with("slices[") || from_field.starts_with("traces[")
+        }
+        _ => false,
+    }
+}
+
 /// Breadth-first impact analysis from a root `EntityRef`. Each visited node
-/// records hop count and the path of references taken to reach it.
+/// records hop count and the path of references taken to reach it. Unless
+/// `include_containers` is set, a non-root container (event model, storyboard,
+/// component) is emitted but its members are not walked.
+pub struct Impact {
+    pub nodes: Vec<pb::ImpactNode>,
+    pub depth_limited: bool,
+}
+
 pub fn impact(
     all: &[StoredEntity],
     root_kind: pb::EntityKind,
     root_id: &pb::Id,
     max_depth: u32,
     follow_incoming: bool,
-) -> Result<Vec<pb::ImpactNode>, Status> {
+    include_containers: bool,
+) -> Result<Impact, Status> {
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {
@@ -946,10 +1110,8 @@ pub fn impact(
     let mut queue: VecDeque<(pb::EntityKind, pb::Id, u32, Vec<pb::Reference>)> = VecDeque::new();
     queue.push_back((root_kind, root_id.clone(), 0, Vec::new()));
 
+    let mut depth_limited = false;
     while let Some((k, id, depth, path)) = queue.pop_front() {
-        if depth >= max_depth {
-            continue;
-        }
         let key = pb::EntityKey::new(k, &id);
         // Tag each ref with the side we should walk to. For an outbound
         // ref (`from = self`), the neighbor is `r.to`. For an incoming
@@ -985,8 +1147,29 @@ pub fn impact(
                     continue;
                 }
             };
+            // A container lists every member, so walking down through one
+            // reaches siblings that never depend on the root. The root itself
+            // is exempt so impact of a container still lists its members.
+            if !is_incoming
+                && !include_containers
+                && depth > 0
+                && is_container_member_ref(k, &r.from_field)
+            {
+                continue;
+            }
             let okey = pb::EntityKey::new(ok, oid);
             let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
+            if depth >= max_depth {
+                depth_limited |= if business_edge {
+                    !emitted.contains(&okey)
+                } else {
+                    !expanded.contains(&okey)
+                };
+                continue;
+            }
+            if expanded.contains(&okey) {
+                continue;
+            }
             let mut new_path = path.clone();
             new_path.push(r);
             if business_edge {
@@ -1017,7 +1200,10 @@ pub fn impact(
             }
         }
     }
-    Ok(out)
+    Ok(Impact {
+        nodes: out,
+        depth_limited,
+    })
 }
 
 fn entity_uid(entity: &pb::Entity) -> String {
@@ -1293,6 +1479,30 @@ mod impact_tests {
         }
     }
 
+    fn stored_schema(ns: &str, slug: &str, targets: &[(&str, &str)]) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Schema(pb::Schema {
+                    id: Some(id(ns, slug)),
+                    property_relationships: targets
+                        .iter()
+                        .map(
+                            |(target_ns, target_slug)| pb::BusinessPropertyRelationship {
+                                target_entity: Some(pb::SchemaRef {
+                                    id: Some(id(target_ns, target_slug)),
+                                }),
+                                ..Default::default()
+                            },
+                        )
+                        .collect(),
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        }
+    }
+
     /// Regression test for the `follow_incoming=true` ref-side bug: an
     /// outbound ref from the root must visit `r.to`, not `r.from`. Before
     /// the fix, every impact traversal with `follow_incoming=true`
@@ -1309,8 +1519,10 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             /*follow_incoming=*/ true,
+            /*include_containers=*/ false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let entity_ids: Vec<String> = nodes
             .iter()
             .filter_map(|n| {
@@ -1327,6 +1539,155 @@ mod impact_tests {
             entity_ids.iter().any(|s| s.contains("place")),
             "root must always be present: {entity_ids:?}"
         );
+    }
+
+    fn stored_event_model(
+        ns: &str,
+        slug: &str,
+        members: &[(pb::EntityKind, &str)],
+    ) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                    id: Some(id(ns, slug)),
+                    title: slug.into(),
+                    members: members
+                        .iter()
+                        .map(|(k, s)| pb::EntityRef {
+                            kind: *k as i32,
+                            id: Some(id(ns, s)),
+                        })
+                        .collect(),
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        }
+    }
+
+    fn impact_slugs(include_containers: bool) -> Vec<String> {
+        let all = vec![
+            stored_event_model(
+                "shop",
+                "model",
+                &[
+                    (pb::EntityKind::CommandSlice, "cart"),
+                    (pb::EntityKind::CommandSlice, "reviews"),
+                ],
+            ),
+            stored_command_slice("shop", "cart", None),
+            stored_command_slice("shop", "reviews", None),
+        ];
+        let nodes = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("shop", "cart"),
+            4,
+            true,
+            include_containers,
+        )
+        .unwrap()
+        .nodes;
+        nodes
+            .iter()
+            .filter_map(|n| n.entity.as_ref()?.id.as_ref().map(|i| i.slug.clone()))
+            .collect()
+    }
+
+    /// Pins that a container is reported but not walked down into, so an
+    /// unrelated sibling member is not part of the impact.
+    #[test]
+    fn impact_does_not_expand_container_members_by_default() {
+        let slugs = impact_slugs(false);
+        assert!(slugs.contains(&"model".to_string()), "{slugs:?}");
+        assert!(!slugs.contains(&"reviews".to_string()), "{slugs:?}");
+    }
+
+    #[test]
+    fn impact_expands_container_members_when_requested() {
+        let slugs = impact_slugs(true);
+        assert!(slugs.contains(&"model".to_string()), "{slugs:?}");
+        assert!(slugs.contains(&"reviews".to_string()), "{slugs:?}");
+    }
+
+    #[test]
+    fn impact_of_container_root_lists_its_members() {
+        let all = vec![
+            stored_event_model("shop", "model", &[(pb::EntityKind::CommandSlice, "cart")]),
+            stored_command_slice("shop", "cart", None),
+        ];
+        let nodes = impact(
+            &all,
+            pb::EntityKind::EventModel,
+            &id("shop", "model"),
+            2,
+            true,
+            false,
+        )
+        .unwrap()
+        .nodes;
+        assert_eq!(nodes.len(), 2);
+    }
+
+    fn two_slices_sharing_an_event() -> Vec<StoredEntity> {
+        vec![
+            stored_command_slice("orders", "place", Some(("orders", "placed"))),
+            stored_command_slice("orders", "replace", Some(("orders", "placed"))),
+            stored_event("orders", "placed"),
+        ]
+    }
+
+    #[test]
+    fn impact_is_depth_limited_when_the_bound_cuts_a_reachable_entity() {
+        let all = two_slices_sharing_an_event();
+        let cut = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            1,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(cut.nodes.len(), 2);
+        assert!(cut.depth_limited);
+    }
+
+    #[test]
+    fn impact_is_not_depth_limited_when_the_bound_reaches_everything() {
+        let all = two_slices_sharing_an_event();
+        let whole = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            2,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(whole.nodes.len(), 3);
+        assert!(!whole.depth_limited);
+    }
+
+    #[test]
+    fn impact_does_not_mark_an_emitted_business_target_as_depth_limited() {
+        let all = vec![
+            stored_schema("shop", "root", &[("shop", "target")]),
+            stored_schema("shop", "bridge", &[("shop", "root"), ("shop", "target")]),
+            stored_schema("shop", "target", &[]),
+        ];
+        let bounded = impact(
+            &all,
+            pb::EntityKind::Schema,
+            &id("shop", "root"),
+            1,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(bounded.nodes.len(), 3);
+        assert!(!bounded.depth_limited);
     }
 
     /// `filter_refs_by_kinds` must filter the *other* end of the ref,
@@ -1386,6 +1747,32 @@ mod impact_tests {
             !incoming.is_empty(),
             "ReverseIndex must surface Storyboard→CommandSlice via untyped slice ref; got {incoming:?}"
         );
+    }
+
+    #[test]
+    fn unbridged_report_keeps_a_deleted_slice_resolvable() {
+        let slice_id = id("orders", "place-slice");
+        let board = StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Storyboard(pb::Storyboard {
+                    id: Some(id("orders", "happy-path")),
+                    title: "happy".into(),
+                    slices: vec![pb::SliceRef {
+                        id: Some(slice_id.clone()),
+                    }],
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        };
+        let retired = pb::EntityRef {
+            kind: pb::EntityKind::CommandSlice as i32,
+            id: Some(slice_id),
+        };
+        let report = unbridged_removals(std::slice::from_ref(&board), &[retired]).unwrap();
+        assert!(!report.incomplete);
+        assert_eq!(report.removals.len(), 1);
     }
 
     fn stored_ui(ns: &str, slug: &str, screen: Option<(&str, &str)>) -> StoredEntity {
@@ -1494,8 +1881,10 @@ mod impact_tests {
             &id("app", "checkout"),
             2,
             true,
+            false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_ui = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1564,8 +1953,10 @@ mod impact_tests {
             &id("checkout", "review"),
             2,
             true,
+            false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_amb = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1636,8 +2027,10 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             true,
+            false,
         )
-        .unwrap();
+        .unwrap()
+        .nodes;
         let has_sibling = nodes.iter().any(|n| {
             n.entity
                 .as_ref()

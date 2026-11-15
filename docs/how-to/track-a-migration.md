@@ -48,8 +48,41 @@ The Tracker is a plan; validation is the truth. Reconcile on demand:
    done; flip it back and note why.
 3. Zero findings for the pair AND `get_incoming_references` on the old
    version returning empty means the migration is complete, regardless of
-   what the Tracker says. Close remaining items and mark the Tracker itself
-   done in its `doc`.
+   what the Tracker says. Page until `next_page_token` is empty. That empty
+   result covers only the namespaces in the credential's snapshot, so it
+   proves completion only when the credential can see every namespace a pin
+   might live in and the call did not fail because the snapshot was truncated.
+   Then close remaining items and mark the Tracker itself done in its `doc`.
+
+## Catch a version left pinned without a successor link
+
+A partial retarget, or a branch that replaces or deletes a version, can leave
+referrers pinned to a version nothing points forward from. Validation cannot
+tell those pins are part of an unfinished migration, because the new version
+never declared `supersedes`.
+
+1. Before applying, run `retarget_references` or `merge_branch` with
+   `dry_run: true`.
+2. Read `unbridged_removals`. Each entry names a retired version with no
+   successor link and the `remaining_referrers` that still pin it.
+3. Either set `supersedes` on the new version so the old pins surface as
+   `SLICE_STALE_REF` findings, or add each remaining referrer to the Tracker.
+4. When `unbridged_removals_incomplete` is true, the report could not see the
+   whole world: the snapshot was truncated, your credential cannot read every
+   namespace, the report hit its referrer budget, or the reference index could
+   not be built. An empty list then proves nothing. `get_incoming_references`
+   on the old version is the fallback. Page until `next_page_token` is empty.
+   An empty result still only contains referrers in the credential's snapshot,
+   so check namespace visibility and scan coverage on their own before treating
+   it as complete.
+
+The report is advisory. It never refuses a retarget or a merge, and applied
+calls leave it empty. Only the latest version of each referring entity
+counts, and `supersedes` links are not treated as pins.
+
+A retarget dry run treats only its `from` version as retired. A merge dry run
+treats as retired every version the branch deletes and the newest earlier
+version of any entity the branch adds a version for.
 
 ## Notes
 

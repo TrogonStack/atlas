@@ -93,8 +93,9 @@ The first native scope uses exact versions and existing incarnation selectors;
 it does not silently extend responsibility to a version family or every member
 of a resource. Retained directory information and its history remain distinct
 from authentication identities and external directory synchronization. Native
-schema, backend admission and typed queries, CLI/MCP authoring and Studio review
-preserve these exact selections. The acceptance reference links executable
+schema, backend admission and typed queries, and CLI/MCP authoring and inspection
+preserve these exact selections. Studio entity Details does not expose
+responsibility query controls. The acceptance reference links executable
 coverage and records its deployment and acceptance limits.
 
 ## Decision and Document contracts
@@ -128,7 +129,8 @@ identity and version mappings, provenance and guarded reconciliation. Its
 same-store reapply from migration into a new store, where incarnation-bound
 selectors require explicit rebinding. The
 [source control API](../reference/source-control-api.md) describes the concrete
-typed boundary and read-only review surface.
+typed boundary and read-only CLI/MCP inspection queries. Studio entity Details
+does not include a source control console.
 Remote connectors and additional format compilers remain separate milestones.
 
 ## Native system relationship layer
@@ -180,6 +182,19 @@ and authenticated browser acceptance under the linked contract. Exhaustive
 actor discovery, persisted composite interaction subjects and ExternalSystem
 hosting remain deferred. Checked per-owner revisions describe a read set, not
 an atomic multi-owner snapshot or evidence of a human's runtime permissions.
+
+## Visual product documentation
+
+Screens and DesignGraph provide composition and authored topology. The
+[visual product proposal](visual-product-atlas.md) and
+[delivery roadmap](visual-product-atlas-roadmap.md) describe the remaining
+page/state, flow and email inspection capabilities. The proposed
+[state and capture contracts](../reference/visual-state-contracts.md) and
+[email contracts](../reference/email-catalog-contracts.md) connect their native
+identities, evidence and projections to exact behavioral subjects and graph
+occurrences. The implemented artifact service supplies byte storage and
+transfer; typed attachments, image verification and these product surfaces
+remain proposed.
 
 ## Atlas Linter comes after the architecture resources
 

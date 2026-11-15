@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
 import { withNuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,6 +56,54 @@ import { storefrontEntities } from '@/lib/scene3d.fixture';
 import { ModelShell } from './ModelShell';
 
 const neverResolving = new Promise(() => {});
+const FEATURE_FLAGS_KEY = 'trogon-atlas.studio.feature-flags';
+
+function makeLocalStorageStub() {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => store.clear(),
+    get length() {
+      return store.size;
+    },
+    key: (index: number) => [...store.keys()][index] ?? null,
+  };
+}
+
+function enable3DViews() {
+  localStorage.setItem(FEATURE_FLAGS_KEY, JSON.stringify({ laneMesh: true, streamTowers: true }));
+}
+
+async function openFeaturePreview() {
+  fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Feature Preview' }));
+  return within(await screen.findByRole('dialog', { name: 'Feature Preview' }));
+}
+
+async function closeFeaturePreview() {
+  fireEvent.click(
+    within(screen.getByRole('dialog', { name: 'Feature Preview' })).getByRole('button', {
+      name: 'Close Feature Preview',
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Feature Preview' })).toBeNull());
+}
+
+function modelViews() {
+  return within(screen.getByRole('tablist', { name: 'Model view' }));
+}
+
+async function settleBootstrap() {
+  await act(async () => {
+    await vi.mocked(api.info).mock.results[0]?.value;
+  });
+}
 
 // ModelShell reads/writes query state through nuqs, which needs an
 // adapter above it in the tree.
@@ -72,6 +120,7 @@ function setupApiDefaults() {
 describe('ModelShell', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('localStorage', makeLocalStorageStub());
     setupApiDefaults();
     // Default: watchEntities starts as a pending promise so it does not
     // trigger state updates during most tests.
@@ -81,6 +130,7 @@ describe('ModelShell', () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -145,24 +195,102 @@ describe('ModelShell', () => {
   });
 
   it('offers the Lane mesh tab when the model has slices, and opens it', async () => {
+    enable3DViews();
     render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
     const tab = await screen.findByRole('tab', { name: 'Lane mesh' });
     fireEvent.click(tab);
     expect(await screen.findByTestId('three-view-lanes')).toBeDefined();
   });
 
+  it('hides the experimental views by default even when the model has their content', async () => {
+    render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
+    await settleBootstrap();
+    expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Stream towers' })).toBeNull();
+  });
+
+  it('lets the user enable each experimental view independently and remembers the choices', async () => {
+    const model = buildModel(storefrontEntities() as never);
+    const { unmount } = render(<ModelShell model={model} scopedTitle="Storefront" />);
+    let preview = await openFeaturePreview();
+    expect(preview.getByRole('switch', { name: 'Enable Lane mesh' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(preview.getByRole('tab', { name: 'Stream towers' }));
+    expect(preview.getByRole('switch', { name: 'Enable Stream towers' }).getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(preview.getByRole('tab', { name: 'Lane mesh' }));
+    fireEvent.click(preview.getByRole('switch', { name: 'Enable Lane mesh' }));
+    await closeFeaturePreview();
+    expect(modelViews().getByRole('tab', { name: 'Lane mesh' })).toBeDefined();
+    expect(modelViews().queryByRole('tab', { name: 'Stream towers' })).toBeNull();
+
+    preview = await openFeaturePreview();
+    fireEvent.click(preview.getByRole('tab', { name: 'Stream towers' }));
+    fireEvent.click(preview.getByRole('switch', { name: 'Enable Stream towers' }));
+    await closeFeaturePreview();
+    expect(modelViews().getByRole('tab', { name: 'Lane mesh' })).toBeDefined();
+    expect(modelViews().getByRole('tab', { name: 'Stream towers' })).toBeDefined();
+
+    preview = await openFeaturePreview();
+    fireEvent.click(preview.getByRole('tab', { name: 'Lane mesh' }));
+    fireEvent.click(preview.getByRole('switch', { name: 'Enable Lane mesh' }));
+    await closeFeaturePreview();
+    expect(modelViews().queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+    expect(modelViews().getByRole('tab', { name: 'Stream towers' })).toBeDefined();
+
+    unmount();
+    render(<ModelShell model={model} scopedTitle="Storefront" />);
+    await settleBootstrap();
+    expect(modelViews().queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+    expect(modelViews().getByRole('tab', { name: 'Stream towers' })).toBeDefined();
+    preview = await openFeaturePreview();
+    fireEvent.click(preview.getByRole('tab', { name: 'Lane mesh' }));
+    expect(preview.getByRole('switch', { name: 'Enable Lane mesh' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(preview.getByRole('tab', { name: 'Stream towers' }));
+    expect(preview.getByRole('switch', { name: 'Enable Stream towers' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it.each(['lanes', 'towers'])('draws the board for disabled ?view=%s', async (view) => {
+    rtlRender(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: `?view=${view}` }),
+    });
+    await settleBootstrap();
+    expect(screen.getByTestId('board')).toBeDefined();
+    expect(screen.queryByTestId('three-view-lanes')).toBeNull();
+    expect(screen.queryByTestId('three-view-towers')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Board' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it.each([
+    ['lanes', 'Lane mesh'],
+    ['towers', 'Stream towers'],
+  ])('returns to the board immediately when the active %s view is disabled', async (view, label) => {
+    enable3DViews();
+    rtlRender(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: `?view=${view}` }),
+    });
+    expect(await screen.findByTestId(`three-view-${view}`)).toBeDefined();
+    const preview = await openFeaturePreview();
+    fireEvent.click(preview.getByRole('tab', { name: label }));
+    fireEvent.click(preview.getByRole('switch', { name: `Enable ${label}` }));
+    await closeFeaturePreview();
+    expect(screen.getByTestId('board')).toBeDefined();
+    expect(modelViews().queryByRole('tab', { name: label })).toBeNull();
+    expect(screen.queryByTestId(`three-view-${view}`)).toBeNull();
+  });
+
   it('hides the Lane mesh tab when the model has no slices', async () => {
+    enable3DViews();
     const model = buildModel([
       { event: { id: { namespace: 'shop', slug: 'order.placed', version: '1' }, title: 'Order placed' } },
     ] as never);
     render(<ModelShell model={model} scopedTitle="Shop" />);
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
-    });
+    await settleBootstrap();
+    expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
   });
 
   it('hides the 3D tabs on a saved snapshot, which carries no 3D code', async () => {
+    enable3DViews();
     render(
       <ModelShell
         model={buildModel(storefrontEntities() as never)}
@@ -170,14 +298,17 @@ describe('ModelShell', () => {
         snapshot={{ capturedAt: '2026-10-13T00:00:00Z', branch: 'baseline', slug: 'storefront' }}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
-    });
+    await settleBootstrap();
+    expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Stream towers' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Feature Preview' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Feature Preview' })).toBeNull();
   });
 
   it('offers the Stream towers tab when a swimlane holds events, and opens it', async () => {
+    enable3DViews();
     render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
     const tab = await screen.findByRole('tab', { name: 'Stream towers' });
     fireEvent.click(tab);
@@ -185,15 +316,15 @@ describe('ModelShell', () => {
   });
 
   it('hides the Stream towers tab when no swimlane holds an event', async () => {
+    enable3DViews();
     const id = (slug: string) => ({ namespace: 'shop', slug, version: '1' });
     const model = buildModel([
       { swimlane: { id: id('order'), title: 'Order' } },
       { event: { id: id('order.placed'), title: 'Order placed' } },
     ] as never);
     render(<ModelShell model={model} scopedTitle="Shop" />);
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
-    });
+    await settleBootstrap();
+    expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     expect(screen.queryByRole('tab', { name: 'Stream towers' })).toBeNull();
   });
 
@@ -366,13 +497,13 @@ describe('ModelShell', () => {
       return { close: vi.fn() };
     });
     render(<ModelShell />);
-    await waitFor(() => expect(screen.getByText('connecting', { exact: true })).toBeDefined());
+    await waitFor(() => expect(screen.getByText('Connecting', { exact: true })).toBeDefined());
     act(() => onState?.('offline', 'Permission denied for the live update subscription.'));
     const status = screen.getByRole('status', { name: 'Live updates' });
-    expect(status.textContent).toContain('offline');
+    expect(status.textContent).toContain('Disconnected');
     expect(status.getAttribute('title')).toContain('Permission denied for the live update subscription.');
     act(() => onState?.('live'));
-    expect(status.textContent).toContain('live');
+    expect(status.textContent).toContain('Connected');
     expect(status.getAttribute('title')).not.toContain('Permission denied');
   });
 
