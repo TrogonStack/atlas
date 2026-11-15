@@ -64,6 +64,79 @@ fn store() -> Entity {
 }
 
 #[test]
+fn nested_schema_connections_fit_a_bounded_thread_stack() -> Result<(), Box<dyn std::error::Error>>
+{
+    let worker = std::thread::Builder::new().stack_size(512 * 1024).spawn(
+        || -> Result<(), ConnectionError> {
+            use trogon_atlas_proto as pb;
+
+            let mut field = pb::FieldSpec {
+                name: "leaf".into(),
+                r#type: Some(pb::FieldType {
+                    kind: Some(pb::field_type::Kind::String(pb::field_type::StringType {})),
+                }),
+                ..Default::default()
+            };
+            for level in 1..=31 {
+                field = pb::FieldSpec {
+                    name: format!("n{level}"),
+                    r#type: Some(pb::FieldType {
+                        kind: Some(pb::field_type::Kind::Object(pb::field_type::ObjectType {
+                            fields: vec![field],
+                        })),
+                    }),
+                    ..Default::default()
+                };
+            }
+            let mut segments = (1..=31)
+                .rev()
+                .map(|level| pb::PropertySegment {
+                    name: format!("n{level}"),
+                    repeated: false,
+                })
+                .collect::<Vec<_>>();
+            segments.push(pb::PropertySegment {
+                name: "leaf".into(),
+                repeated: false,
+            });
+            let mut entity = Entity {
+                kind: Some(entity::Kind::Schema(pb::Schema {
+                    id: Some(id("nested")),
+                    title: "Nested schema".into(),
+                    fields: vec![field],
+                    identifiers: vec![pb::BusinessIdentifier {
+                        property: Some(pb::PropertyPath { segments }),
+                        role: pb::BusinessIdentifierRole::Primary as i32,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert_eq!(
+                trogon_atlas_core::connections::assign_connection_ids(&mut entity)?,
+                1
+            );
+            let occurrences = connection_occurrences(&entity)?;
+            assert_eq!(occurrences.len(), 1);
+            assert_eq!(occurrences[0].path, "schema.identifiers[0]");
+            assert!(occurrences[0].id.is_some());
+            let assigned = entity.clone();
+            assert_eq!(
+                trogon_atlas_core::connections::assign_connection_ids(&mut entity)?,
+                0
+            );
+            assert_eq!(entity, assigned);
+            Ok(())
+        },
+    )?;
+    worker
+        .join()
+        .map_err(|_| "connection traversal panicked")??;
+    Ok(())
+}
+
+#[test]
 fn channel_associations_preserve_repeated_observation_identity_and_reorder(
 ) -> Result<(), ConnectionError> {
     let first = observation();

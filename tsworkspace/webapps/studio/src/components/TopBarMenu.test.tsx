@@ -1,6 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
+import type { StudioFeatureFlags } from '@/lib/feature-flags';
 import { TopBarMenu } from './TopBarMenu';
+
+vi.mock('@/lib/webgl', () => ({ hasWebGL: () => false }));
 
 function pendingExport() {
   let finish!: () => void;
@@ -24,6 +28,91 @@ describe('TopBarMenu', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  function PreviewMenu() {
+    const [flags, setFlags] = useState<StudioFeatureFlags>({ laneMesh: false, streamTowers: false });
+    return (
+      <TopBarMenu
+        onRefresh={vi.fn()}
+        featureFlags={flags}
+        onFeatureFlagChange={(feature, enabled) => setFlags((current) => ({ ...current, [feature]: enabled }))}
+      />
+    );
+  }
+
+  it('opens Feature Preview and preserves independent choices while browsing features', async () => {
+    render(<PreviewMenu />);
+    await openMenu();
+    expect(screen.queryByRole('menuitemcheckbox')).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Feature Preview' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Feature Preview' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    const previews = within(dialog);
+    expect(previews.getAllByRole('tabpanel')).toHaveLength(1);
+    expect(previews.getAllByRole('switch')).toHaveLength(1);
+    const lanes = previews.getByRole('switch', { name: 'Enable Lane mesh' });
+    expect(lanes.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(lanes);
+    expect(lanes.getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(previews.getByRole('tab', { name: 'Stream towers' }));
+    expect(previews.getAllByRole('tabpanel')).toHaveLength(1);
+    expect(previews.getAllByRole('switch')).toHaveLength(1);
+    const towers = previews.getByRole('switch', { name: 'Enable Stream towers' });
+    expect(towers.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(towers);
+    expect(towers.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(previews.getByRole('tab', { name: 'Lane mesh' }));
+    expect(previews.getByRole('switch', { name: 'Enable Lane mesh' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(previews.getByRole('button', { name: 'Close Feature Preview' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Feature Preview' }));
+    const reopened = within(await screen.findByRole('dialog', { name: 'Feature Preview' }));
+    expect(reopened.getByRole('switch', { name: 'Enable Lane mesh' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(reopened.getByRole('tab', { name: 'Stream towers' }));
+    expect(reopened.getByRole('switch', { name: 'Enable Stream towers' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('supports keyboard feature selection, closes with Escape, and restores focus to More actions', async () => {
+    render(<PreviewMenu />);
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    await openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Feature Preview' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Feature Preview' });
+    const previews = within(dialog);
+    const closeButton = previews.getByRole('button', { name: 'Close Feature Preview' });
+    await waitFor(() => expect(document.activeElement).toBe(closeButton));
+
+    const laneTab = previews.getByRole('tab', { name: 'Lane mesh' });
+    laneTab.focus();
+    fireEvent.keyDown(laneTab, { key: 'ArrowDown', code: 'ArrowDown' });
+    await waitFor(() =>
+      expect(previews.getByRole('tab', { name: 'Stream towers' }).getAttribute('aria-selected')).toBe('true'),
+    );
+    const towers = previews.getByRole('switch', { name: 'Enable Stream towers' });
+    towers.focus();
+    fireEvent.keyDown(towers, { key: ' ', code: 'Space' });
+    fireEvent.keyUp(towers, { key: ' ', code: 'Space' });
+    expect(towers.getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('returns focus to More actions when closed with its close button', async () => {
+    render(<PreviewMenu />);
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    await openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Feature Preview' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Feature Preview' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close Feature Preview' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('keeps Refresh reachable while an export is still running, and only locks Export HTML', async () => {

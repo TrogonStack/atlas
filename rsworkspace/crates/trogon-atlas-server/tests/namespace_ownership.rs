@@ -21,12 +21,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 
+use async_trait::async_trait;
 use tokio::net::TcpListener;
 use tonic::{
     metadata::MetadataValue, service::interceptor::InterceptedService, transport::Channel, Code,
+    Status,
 };
+use trogon_atlas_core::{NamespaceId, OwnerId};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
@@ -35,8 +41,10 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
     metrics::ServerMetrics,
+    ownership::{Lens, NamespaceAuthorizer, RegistryAuthorizer, Visibility, WriteVerdict},
     service::EventModelServiceImpl,
 };
+use trogon_atlas_store::{NamespaceRecord, Store};
 
 /// Writer bound to owner `acme`.
 const ACME_TOKEN: &str = "own-acme-token";
@@ -88,11 +96,14 @@ namespaces = ["alice-*"]
 /// One server per test. Ownership state is global to a store, so tests that
 /// claim the same namespace name under different owners must not share one.
 async fn client() -> EventModelServiceClient<Channel> {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    serve(EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()).await
+}
+
+async fn serve(svc: EventModelServiceImpl) -> EventModelServiceClient<Channel> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
 
     let auth = BearerAuth::new(Arc::new(make_registry()));
@@ -1281,4 +1292,441 @@ async fn a_user_principal_stays_refused_on_an_unowned_branch() {
         .await
         .expect_err("a classic branch name carries no owner, so a bound user stays refused");
     assert_eq!(err.code(), Code::PermissionDenied, "got {err:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Deleting a namespace
+// ---------------------------------------------------------------------------
+
+async fn register(c: &mut EventModelServiceClient<Channel>, name: &str) -> String {
+    c.register_namespace(authed(
+        pb::RegisterNamespaceRequest {
+            name: name.into(),
+            parent: "acme".into(),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap()
+    .into_inner()
+    .namespace
+    .unwrap()
+    .id
+}
+
+async fn delete_namespace(
+    c: &mut EventModelServiceClient<Channel>,
+    id: &str,
+    token: &str,
+) -> Result<(), tonic::Status> {
+    c.delete_namespace(authed(pb::DeleteNamespaceRequest { id: id.into() }, token))
+        .await
+        .map(|_| ())
+}
+
+async fn delete_event(c: &mut EventModelServiceClient<Channel>, ns: &str, slug: &str) {
+    c.delete_entity(authed(
+        pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(pb::Id {
+                namespace: ns.into(),
+                slug: slug.into(),
+                version: 1,
+            }),
+            ..Default::default()
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_namespace_is_deleted_and_leaves_the_listing() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-delete").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(!seen.iter().any(|(seen_id, _)| seen_id == &id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleted_minted_namespace_cannot_be_adopted_with_its_history() {
+    let mut c = client().await;
+    let name = "deleted-minted-history";
+    let id = register(&mut c, name).await;
+    c.put_entity(authed(put_req(event(&id, "prior-record")), ACME_TOKEN))
+        .await
+        .unwrap();
+    delete_event(&mut c, &id, "prior-record").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+
+    let history = pb::GetEntityHistoryRequest {
+        r#ref: Some(key(&id, "prior-record")),
+        ..Default::default()
+    };
+    let retained = c
+        .get_entity_history(authed(history.clone(), ADMIN_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        !retained.revisions.is_empty(),
+        "deleting a namespace retains history"
+    );
+    assert_eq!(
+        c.get_entity_history(authed(history.clone(), BETA_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound,
+    );
+
+    for validate_only in [true, false] {
+        let mut request = put_req(event(&id, "new-record"));
+        request.validate_only = validate_only;
+        let err = c.put_entity(authed(request, BETA_TOKEN)).await.unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition, "{err:?}");
+    }
+    assert_eq!(
+        c.get_entity_history(authed(history, BETA_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound,
+    );
+    assert!(!namespaces_seen(&mut c, ADMIN_TOKEN)
+        .await
+        .iter()
+        .any(|(seen, _)| seen == &id));
+
+    let fresh = c
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: name.into(),
+                parent: "beta".into(),
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    assert_ne!(fresh, id);
+    let new_history = c
+        .get_entity_history(authed(
+            pb::GetEntityHistoryRequest {
+                r#ref: Some(key(&fresh, "prior-record")),
+                ..Default::default()
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(new_history.revisions, [] as [pb::EntityRevision; 0]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_holding_an_entity_is_not_deleted() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-held").await;
+    c.put_entity(authed(put_req(event(&id, "x")), UNBOUND_TOKEN))
+        .await
+        .unwrap();
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    delete_event(&mut c, &id, "x").await;
+    delete_namespace(&mut c, &id, ADMIN_TOKEN).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_held_only_by_a_branch_is_not_deleted() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-branch").await;
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: "delete-ns-branch".into(),
+            doc: String::new(),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+    c.put_entity(authed_on_branch(
+        put_req(event(&id, "x")),
+        ADMIN_TOKEN,
+        "delete-ns-branch",
+    ))
+    .await
+    .unwrap();
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(err.message().contains("delete-ns-branch"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_namespace_is_not_deleted_even_when_empty() {
+    let mut c = client().await;
+    c.put_entity(authed(
+        put_req(event("acme-legacy-delete", "x")),
+        ACME_TOKEN,
+    ))
+    .await
+    .unwrap();
+    delete_event(&mut c, "acme-legacy-delete", "x").await;
+    let err = delete_namespace(&mut c, "acme-legacy-delete", ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::FailedPrecondition);
+    assert!(err.message().contains("legacy"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_writer_may_not_delete_a_namespace() {
+    let mut c = client().await;
+    let id = register(&mut c, "acme-probe-writer").await;
+    let err = delete_namespace(&mut c, &id, ACME_TOKEN).await.unwrap_err();
+    assert_eq!(err.code(), Code::PermissionDenied);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_namespace_named_by_a_source_registration_is_not_deleted() {
+    let mut c = client().await;
+    let administration = register(&mut c, "acme-probe-source-admin").await;
+    let destination = register(&mut c, "acme-probe-source-destination").await;
+    c.create_source_registration(authed(
+        pb::CreateSourceRegistrationRequest {
+            registration: Some(pb::SourceRegistration {
+                id: "acme-delete-ns-source".into(),
+                administration_namespace: administration.clone(),
+                destination_namespaces: vec![destination.clone()],
+                profile_revision: 1,
+                ownership_policy_revision: "policy-v1".into(),
+                deletion_policy: pb::SourceDeletionPolicy::RetainNative as i32,
+                ..Default::default()
+            }),
+        },
+        ADMIN_TOKEN,
+    ))
+    .await
+    .unwrap();
+    for id in [administration, destination] {
+        let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(err.message().contains("acme-delete-ns-source"), "{err}");
+    }
+}
+
+/// The registry's answers, with a release that fails until it is told not
+/// to: the shape of a relationship store that is down when the row goes.
+#[derive(Debug)]
+struct FailingReleaseAuthorizer {
+    registry: RegistryAuthorizer,
+    read_lens: Option<Lens>,
+    release_fails: AtomicBool,
+    releases: AtomicUsize,
+}
+
+#[async_trait]
+impl NamespaceAuthorizer for FailingReleaseAuthorizer {
+    async fn admits(
+        &self,
+        visibility: &Visibility,
+        namespace: &NamespaceId,
+    ) -> Result<bool, Status> {
+        if let Some(lens) = &self.read_lens {
+            return Ok(lens.admits(namespace.as_str()));
+        }
+        self.registry.admits(visibility, namespace).await
+    }
+
+    async fn lens(&self, visibility: &Visibility) -> Result<Lens, Status> {
+        if let Some(lens) = &self.read_lens {
+            return Ok(lens.clone());
+        }
+        self.registry.lens(visibility).await
+    }
+
+    async fn may_write(
+        &self,
+        visibility: &Visibility,
+        namespace: &NamespaceId,
+    ) -> Result<WriteVerdict, Status> {
+        self.registry.may_write(visibility, namespace).await
+    }
+
+    async fn on_registered(&self, record: &NamespaceRecord) -> Result<(), Status> {
+        self.registry.on_registered(record).await
+    }
+
+    async fn on_moved(&self, record: &NamespaceRecord, from: &OwnerId) -> Result<(), Status> {
+        self.registry.on_moved(record, from).await
+    }
+
+    async fn on_released(&self, _record: &NamespaceRecord) -> Result<(), Status> {
+        if self.release_fails.load(Ordering::SeqCst) {
+            return Err(Status::unavailable("relationship store is down"));
+        }
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A delete whose grant could not be revoked keeps its row, so a retry can
+/// find the namespace and revoke the grant. Dropping the row first would
+/// leave a grant that no later call can reach.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_whose_release_fails_can_be_retried() {
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(FailingReleaseAuthorizer {
+        registry: RegistryAuthorizer::new(svc.directory(), store),
+        read_lens: None,
+        release_fails: AtomicBool::new(true),
+        releases: AtomicUsize::new(0),
+    });
+    let mut c = serve(svc.with_authorizer(authorizer.clone())).await;
+    let id = register(&mut c, "acme-probe-release-retry").await;
+
+    let err = delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::Unavailable, "{err}");
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(
+        seen.iter().any(|(seen_id, _)| seen_id == &id),
+        "the row must outlive a failed release",
+    );
+
+    authorizer.release_fails.store(false, Ordering::SeqCst);
+    delete_namespace(&mut c, &id, ADMIN_TOKEN)
+        .await
+        .expect("the retry must find the row and finish the delete");
+    assert_eq!(authorizer.releases.load(Ordering::SeqCst), 1);
+    let seen = namespaces_seen(&mut c, ADMIN_TOKEN).await;
+    assert!(!seen.iter().any(|(seen_id, _)| seen_id == &id));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_read_visibility_does_not_authorize_namespace_deletion() {
+    use pb::event_model_service_server::EventModelService;
+    use trogon_atlas_core::NamespaceName;
+    use trogon_atlas_server::{
+        auth::{Principal, PrincipalKind, Role},
+        scope::NamespaceScope,
+    };
+
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let namespace = store
+        .register_namespace(
+            &NamespaceName::parse("acme-shared-deletion").unwrap(),
+            &OwnerId::parse("acme").unwrap(),
+            "admin",
+        )
+        .await
+        .unwrap()
+        .record
+        .id;
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(FailingReleaseAuthorizer {
+        registry: RegistryAuthorizer::new(service.directory(), store.clone()),
+        read_lens: Some(Lens::Everything),
+        release_fails: AtomicBool::new(false),
+        releases: AtomicUsize::new(0),
+    });
+    let service = service.with_authorizer(authorizer.clone());
+    let mut request = tonic::Request::new(pb::DeleteNamespaceRequest {
+        id: namespace.to_string(),
+    });
+    request.extensions_mut().insert(Principal {
+        name: Arc::from("beta-shared-viewer"),
+        role: Role::Admin,
+        kind: PrincipalKind::User,
+        is_anonymous: false,
+        namespaces: NamespaceScope::unrestricted(),
+        parent: Some(OwnerId::parse("beta").unwrap()),
+    });
+
+    let status = service.delete_namespace(request).await.unwrap_err();
+    assert_eq!(status.code(), Code::NotFound, "{status:?}");
+    assert_eq!(authorizer.releases.load(Ordering::SeqCst), 0);
+    assert!(store.get_namespace(&namespace).await.unwrap().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scoped_admin_cannot_delete_outside_its_namespace_allow_list() {
+    use pb::event_model_service_server::EventModelService;
+    use trogon_atlas_core::NamespaceName;
+    use trogon_atlas_server::{
+        auth::{Principal, PrincipalKind, Role},
+        scope::NamespaceScope,
+    };
+
+    for parent in [None, Some(OwnerId::parse("acme").unwrap())] {
+        let store: Arc<dyn Store> =
+            Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+        let record = store
+            .register_namespace(
+                &NamespaceName::parse("acme-scoped-deletion").unwrap(),
+                &OwnerId::parse("acme").unwrap(),
+                "admin",
+            )
+            .await
+            .unwrap()
+            .record;
+        let service =
+            EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+        let authorizer = Arc::new(FailingReleaseAuthorizer {
+            registry: RegistryAuthorizer::new(service.directory(), store.clone()),
+            read_lens: Some(Lens::Everything),
+            release_fails: AtomicBool::new(false),
+            releases: AtomicUsize::new(0),
+        });
+        let service = service.with_authorizer(authorizer.clone());
+        let request = |scope| {
+            let mut request = tonic::Request::new(pb::DeleteNamespaceRequest {
+                id: record.id.to_string(),
+            });
+            request.extensions_mut().insert(Principal {
+                name: Arc::from("scoped-admin"),
+                role: Role::Admin,
+                kind: PrincipalKind::User,
+                is_anonymous: false,
+                namespaces: scope,
+                parent: parent.clone(),
+            });
+            request
+        };
+
+        let status = service
+            .delete_namespace(request(
+                NamespaceScope::parse(&["other-namespace"]).unwrap(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), Code::PermissionDenied, "{status:?}");
+        assert_eq!(authorizer.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            store.get_namespace(&record.id).await.unwrap(),
+            Some(record.clone())
+        );
+
+        service
+            .delete_namespace(request(
+                NamespaceScope::parse(&[record.id.as_str()]).unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(authorizer.releases.load(Ordering::SeqCst), 1);
+        assert!(store.get_namespace(&record.id).await.unwrap().is_none());
+    }
 }

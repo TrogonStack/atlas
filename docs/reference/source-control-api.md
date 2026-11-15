@@ -37,10 +37,11 @@ inventory pointers. `preview-source-run --native-owner
 category=source-key=manifest-path` supplies a complete native owner from each
 explicit manifest, using the connected tenant type context.
 
-Studio is a read-only review surface. Its source queries inspect current
-branch-scoped control state; a historical model view does not hydrate current
-source records as historical evidence. Inspecting a run summary does not fetch
-all operation or fidelity pages automatically.
+Inspect source control state through CLI or MCP. Studio entity Details does not
+include a source control console. Source queries inspect current branch-scoped
+control state; a historical model view does not make current source records
+historical evidence. Inspecting a run summary does not fetch all operation or
+fidelity pages automatically.
 
 ## Registration and immutable snapshots
 

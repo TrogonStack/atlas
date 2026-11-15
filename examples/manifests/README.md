@@ -12,6 +12,7 @@ per entity kind.
 | `acme-reviews`                | Review eligibility and review submission for delivered orders     |
 | `acme-customer-data-deletion` | A customer data deletion request, across every downstream vendor  |
 | `acme-wishlist`               | The smallest valid model: a shopper saves a product to a wishlist |
+| `acme-order-workflow`         | A multi-step order workflow: tax, payment, shipping, compensation |
 
 `acme` holds no bounded context. Every other namespace is one bounded
 context that realizes one `acme` subdomain across namespaces.
@@ -38,9 +39,11 @@ trogon-atlas apply -f examples/manifests/acme-storefront/ --dry-run  # validate 
 trogon-atlas diff  -f examples/manifests/acme-storefront/            # exit 1 on drift
 ```
 
-`acme-customer-data-deletion` and `acme-wishlist` only need `acme`. To
-build `acme-wishlist` step by step, follow
+`acme-customer-data-deletion`, `acme-wishlist` and `acme-order-workflow`
+only need `acme`. To build `acme-wishlist` step by step, follow
 [start an event model from scratch](../../docs/how-to/start-a-model-from-scratch.md).
+For `acme-order-workflow`, follow
+[model a multi-step workflow](../../docs/how-to/model-a-multi-step-workflow.md).
 
 Every file here is checked against the generated manifest schema by the
 `trogon-atlas-client` tests, and the server's account deletion fixture test

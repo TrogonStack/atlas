@@ -14,6 +14,7 @@ function finding(overrides: Partial<Issue> = {}): Issue {
     ruleTitle: 'Projection must follow its emitter',
     ruleCategory: 'temporal',
     defaultSeverity: 'error',
+    acknowledged: false,
     subject: { kind: 'readModelSlice', id: id('project-orders') },
     ...overrides,
   };

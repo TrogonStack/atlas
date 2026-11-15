@@ -71,6 +71,23 @@ own; the client only needs enough types to turn JSON into bytes and back.
 - A library that another library depends on, or whose types entity schemas
   use, cannot be deleted, even with `mode=FORCE`. The schemas show up as
   references to the library, so impact analysis lists them too.
+- An accepted glossary Term also keeps the descriptors needed to interpret its
+  metadata available. A library change that would make that metadata
+  unrenderable is refused until an explicit retirement review changes the
+  recorded disposition. Compatible changes can still make the prior review
+  stale when they change its canonical interpretation. See the
+  [glossary review contract](../reference/generated-glossary-contracts.md#candidate-meaning-and-review-authority).
+- An annotation in a `metadata` list, including the `metadata` of fields
+  nested in a built-in schema, is checked against the built-in types and the
+  live libraries in the entity's namespace, counting libraries written
+  earlier in the same batch. A type URL neither declares raises the
+  `UNKNOWN_ANNOTATION_TYPE` warning, with the annotation's path in
+  `subject_field`. The write still succeeds, so annotations keep working
+  while their library is drafted. Built-in annotations match by their full
+  message name under any host, so a look-alike such as
+  `acme.v1.MyOrphanAnnotation` suppresses nothing, and a misspelled one says
+  so instead of failing silently. If the namespace's libraries fail to compile, the warning still names every
+  type URL that is not built in and says the libraries could not be checked.
 
 ## Breaking changes become new packages
 

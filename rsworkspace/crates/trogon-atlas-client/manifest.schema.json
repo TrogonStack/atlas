@@ -4112,6 +4112,146 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryEvidence"
+          },
+          "type": "array"
+        },
+        "generationRevision": {
+          "type": "string"
+        },
+        "nextReviewOn": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        },
+        "policy": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryUsagePolicy"
+        },
+        "review": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryReview"
+        },
+        "usagePeriod": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryUsagePeriod"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryEvidence": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contentDigest": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+            },
+            "document": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentRef"
+            },
+            "locator": {
+              "type": "string"
+            },
+            "ownerUid": {
+              "type": "string"
+            },
+            "quote": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryReview": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        },
+        "disposition": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryReviewDisposition"
+        },
+        "ownerUid": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reviewedAt": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryReviewDisposition": {
+      "enum": [
+        "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED",
+        "GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES",
+        "GLOSSARY_REVIEW_DISPOSITION_REJECTED",
+        "GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryUsage": {
+      "enum": [
+        "GLOSSARY_USAGE_ALLOWED",
+        "GLOSSARY_USAGE_DEPRECATED",
+        "GLOSSARY_USAGE_PROHIBITED",
+        "GLOSSARY_USAGE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryUsagePeriod": {
+      "additionalProperties": false,
+      "properties": {
+        "validFrom": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        },
+        "validUntil": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GlossaryUsagePolicy": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effectiveFrom": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+            },
+            "effectiveUntil": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+            },
+            "preferredTerm": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TermRef"
+            },
+            "rationale": {
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryUsage"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.GraphqlOperationBinding": {
       "additionalProperties": false,
       "properties": {
@@ -7487,6 +7627,9 @@
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
           },
           "type": "array"
+        },
+        "glossary": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GlossaryEntry"
         },
         "metadata": {
           "items": {

@@ -19,6 +19,20 @@ swimlane below), rendered live from the gRPC store.
   was taken and does not update. It holds only the board's read responses
   and the runtime from `build:snapshot`.
 
+## Feature Preview
+
+Open a model's **More actions** menu and choose **Feature Preview**. Select
+**Lane mesh** or **Stream towers** to see its preview and turn its switch on.
+Both start off. Each preference applies immediately and is saved in your
+browser for Studio at the same address.
+
+Each preview uses the same 3D view as its model tab, with fictional example
+data. Drag to rotate the preview, right-drag to pan, or scroll to zoom.
+
+Lane mesh appears when the model has slices. Stream towers appears when a
+swimlane holds events. Disabling the current view returns to the Board.
+Saved HTML snapshots do not include these views.
+
 ## Architecture
 
 The browser cannot speak tonic gRPC, so `server/index.mjs` is a thin Node

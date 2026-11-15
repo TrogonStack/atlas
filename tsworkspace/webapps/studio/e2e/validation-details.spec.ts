@@ -84,6 +84,75 @@ test('validation details stay reachable with an inspector on a narrow screen', a
   await expect(panel).not.toBeVisible();
 });
 
+test('the canvas toolbar leaves the validation drawer header unobstructed on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 844 });
+  await page.goto(modelPath);
+  await page.getByRole('button', { name: 'Validation findings', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Validation findings', exact: true });
+  const heading = panel.getByRole('heading', { name: 'Validation findings', exact: true });
+  const lastView = page.getByRole('tablist', { name: 'Model view' }).getByRole('tab').last();
+  for (const width of [480, 640, 720]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(heading).toBeVisible();
+    await expect
+      .poll(() =>
+        heading.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+          return hit === element || element.contains(hit);
+        }),
+      )
+      .toBe(true);
+    const viewBounds = await lastView.boundingBox();
+    const triggerBounds = await page.getByRole('button', { name: 'Validation findings', exact: true }).boundingBox();
+    if (!viewBounds || !triggerBounds) throw new Error('Toolbar controls have no visible bounds');
+    const overlap =
+      viewBounds.x < triggerBounds.x + triggerBounds.width &&
+      viewBounds.x + viewBounds.width > triggerBounds.x &&
+      viewBounds.y < triggerBounds.y + triggerBounds.height &&
+      viewBounds.y + viewBounds.height > triggerBounds.y;
+    expect(overlap).toBe(false);
+    await lastView.click();
+    await expect(lastView).toHaveAttribute('aria-selected', 'true');
+  }
+  await panel.getByRole('button', { name: 'Close validation findings' }).click();
+  await expect(panel).not.toBeVisible();
+});
+
+test('the canvas remains draggable between toolbar controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.addInitScript((path) => {
+    sessionStorage.setItem(`trogon-atlas-studio:viewport:${path}:board`, JSON.stringify({ x: 0, y: 200, zoom: 1 }));
+  }, modelPath);
+  await page.goto(modelPath);
+  const tabs = page.getByRole('tablist', { name: 'Model view' });
+  const trigger = page.getByRole('button', { name: 'Validation findings', exact: true });
+  await expect(trigger).toBeVisible();
+  const tabsBounds = await tabs.boundingBox();
+  const triggerBounds = await trigger.boundingBox();
+  if (!tabsBounds || !triggerBounds) throw new Error('Toolbar controls have no visible bounds');
+  const point = {
+    x: (tabsBounds.x + tabsBounds.width + triggerBounds.x) / 2,
+    y: triggerBounds.y + triggerBounds.height / 2,
+  };
+  await expect
+    .poll(() =>
+      page.locator('.react-flow').evaluate((element, position) => {
+        const hit = document.elementFromPoint(position.x, position.y);
+        return hit !== null && element.contains(hit);
+      }, point),
+    )
+    .toBe(true);
+  const viewport = page.locator('.react-flow__viewport');
+  const before = await viewport.getAttribute('style');
+  if (before === null) throw new Error('Canvas viewport has no transform');
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 60, point.y + 80, { steps: 5 });
+  await page.mouse.up();
+  await expect(viewport).not.toHaveAttribute('style', before);
+});
+
 test('finding jumps reduce excessive zoom and recenter again after panning away', async ({ page }) => {
   await page.addInitScript((path) => {
     sessionStorage.setItem(`trogon-atlas-studio:viewport:${path}:board`, JSON.stringify({ x: 30, y: 40, zoom: 1.8 }));

@@ -7,6 +7,7 @@ import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
 import "trogonatlas/eventmodel/v1alpha1/system_group.proto";
+import "trogonatlas/eventmodel/v1alpha1/glossary.proto";
 // The bounded context itself, as data (Decision #27): one per namespace,
 // identified BY the namespace (id.slug == id.namespace). Carries the
 // context charter -- what this boundary owns, its links and metadata.
@@ -104,6 +105,7 @@ message Term {
   repeated google.protobuf.Any metadata = 5;
   trogonatlas.type.v1alpha1.Id supersedes = 6;
   DomainRef owning_domain = 7;
+  GlossaryEntry glossary = 8;
 }
 
 message Ambiguity {

@@ -10,7 +10,10 @@ JSON, and write it back with put_entity_json.
 - Projection adjacency: every event's read-model projections come directly
   after the emitting slice, before the next command or automation slice acts.
   Updates from divergent branches (e.g. approve vs reject) are separate slices,
-  never merged.
+  never merged (PROJECTION_MERGES_BRANCHES warns when one slice projects two
+  alternative successors of a lane transition). To project both in one slice,
+  emit one event with an outcome field instead, which drops the fork from the
+  lane's transitions.
 - One processor issues exactly one command; branching outcomes are separate
   automation slices with separate processors. Record 'these ship as one worker'
   with a Component entity listing them as members, not by sharing entities.
@@ -85,6 +88,9 @@ JSON, and write it back with put_entity_json.
 - Open questions and assumptions are first-class, not comments. An
   OpenQuestionAnnotation names something the model does not yet decide: put it
   on the entity or scenario where the gap lives, with `question` and `author`.
+  Add `owner` (a role or team) and `due` (`{"value": "YYYY-MM-DD"}`) so the
+  question has someone to answer it; a malformed `due` warns
+  (OPEN_QUESTION_DUE_INVALID), and the validator never checks it against today.
   An AssumptionAnnotation names something the design already proceeds as if
   true but nobody confirmed, with fields `statement`, optional `basis`, and
   `author`. Both attach via put_entity_json as a canonical Any ("@type":
