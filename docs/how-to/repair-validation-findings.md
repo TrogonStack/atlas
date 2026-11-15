@@ -37,6 +37,20 @@ clarification. A new rule or unclear result can require inspection of its
 validator implementation; the catalog and tool contracts are the starting
 point.
 
+Do not repair a `REF_OUTSIDE_VISIBLE_SCOPE` finding by editing the reference.
+It means your key cannot read the target's namespace, not that the target is
+missing. Rerun validation with a key that can read that namespace; only a
+reference or content defect confirmed against readable definitions is a
+candidate for repair.
+
+The same limit applies when a finding depends on a referenced schema or
+indicator measure. Do not add fields, change projection keys, replace a
+connection, or remove an objective threshold merely because the referenced
+definition is unreadable. Inspect the exact dependency with an authorized
+caller and revalidate. Preserve independent findings on the visible
+definition, such as an invalid key declaration or target ratio. See
+[unreadable dependencies](../explanation/validation-repair-patterns.md#unreadable-dependencies-reported-as-content-defects).
+
 To survey a whole namespace instead, run `validate_project` with `namespace`
 set to it and `json: true`: every EventModel in the namespace is validated in
 one call. Filter its findings on a code to list what needs work, for example
@@ -58,8 +72,8 @@ Use existing model tools before searching exports manually:
 | `get_entity_json` | Fetch an exact definition and retain its opaque `etag`. |
 | `get_outgoing_references` | Find definitions referenced by the subject or a related slice. |
 | `get_incoming_references` | Find consumers, emitting slices, containing storyboards, and model memberships. |
-| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. |
-| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. |
+| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. Containers such as event models are reported but their members are not expanded unless `include_containers` is true. |
+| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. It walks incoming references only, so it is the dependents-only view. |
 
 Except for `classify_impact`, these tools take flat identity arguments, for
 example:
@@ -83,7 +97,12 @@ example:
 ```
 
 For `get_impact`, optionally add `max_depth`. Zero uses the server default,
-currently capped at 16 hops; it does not prove an unlimited closure. Avoid
+currently capped at 16 hops; it does not prove an unlimited closure. The
+response says which bound applied (`effective_max_depth`), whether the
+server chose it (`depth_clamped`), whether reachable entities lie past it
+(`depth_limited`), and whether the snapshot behind it was cut
+(`snapshot_truncated`). Treat either of the last two as an incomplete
+result. Avoid
 kind filters until the necessary dependency paths are understood. Impact
 results are inspection candidates, not exclusively downstream dependents.
 Inspect reference directions to distinguish an emitter from a consumer, then fetch each

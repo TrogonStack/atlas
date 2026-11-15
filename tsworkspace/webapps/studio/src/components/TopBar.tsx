@@ -1,12 +1,12 @@
 import type { Ref } from 'react';
-import { Camera, ChevronLeft, History, Workflow } from 'lucide-react';
+import { Camera, ChevronLeft, History, Network } from 'lucide-react';
 import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
 import { TopBarMenu } from '@/components/TopBarMenu';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
+import type { StudioFeatureFlag, StudioFeatureFlags } from '@/lib/feature-flags';
 import type { RealtimeStatus } from '@/lib/realtime';
 import type { SnapshotStamp } from '@/lib/snapshot';
 import { cn } from '@/lib/utils';
@@ -20,6 +20,8 @@ export function TopBar({
   backHref,
   snapshot,
   onExportHtml,
+  featureFlags,
+  onFeatureFlagChange,
   branch,
   onSelectBranch,
   onOpenBranchReview,
@@ -40,6 +42,8 @@ export function TopBar({
   snapshot?: SnapshotStamp;
   /** Saves the board as one HTML file. Omit to hide the button. */
   onExportHtml?: () => Promise<void>;
+  featureFlags?: StudioFeatureFlags;
+  onFeatureFlagChange?: (feature: StudioFeatureFlag, enabled: boolean) => void;
   /** Active branch, if any (Phase 3: Studio). Omit to hide the branch UI entirely. */
   branch?: string;
   onSelectBranch?: (name: string | undefined) => void;
@@ -53,6 +57,7 @@ export function TopBar({
   /** Receives the history button so closing the drawer can return focus to it. */
   historyTriggerRef?: Ref<HTMLButtonElement>;
 }) {
+  const connectionLabel = { live: 'Connected', connecting: 'Connecting', offline: 'Disconnected' }[realtime.state];
   const historyButton = onOpenHistory ? (
     <Button ref={historyTriggerRef} variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
       <History />
@@ -71,20 +76,12 @@ export function TopBar({
             Overview
           </a>
         ) : null}
-        <Workflow className="h-5 w-5 shrink-0 text-primary" />
-        <h1 className="sr-only text-sm font-semibold tracking-tight lg:not-sr-only lg:whitespace-nowrap">
-          Event Model Studio
-        </h1>
+        <h1 className="sr-only text-sm font-semibold tracking-tight lg:not-sr-only lg:whitespace-nowrap">Atlas</h1>
         {scopedTitle ? (
           <>
             <span className="hidden text-muted-foreground lg:inline">/</span>
             <span className="min-w-0 truncate text-sm font-medium">{scopedTitle}</span>
           </>
-        ) : null}
-        {info?.schemaVersion ? (
-          <Badge variant="outline" className="shrink-0">
-            {info.schemaVersion}
-          </Badge>
         ) : null}
       </div>
       {/* min-w-0, not shrink-0: a long branch name must ellipsize here rather than push the title out of the bar. */}
@@ -105,34 +102,42 @@ export function TopBar({
             <output
               aria-label="Live updates"
               title={
-                realtime.detail ??
-                {
-                  live: 'Live updates connected',
-                  connecting: 'Connecting to live updates',
-                  offline: 'Live updates disconnected. Use Refresh to get the latest model.',
-                }[realtime.state]
+                realtime.detail
+                  ? `${connectionLabel}: ${realtime.detail}`
+                  : {
+                      live: 'Connected to live model updates.',
+                      connecting: 'Connecting to live model updates.',
+                      offline: 'Disconnected from live model updates. Use Refresh to get the latest model.',
+                    }[realtime.state]
               }
               className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
             >
-              <span
+              <Network
                 aria-hidden="true"
                 className={cn(
-                  'h-2 w-2 rounded-full',
+                  'h-3.5 w-3.5',
                   realtime.state === 'live'
-                    ? 'bg-emerald-500'
+                    ? 'text-emerald-500'
                     : realtime.state === 'connecting'
-                      ? 'bg-amber-400'
-                      : 'bg-red-500',
+                      ? 'text-amber-400'
+                      : 'text-red-500',
                 )}
               />
-              {realtime.state}
-              {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
+              <span className="sr-only">
+                {connectionLabel}
+                {realtime.detail ? `: ${realtime.detail}` : null}
+              </span>
             </output>
             {historyButton}
             {onSelectBranch ? (
               <BranchBar branch={branch} onSelectBranch={onSelectBranch} onOpenReview={onOpenBranchReview} />
             ) : null}
-            <TopBarMenu onRefresh={onRefresh} onExportHtml={onExportHtml} />
+            <TopBarMenu
+              onRefresh={onRefresh}
+              onExportHtml={onExportHtml}
+              featureFlags={featureFlags}
+              onFeatureFlagChange={onFeatureFlagChange}
+            />
           </>
         )}
       </div>

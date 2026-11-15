@@ -17,6 +17,10 @@ vi.mock('@/components/NamespacesPage', () => ({
   NamespacesPage: () => <div data-testid="namespaces-page">Namespaces</div>,
 }));
 
+vi.mock('@/components/GlossaryPage', () => ({
+  GlossaryPage: () => <div data-testid="glossary-page">Glossary</div>,
+}));
+
 import App from './App';
 
 function renderApp() {
@@ -43,6 +47,23 @@ describe('App routing', () => {
     await waitFor(() => {
       expect(screen.getByTestId('overview-page')).toBeDefined();
     });
+  });
+
+  it.each(['/glossary', '/glossary/?namespace=sales&slug=order&version=7'])(
+    'renders glossary review on %s',
+    async (url) => {
+      window.history.replaceState(null, '', url);
+      renderApp();
+      expect(await screen.findByTestId('glossary-page')).toBeDefined();
+      expect(screen.queryByTestId('overview-page')).toBeNull();
+    },
+  );
+
+  it('does not route a deeper glossary path to the review page', async () => {
+    window.history.replaceState(null, '', '/glossary/unrecognized');
+    renderApp();
+    expect(await screen.findByTestId('overview-page')).toBeDefined();
+    expect(screen.queryByTestId('glossary-page')).toBeNull();
   });
 
   it('renders EventModelPage for /em/<namespace>/<slug>', async () => {

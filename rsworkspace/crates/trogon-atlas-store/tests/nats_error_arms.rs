@@ -492,6 +492,7 @@ async fn list_and_put_tolerate_a_corrupt_kv_entry_via_raw_byte_surgery() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
     let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
+    config.batches_bucket = format!("test-batches-{suffix}");
     config.bucket = format!("test-corrupt-{suffix}");
     config.branches_bucket = format!("test-corrupt-branches-{suffix}");
     config.stream = format!("TEST_CORRUPT_{}", suffix.replace('-', "_").to_uppercase());
@@ -628,6 +629,7 @@ async fn change_diagnostics_counters_start_at_zero_on_a_healthy_store() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
     let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
+    config.batches_bucket = format!("test-batches-{suffix}");
     config.bucket = format!("diag-bucket-{suffix}");
     config.branches_bucket = format!("diag-branches-{suffix}");
     config.stream = format!("DIAG_STREAM_{}", suffix.replace('-', "_").to_uppercase());
@@ -759,6 +761,7 @@ async fn connect_with_rejects_unbounded_changes_stream_retention() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
     let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
+    config.batches_bucket = format!("test-batches-{suffix}");
     config.bucket = format!("unbounded-bucket-{suffix}");
     config.branches_bucket = format!("unbounded-branches-{suffix}");
     config.stream = format!(

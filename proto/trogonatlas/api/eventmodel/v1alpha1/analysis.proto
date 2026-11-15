@@ -90,6 +90,9 @@ message InferDataFlowResponse {
   // "jev_uncertain", "jev_timeout", or "llm_error". Multiple failed stages
   // are comma-separated in attempt order. No provider error content is exposed.
   string fallback_reason = 3;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 4;
 }
 
 // A field-flow information-completeness problem the engine surfaced.
@@ -128,4 +131,7 @@ message CheckInformationCompletenessResponse {
   // "llm_error" or "llm_timeout". The detailed error is kept server-side
   // in logs and is never surfaced here.
   string fallback_reason = 4;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 5;
 }

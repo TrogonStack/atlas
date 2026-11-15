@@ -38,6 +38,8 @@ export interface Issue {
    * finding titled like an error is reported as info.
    */
   defaultSeverity?: Severity;
+  /** The author declared the finding intentional, so there is nothing to repair. */
+  acknowledged: boolean;
   subject?: { kind: EntityKind; id: EntityId };
 }
 
@@ -77,6 +79,7 @@ function parseIssue(raw: unknown): Issue | undefined {
     ruleTitle: String(r.ruleTitle ?? ''),
     ruleCategory: String(r.ruleCategory ?? ''),
     defaultSeverity: WIRE_SEVERITY[String(r.ruleDefaultSeverity ?? '')],
+    acknowledged: r.acknowledged === true,
     subject,
   };
 }

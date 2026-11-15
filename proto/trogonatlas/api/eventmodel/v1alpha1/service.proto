@@ -23,12 +23,15 @@ import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/backing.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/glossary.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/artifacts.proto";
 
 
 // =============================================================================
@@ -129,6 +132,9 @@ message ListEntitiesRequest {
 message ListEntitiesResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 // SearchEntitiesRequest always searches the baseline index. The
@@ -161,6 +167,9 @@ message ListVersionsResponse {
   // Every version of (namespace, slug), ordered by version ascending.
   repeated trogonatlas.eventmodel.v1alpha1.Entity versions = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 message GetLatestVersionRequest {
@@ -508,6 +517,9 @@ message ListEntitiesByDomainRequest {
 message ListEntitiesByDomainResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 
@@ -521,13 +533,18 @@ message ListEntitiesByDomainResponse {
 
 message GetImpactRequest {
   trogonatlas.eventmodel.v1alpha1.EntityRef root = 1;
-  // Maximum hops from root. 0 = unlimited. Default 0; large models with
-  // dense fan-out should set a bound to keep responses tractable.
+  // Maximum hops from root. 0 asks for the server maximum, and a larger
+  // value is clamped to it; `GetImpactResponse.effective_max_depth` reports
+  // the bound that applied.
   uint32 max_depth = 2;
   // Restrict the traversal to entities of these kinds. Empty = all kinds.
   repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 3;
   int32 page_size = 4;
   string page_token = 5;
+  // Walk down through every member of a container (event model, component)
+  // reached on the way. Off by default because a container lists all of its
+  // members, so unrelated siblings would otherwise count as impacted.
+  bool include_containers = 6;
 }
 
 message GetImpactResponse {
@@ -535,6 +552,17 @@ message GetImpactResponse {
   // at depth 0. Ordered by depth ascending, then canonical Id.
   repeated ImpactNode nodes = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
+  // The hop bound the traversal actually used.
+  uint32 effective_max_depth = 4;
+  // True when the server replaced the requested `max_depth` with its own
+  // maximum, either because the request asked for 0 or for more.
+  bool depth_clamped = 5;
+  // True when an entity at `effective_max_depth` has a reference the
+  // traversal did not follow, so the impact set continues past the bound.
+  bool depth_limited = 6;
 }
 
 // ---------- Bulk reference retargeting (version promotion) -------------------
@@ -594,6 +622,31 @@ message RetargetReferencesResponse {
   // What the invariants declared in scope said about the write. Unset when
   // the scope declares none. A refused write returns a typed error instead.
   InvariantCheck invariant_check = 4;
+  // Populated only when dry_run is true: `from` when referrers would still
+  // pin it after the rewrite (excluded by filter_kinds, failed to load, or
+  // holding no rewritable pointer) and no entity declares `supersedes` on it.
+  // Advisory: it never blocks the retarget.
+  repeated UnbridgedRemoval unbridged_removals = 5;
+  // True when the dry run's referrer scan did not cover the whole model (a
+  // truncated snapshot, a caller who cannot see every namespace, or a report
+  // that reached its referrer budget), so `unbridged_removals` may be missing
+  // entries.
+  bool unbridged_removals_incomplete = 6;
+}
+
+// An entity version an operation moves away from or removes while
+// references still pin it and no entity of its kind declares `supersedes`
+// on that exact version, so a reader following those references has no
+// recorded way forward. A successor is never inferred from a similar slug.
+message UnbridgedRemoval {
+  // The exact version left behind.
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  // References that would still point at `entity` after the operation, in
+  // reverse index order. Only the latest version of each referring slug
+  // counts, since older versions are history rather than live pins. A
+  // referrer pinning it from several fields appears once per field.
+  // `supersedes` links are not counted.
+  repeated Reference remaining_referrers = 2;
 }
 
 
@@ -932,6 +985,18 @@ message MoveNamespaceResponse {
   trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
 }
 
+message DeleteNamespaceRequest {
+  // Namespace id, not name, as for MoveNamespace. Refused with
+  // FAILED_PRECONDITION unless the namespace holds no entity on baseline and
+  // on every branch.
+  string id = 1;
+}
+
+message DeleteNamespaceResponse {
+  // The registry row that was removed.
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
 // ---------- Entity protection -------------------------------------------------
 //
 // Protecting an identity freezes it on every route: no new version, no edit,
@@ -1219,6 +1284,16 @@ message MergeBranchResponse {
   // The server's advisory verdict on landing the branch. Set only on
   // `dry_run`; a real merge never consults it.
   ChangeAssessment change_assessment = 12;
+  // Populated only on a dry run that reached validation (STATUS_VALIDATED or
+  // STATUS_INVALID): entity versions the merge deletes, or replaces on
+  // baseline with a newer version of the same slug, that post-merge
+  // references still pin while no post-merge entity declares `supersedes` on
+  // them. Advisory: it never changes the status.
+  repeated UnbridgedRemoval unbridged_removals = 13;
+  // True when the post-merge view behind `unbridged_removals` was truncated,
+  // limited by the caller's visibility, or the report reached its referrer
+  // budget, so `unbridged_removals` may be missing entries.
+  bool unbridged_removals_incomplete = 14;
 }
 
 message UpdateBranchRequest {
@@ -1311,6 +1386,13 @@ message ResolveBranchEntryResponse {
 
 service EventModelService {
   rpc InspectHumanInteraction(InspectHumanInteractionRequest) returns (InspectHumanInteractionResponse);
+  rpc GetArtifactStorageInfo(GetArtifactStorageInfoRequest) returns (GetArtifactStorageInfoResponse);
+  rpc BeginArtifactUpload(BeginArtifactUploadRequest) returns (BeginArtifactUploadResponse);
+  rpc UploadArtifactContent(UploadArtifactContentRequest) returns (UploadArtifactContentResponse);
+  rpc CompleteArtifactUpload(CompleteArtifactUploadRequest) returns (CompleteArtifactUploadResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+  rpc GetArtifactDownload(GetArtifactDownloadRequest) returns (GetArtifactDownloadResponse);
+  rpc GetArtifactContent(GetArtifactContentRequest) returns (GetArtifactContentResponse);
   rpc CreateSourceRegistration(CreateSourceRegistrationRequest) returns (CreateSourceRegistrationResponse);
   rpc UpdateSourceRegistration(UpdateSourceRegistrationRequest) returns (UpdateSourceRegistrationResponse);
   rpc GetSourceRegistration(GetSourceRegistrationRequest) returns (GetSourceRegistrationResponse);
@@ -1340,8 +1422,20 @@ service EventModelService {
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
+  rpc ListGlossaryPointers(ListGlossaryEntriesRequest) returns (ListGlossaryPointersResponse);
+  rpc GetGlossaryDefinition(GetGlossaryTermRequest) returns (GetGlossaryDefinitionResponse);
+  rpc CheckGlossaryCodeUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc ListGlossaryEntries(ListGlossaryEntriesRequest) returns (ListGlossaryEntriesResponse);
+  rpc GetGlossaryTerm(GetGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc InspectGlossarySources(InspectGlossarySourcesRequest) returns (InspectGlossarySourcesResponse);
+  rpc ReviewGlossaryTerm(ReviewGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc CompareGlossaries(CompareGlossariesRequest) returns (CompareGlossariesResponse);
+  rpc CheckGlossaryUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc InspectGlossaryRefresh(InspectGlossaryRefreshRequest) returns (InspectGlossaryRefreshResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+  // Evidence presence across the visible model, bound to its snapshot id.
+  rpc GetBackingReport(GetBackingReportRequest) returns (GetBackingReportResponse);
 
   rpc GetDesignGraphDetail(GetDesignGraphDetailRequest) returns (GetDesignGraphDetailResponse);
   rpc ListSubjectDesignGraphs(ListSubjectDesignGraphsRequest) returns (ListSubjectDesignGraphsResponse);
@@ -1366,6 +1460,7 @@ service EventModelService {
   // an existing namespace without touching a single entity.
   rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
   rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
   // Entity protection. Setting and lifting are admin-only and baseline-only;
   // reading is open to any reader.
   rpc ProtectEntity(ProtectEntityRequest) returns (ProtectEntityResponse);

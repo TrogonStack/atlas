@@ -5,6 +5,9 @@ import { cn } from '@/lib/utils';
 export const DropdownMenu = BaseMenu.Root;
 export const DropdownMenuTrigger = BaseMenu.Trigger;
 
+const ITEM_CLASS_NAME =
+  'flex select-none items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0';
+
 export function DropdownMenuContent({
   className,
   align = 'end',
@@ -29,13 +32,9 @@ export function DropdownMenuContent({
 }
 
 export function DropdownMenuItem({ className, ...props }: React.ComponentProps<typeof BaseMenu.Item>) {
-  return (
-    <BaseMenu.Item
-      className={cn(
-        'flex select-none items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0',
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <BaseMenu.Item className={cn(ITEM_CLASS_NAME, className)} {...props} />;
+}
+
+export function DropdownMenuSeparator({ className, ...props }: React.ComponentProps<typeof BaseMenu.Separator>) {
+  return <BaseMenu.Separator className={cn('h-px bg-border', className)} {...props} />;
 }

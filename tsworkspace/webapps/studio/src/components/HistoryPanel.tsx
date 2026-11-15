@@ -90,7 +90,10 @@ export function HistoryPanel({
   }, []);
 
   return (
-    <aside aria-label="Namespace history" className="flex h-full w-[24rem] flex-col border-l border-border bg-card">
+    <aside
+      aria-label="Namespace history"
+      className="flex h-full w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card"
+    >
       <div className="flex items-start gap-2 p-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

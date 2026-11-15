@@ -68,6 +68,9 @@ pub enum SourcePublicationPoint {
 }
 
 pub trait SourcePublicationObserver: Send + Sync {
+    fn batch_recovery_waiting(&self) -> StoreResult<()> {
+        Ok(())
+    }
     fn native_access_admitted(&self) -> StoreResult<()> {
         Ok(())
     }
