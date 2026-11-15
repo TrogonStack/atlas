@@ -67,9 +67,7 @@ describe('exportBoardHtml runtime failures', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() =>
-        Promise.resolve(
-          response(200, 'application/json', JSON.stringify({ js: 'console.log(1)', css: 'body{}' })),
-        ),
+        Promise.resolve(response(200, 'application/json', JSON.stringify({ js: 'console.log(1)', css: 'body{}' }))),
       ),
     );
 
