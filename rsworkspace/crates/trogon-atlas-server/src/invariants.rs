@@ -202,7 +202,7 @@ impl Lineage {
     }
 }
 
-fn key_of(stored: &StoredEntity) -> Option<pb::EntityKey> {
+pub(crate) fn key_of(stored: &StoredEntity) -> Option<pb::EntityKey> {
     Some(pb::EntityKey::new(
         entity_kind(&stored.entity)?,
         entity_id(&stored.entity)?,
