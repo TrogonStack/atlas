@@ -508,9 +508,9 @@ enum Cmd {
         trusted_keys: Vec<PathBuf>,
     },
     /// Validate every event model in a namespace, domain or project, with
-    /// the scenario checks of each model's slices, plus
-    /// the strategic findings (BoundedContext, Domain, Subdomain, Project
-    /// rules), which print once in a store-level section. Use it after
+    /// the scenario checks of each model's slices, plus the strategic
+    /// findings (BoundedContext, Domain, Subdomain, Project rules), which
+    /// print once in a store-level section. Use it after
     /// editing only problem-space entities or a BoundedContext, when there
     /// may be no event model to run `validate` on. Exits 1 when any
     /// finding is an error, otherwise 11 when the server's coverage shows

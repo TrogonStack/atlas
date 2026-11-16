@@ -16,7 +16,7 @@ use trogon_atlas_store::{
     StoredEntity,
 };
 
-use crate::ownership::Lens;
+use crate::{invariants::key_of, ownership::Lens};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct IssuerId {
@@ -2007,44 +2007,35 @@ fn lane_maps(all: &[StoredEntity]) -> (HashMap<pb::IdKey, pb::Id>, LaneTransitio
 
 #[must_use]
 pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
-    validate_scenarios_within(entity, all, &Lens::Everything)
+    validate_scenarios_indexed(entity, &ScenarioIndex::new(all), &Lens::Everything)
 }
 
-/// Snapshot indexes the scenarios check reads, built once per snapshot so a
-/// loop over many slices does not rebuild them per slice.
-struct ScenarioIndex<'a> {
+/// Snapshot indexes the scenarios check reads. Build one per snapshot and
+/// share it across a loop over many slices, so each slice does not rebuild it.
+pub(crate) struct ScenarioIndex<'a> {
     all: &'a [StoredEntity],
+    by_key: HashMap<pb::EntityKey, &'a StoredEntity>,
     known: HashSet<pb::EntityKey>,
     lanes: OnceCell<(HashMap<pb::IdKey, pb::Id>, LaneTransitions<'a>)>,
 }
 
 impl<'a> ScenarioIndex<'a> {
-    fn new(all: &'a [StoredEntity]) -> Self {
-        let known = all
+    pub(crate) fn new(all: &'a [StoredEntity]) -> Self {
+        let by_key: HashMap<pb::EntityKey, &StoredEntity> = all
             .iter()
-            .filter_map(|se| {
-                let k = entity_kind(&se.entity)?;
-                let i = entity_id(&se.entity)?;
-                Some(pb::EntityKey::new(k, i))
-            })
+            .filter_map(|se| Some((key_of(se)?, se)))
             .collect();
+        let known = by_key.keys().cloned().collect();
         Self {
             all,
+            by_key,
             known,
             lanes: OnceCell::new(),
         }
     }
 }
 
-fn validate_scenarios_within(
-    entity: &pb::Entity,
-    all: &[StoredEntity],
-    lens: &Lens,
-) -> Vec<pb::ValidationIssue> {
-    validate_scenarios_indexed(entity, &ScenarioIndex::new(all), lens)
-}
-
-fn validate_scenarios_indexed(
+pub(crate) fn validate_scenarios_indexed(
     entity: &pb::Entity,
     index: &ScenarioIndex<'_>,
     lens: &Lens,
@@ -3049,13 +3040,14 @@ pub(crate) fn strategic_chain_issues_within<'a>(
             chain.push((pb::EntityKind::Subdomain, se));
         }
     }
+    let index = ScenarioIndex::new(all);
     let mut seen: HashSet<pb::EntityKey> = HashSet::new();
     chain
         .into_iter()
         .filter(|(kind, se)| {
             entity_id(&se.entity).is_some_and(|id| seen.insert(pb::EntityKey::new(*kind, id)))
         })
-        .flat_map(|(_, se)| validate_scenarios_within(&se.entity, all, lens))
+        .flat_map(|(_, se)| validate_scenarios_indexed(&se.entity, &index, lens))
         .collect()
 }
 
@@ -3422,37 +3414,36 @@ pub fn validate_model_within(
 /// into, so a lane or command edit that breaks a stored scenario shows up
 /// before the slice is written again. Also returns the slices checked.
 #[must_use]
-pub fn validate_model_scenarios_within(
+pub(crate) fn validate_model_scenarios_within(
     model: &pb::EventModel,
-    all: &[StoredEntity],
+    index: &ScenarioIndex<'_>,
     lens: &Lens,
 ) -> (Vec<pb::ValidationIssue>, HashSet<pb::EntityKey>) {
-    let index = ScenarioIndex::new(all);
-    let stored: HashMap<pb::EntityKey, &StoredEntity> = all
-        .iter()
-        .filter_map(|se| {
-            Some((
-                pb::EntityKey::new(entity_kind(&se.entity)?, entity_id(&se.entity)?),
-                se,
-            ))
-        })
-        .collect();
+    let mut issues = Vec::new();
     let mut examined: HashSet<pb::EntityKey> = HashSet::new();
-    let issues = model
-        .members
-        .iter()
-        .filter_map(|m| {
-            let kind = pb::EntityKind::try_from(m.kind)
-                .ok()
-                .filter(|k| runs_scenarios(*k))?;
-            let id = m.id.as_ref().filter(|id| outbound_pass_walks(model, id))?;
-            let key = pb::EntityKey::new(kind, id);
-            // A missing member is the model suite's MEMBER_NOT_FOUND.
-            let se = *stored.get(&key)?;
-            examined.insert(key).then_some(se)
-        })
-        .flat_map(|se| validate_scenarios_indexed(&se.entity, &index, lens))
-        .collect();
+    for member in &model.members {
+        let Some(kind) = pb::EntityKind::try_from(member.kind)
+            .ok()
+            .filter(|k| runs_scenarios(*k))
+        else {
+            continue;
+        };
+        let Some(id) = member
+            .id
+            .as_ref()
+            .filter(|id| outbound_pass_walks(model, id))
+        else {
+            continue;
+        };
+        let key = pb::EntityKey::new(kind, id);
+        // A missing member is the model suite's MEMBER_NOT_FOUND.
+        let Some(stored) = index.by_key.get(&key) else {
+            continue;
+        };
+        if examined.insert(key) {
+            issues.extend(validate_scenarios_indexed(&stored.entity, index, lens));
+        }
+    }
     (issues, examined)
 }
 
@@ -6503,24 +6494,10 @@ pub fn validate_model_content_within(
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
-        if !matches!(
-            k,
-            pb::EntityKind::CommandSlice
-                | pb::EntityKind::ReadModelSlice
-                | pb::EntityKind::AutomationSlice
-        ) {
+        if !runs_scenarios(k) {
             continue;
         }
-        let Some(se) = all.iter().find(|se| {
-            matches!(
-                (entity_kind(&se.entity), entity_id(&se.entity)),
-                (Some(sk), Some(sid))
-                    if sk == k
-                        && sid.namespace == id.namespace
-                        && sid.slug == id.slug
-                        && sid.version == id.version
-            )
-        }) else {
+        let Some(se) = find_stored(all, k, id) else {
             continue;
         };
         let scenario_count = match se.entity.kind.as_ref() {

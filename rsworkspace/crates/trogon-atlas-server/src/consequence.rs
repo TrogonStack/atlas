@@ -16,7 +16,7 @@ use trogon_atlas_store::{
     StoredEntity,
 };
 
-use crate::validation;
+use crate::{ownership::Lens, validation};
 
 /// Validation reached through stored type libraries and data-product event
 /// lookups, which read the store rather than a candidate world.
@@ -270,6 +270,7 @@ impl Scan {
         let mut namespaces: BTreeSet<&str> = BTreeSet::new();
         let mut has_specifications = false;
         let mut has_data_products = false;
+        let scenario_index = validation::ScenarioIndex::new(world);
         for stored in world {
             if let Some(id) = entity_id(&stored.entity) {
                 namespaces.insert(id.namespace.as_str());
@@ -283,16 +284,20 @@ impl Scan {
                         validation::validate_model_content(model, world),
                     );
                 }
-                Some(_) if entity_kind(&stored.entity).is_some_and(validation::runs_scenarios) => {
+                Some(pb::entity::Kind::Specification(_)) => has_specifications = true,
+                Some(pb::entity::Kind::DataProduct(_)) => has_data_products = true,
+                _ if entity_kind(&stored.entity).is_some_and(validation::runs_scenarios) => {
                     slices += 1;
                     tag(
                         validation::CHECK_SCENARIOS,
                         Some(stored),
-                        validation::validate_scenarios(&stored.entity, world),
+                        validation::validate_scenarios_indexed(
+                            &stored.entity,
+                            &scenario_index,
+                            &Lens::Everything,
+                        ),
                     );
                 }
-                Some(pb::entity::Kind::Specification(_)) => has_specifications = true,
-                Some(pb::entity::Kind::DataProduct(_)) => has_data_products = true,
                 _ => {}
             }
         }

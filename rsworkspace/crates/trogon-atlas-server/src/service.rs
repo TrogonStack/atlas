@@ -9129,6 +9129,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     etag: String::new(),
                 })
             }));
+            let scenario_index = validation::ScenarioIndex::new(&validation_ctx);
             let mut scenario_errors: Vec<pb::ValidationIssue> = Vec::new();
             let mut first_error_index: Option<usize> = None;
             for (i, m) in metas.iter().enumerate() {
@@ -9138,7 +9139,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 let Some(entity) = m.entity.as_ref() else {
                     continue;
                 };
-                let issues = validation::validate_scenarios(entity, &validation_ctx);
+                let issues = validation::validate_scenarios_indexed(
+                    entity,
+                    &scenario_index,
+                    &Lens::Everything,
+                );
                 let (errors, non_errors): (Vec<_>, Vec<_>) = issues
                     .into_iter()
                     .partition(|iss| iss.severity == pb::validation_issue::Severity::Error as i32);
@@ -10655,8 +10660,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await?;
         let lens = self.lens(&vis).await?;
         let mut issues = validation::validate_model_within(&model, &all, &lens);
-        let (scenario_issues, slices) =
-            validation::validate_model_scenarios_within(&model, &all, &lens);
+        let (scenario_issues, slices) = validation::validate_model_scenarios_within(
+            &model,
+            &validation::ScenarioIndex::new(&all),
+            &lens,
+        );
         issues.extend(scenario_issues);
         let mut checks = vec![
             validation::ran_against_snapshot(validation::CHECK_MODEL, 1, snapshot_truncated),
@@ -10790,6 +10798,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             Scope::Namespace(ns) => std::iter::once(ns.clone()).collect(),
             _ => strategic_scope_namespaces(all.as_ref(), &scoped_domains),
         };
+        let scenario_index = validation::ScenarioIndex::new(all.as_ref());
         for se in all.iter() {
             let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
                 continue;
@@ -10806,7 +10815,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             let mut issues = validation::validate_model_content_within(em, all.as_ref(), &lens);
             let (scenario_issues, slices) =
-                validation::validate_model_scenarios_within(em, all.as_ref(), &lens);
+                validation::validate_model_scenarios_within(em, &scenario_index, &lens);
             issues.extend(scenario_issues);
             slices_examined.extend(slices);
             scoped_namespaces.insert(id.namespace.clone());
