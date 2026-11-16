@@ -24,7 +24,7 @@ into suites a coverage report can name:
 | --- | --- | --- |
 | `request_shape` | Per-entity structural and admission checks (`validate_entity_content`, context/project slug gates, type-library admit) | Usually hard `Status` refusal on write; rarely soft issues |
 | `architecture` | Architecture resource rules and diagnostics | Write/landing: hard refusal; ValidateProject: soft issues on resource scan |
-| `scenarios` | Gherkin / slice scenario rules | Errors refuse Put/Batch for applicable slice kinds; Warning/Info ride `validation[]`; soft issues on Validate* |
+| `scenarios` | Gherkin / slice scenario rules | Errors refuse Put/Batch for applicable slice kinds; Warning/Info ride `validation[]` |
 | `store_hygiene` | Cross-store consistency (`validate_store_hygiene`) | Soft issues; Merge treats Error as `STATUS_INVALID` |
 | `model` | Per-EventModel content passes (`validate_model_content`) | Soft issues on Validate* |
 | `strategic` | Bounded context / domain / subdomain chain findings | Advisory on Put/Batch/Merge; included in Validate* via strategic chain |
@@ -73,18 +73,14 @@ validation, such as on a stale `if_match`, still reports the suites that ran.
   clean."
 - **ValidateEventModel does not run** store hygiene (that is
   ValidateProject).
-- **Validate\* runs `scenarios` on slice members.** `ValidateEventModel`
-  and `ValidateProject` run the write-path scenario check on each command,
-  read-model and automation slice the model lists in its own namespace.
-  A slice in another namespace is checked by its own model. The check
-  reads the current snapshot, so a lane edit that breaks a stored scenario
-  is reported without a new write to the slice. For example, if the
-  `review` lane drops `review.submitted -> review.approved`, a scenario
-  that emits `review.approved` after `review.submitted` now reports
-  `SCENARIO_TRANSITION_VIOLATION`. `subjects_examined` counts the distinct
-  slices checked. A scenario reference into a namespace the caller cannot
-  read is not called dangling. The `model` suite reports it as
-  `REF_OUTSIDE_VISIBLE_SCOPE`.
+- **Validate\* runs `scenarios` against the current snapshot**, so a lane
+  edit that breaks a stored scenario shows up without a new write, such as
+  a `review` lane that drops `review.submitted -> review.approved`. A
+  scenario reference into a namespace the caller cannot read is not
+  dangling: the `model` suite reports it as `REF_OUTSIDE_VISIBLE_SCOPE`.
+- **The attested export does not run** `scenarios`: it still seals only
+  `model` and `strategic` findings, so a bundle can report complete while
+  validate reports `SCENARIO_*` findings.
 - **Coverage is not a finding.** `ValidateProject` can still surface an
   incomplete Event confirmation scan as the finding
   `DATA_PRODUCT_CONFIRMATION_INCOMPLETE` (budget or discovery exhaustion),
