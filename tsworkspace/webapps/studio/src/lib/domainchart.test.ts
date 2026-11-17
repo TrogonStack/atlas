@@ -394,9 +394,8 @@ describe('validationScopes', () => {
 });
 
 describe('buildDomainChart: an entity loaded twice', () => {
-  // The event-model response lists a bounded context and its subdomain both
-  // as members and in the knowledge graph. React Flow keys edges by id, so a
-  // repeated edge stays on the canvas after the view remounts.
+  // The event-model response can list a context and its subdomain twice, and a
+  // repeated React Flow edge id stays on the canvas after the view remounts.
   it('draws one node and one realizes edge per entity', () => {
     const sd = { subdomain: { id: id('shop', 'billing'), title: 'billing', classification: 'CORE' } };
     const bc = { boundedContext: { id: id('pay', 'pay'), title: 'pay', realizes: [{ id: id('shop', 'billing') }] } };

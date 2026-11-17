@@ -832,7 +832,8 @@ function sliceView(entity: Entity): SliceView | undefined {
 // copy, because every view keys canvas nodes and edges by entity.
 export function buildModel(wireEntities: WireEntity[]): Model {
   const byKey = new Map<string, Entity>();
-  for (const e of wireEntities.map(normalizeEntity)) {
+  for (const wire of wireEntities) {
+    const e = normalizeEntity(wire);
     if (e && !byKey.has(e.key)) byKey.set(e.key, e);
   }
   return assembleModel([...byKey.values()]);

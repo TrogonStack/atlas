@@ -621,7 +621,8 @@ describe('buildSequence: a slice loaded at two versions', () => {
 // Two swimlane transitions can open the same storyboard-to-storyboard road
 // from different events. React Flow keys nodes and edges by id, so a shared id
 // leaves stale edges on the canvas after the view remounts.
-const twoRoadsModel = (ns: string) => {
+const twoRoadsModel = () => {
+  const ns = 'shop';
   const slice = (slug: string, command: string, event: string) => ({
     commandSlice: {
       id: id(ns, slug),
@@ -662,7 +663,7 @@ const twoRoadsModel = (ns: string) => {
 
 describe('buildSequence: two roads between the same storyboards', () => {
   it('gives every node and edge a unique id', () => {
-    const { nodes, edges } = buildSequence(buildModel(twoRoadsModel('shop') as never));
+    const { nodes, edges } = buildSequence(buildModel(twoRoadsModel() as never));
     const forks = edges.filter((e) => e.id.startsWith('seq-fork:'));
     expect(forks).toHaveLength(4);
     const edgeIds = edges.map((e) => e.id);

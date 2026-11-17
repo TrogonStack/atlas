@@ -407,9 +407,9 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
   // Fork edges ("we observe state, therefore we can act"): each road leaves
   // from the occurrence of the read model its entry observes. Fallbacks:
   // the transition's `after` event occurrence, then the chunk's last slot.
-  // Cycles end forward in a loop stub, never a backward edge.
-  // Several transitions can open the same storyboard pair, and React Flow
-  // needs one id per road, so repeats get a `#n` suffix.
+  // Cycles end forward in a loop stub, never a backward edge. Several
+  // transitions can open the same storyboard pair, and React Flow needs one
+  // id per road, so repeats get a `#n` suffix.
   const roadCount = new Map<string, number>();
   for (const c of model.continuations) {
     const from = chunkBySb.get(c.from.key);
