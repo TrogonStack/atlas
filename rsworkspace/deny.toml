@@ -81,6 +81,12 @@ skip = [
   { crate = "signature@3.0.0", reason = "direct ed25519-dalek 3 dependency" },
   { crate = "spki@0.7.3", reason = "nkeys 0.4 via signatory 0.27" },
   { crate = "spki@0.8.1", reason = "direct ed25519-dalek 3 dependency" },
+  # object_store 0.14 and referencing 0.61 still require parking_lot 0.12
+  # while the workspace uses 0.13.
+  { crate = "parking_lot@0.12.5", reason = "object_store 0.14 and referencing 0.61" },
+  { crate = "parking_lot_core@0.9.12", reason = "parking_lot 0.12 via object_store and referencing" },
+  { crate = "lock_api@0.4.14", reason = "parking_lot 0.12 via object_store and referencing" },
+  { crate = "redox_syscall@0.5.18", reason = "parking_lot_core 0.9 via object_store and referencing" },
   # Tiny transitive duplicates from testcontainers/getrandom version spread.
   { name = "cpufeatures" },
   { name = "linux-raw-sys" },
