@@ -617,3 +617,58 @@ describe('buildSequence: a slice loaded at two versions', () => {
     expect(titles).not.toContain('s1 v1');
   });
 });
+
+// Two swimlane transitions can open the same storyboard-to-storyboard road
+// from different events. React Flow keys nodes and edges by id, so a shared id
+// leaves stale edges on the canvas after the view remounts.
+const twoRoadsModel = () => {
+  const ns = 'shop';
+  const slice = (slug: string, command: string, event: string) => ({
+    commandSlice: {
+      id: id(ns, slug),
+      title: slug,
+      persona: { persona: { id: id(ns, 'buyer') } },
+      command: { command: { id: id(ns, command) } },
+      emittedEvents: [{ event: { id: id(ns, event) } }],
+    },
+  });
+  const ref = (slug: string) => ({ id: id(ns, slug) });
+  return [
+    { persona: { id: id(ns, 'buyer'), title: 'Buyer' } },
+    { command: { id: id(ns, 'place'), title: 'place' } },
+    { command: { id: id(ns, 'pay'), title: 'pay' } },
+    { command: { id: id(ns, 'retry'), title: 'retry' } },
+    { event: { id: id(ns, 'order.placed'), title: 'order.placed' } },
+    { event: { id: id(ns, 'order.paid'), title: 'order.paid' } },
+    { event: { id: id(ns, 'retry.started'), title: 'retry.started' } },
+    slice('s-place', 'place', 'order.placed'),
+    slice('s-pay', 'pay', 'order.paid'),
+    slice('s-retry', 'retry', 'retry.started'),
+    { storyboard: { id: id(ns, 'sb-main'), title: 'main', slices: [ref('s-place'), ref('s-pay')] } },
+    { storyboard: { id: id(ns, 'sb-retry'), title: 'retry', slices: [ref('s-retry')] } },
+    {
+      swimlane: {
+        id: id(ns, 'order'),
+        title: 'Order',
+        transitions: [
+          { after: ref('order.placed'), next: [{ event: ref('retry.started') }] },
+          { after: ref('order.paid'), next: [{ event: ref('retry.started') }] },
+          { after: ref('retry.started'), next: [{ event: ref('order.placed') }] },
+          { after: ref('retry.started'), next: [{ event: ref('order.paid') }] },
+        ],
+      },
+    },
+  ];
+};
+
+describe('buildSequence: two roads between the same storyboards', () => {
+  it('gives every node and edge a unique id', () => {
+    const { nodes, edges } = buildSequence(buildModel(twoRoadsModel() as never));
+    const forks = edges.filter((e) => e.id.startsWith('seq-fork:'));
+    expect(forks).toHaveLength(4);
+    const edgeIds = edges.map((e) => e.id);
+    expect(new Set(edgeIds).size).toBe(edgeIds.length);
+    const nodeIds = nodes.map((n) => n.id);
+    expect(new Set(nodeIds).size).toBe(nodeIds.length);
+  });
+});

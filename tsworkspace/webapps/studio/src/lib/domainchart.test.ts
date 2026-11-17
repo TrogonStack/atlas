@@ -392,3 +392,16 @@ describe('validationScopes', () => {
     expect(validationScopes(model).filter((s) => s.namespace)).toEqual([{ namespace: 'legacy' }]);
   });
 });
+
+describe('buildDomainChart: an entity loaded twice', () => {
+  // The event-model response can list a context and its subdomain twice, and a
+  // repeated React Flow edge id stays on the canvas after the view remounts.
+  it('draws one node and one realizes edge per entity', () => {
+    const sd = { subdomain: { id: id('shop', 'billing'), title: 'billing', classification: 'CORE' } };
+    const bc = { boundedContext: { id: id('pay', 'pay'), title: 'pay', realizes: [{ id: id('shop', 'billing') }] } };
+    const { nodes, edges } = buildDomainChart(buildModel([sd, bc, sd, bc] as never));
+    expect(edges.map((e) => e.id)).toEqual(['rel:boundedContext:pay/pay@1->subdomain:shop/billing@1']);
+    const nodeIds = nodes.map((n) => n.id);
+    expect(new Set(nodeIds).size).toBe(nodeIds.length);
+  });
+});
