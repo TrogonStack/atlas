@@ -587,7 +587,7 @@ fn sibling_supplied_fields(
         read_model_id.namespace.as_str(),
         read_model_id.slug.as_str(),
     );
-    by_key
+    let events: Vec<&pb::Id> = by_key
         .values()
         .filter_map(|entity| match entity.kind.as_ref() {
             Some(pb::entity::Kind::ReadModelSlice(rs)) => Some(rs),
@@ -610,7 +610,34 @@ fn sibling_supplied_fields(
         })
         .flat_map(|rs| rs.source_events.iter())
         .filter_map(|ee| ee.event.as_ref()?.id.as_ref())
+        .collect();
+    // The slice link counts a source event's lane state as a source, so a
+    // sibling's lane state supplies fields too.
+    let mut seen_lanes = HashSet::new();
+    let lane_state = events
+        .iter()
+        .filter_map(|id| {
+            match by_key
+                .get(&pb::EntityKey::new(pb::EntityKind::Event, id))?
+                .kind
+                .as_ref()?
+            {
+                pb::entity::Kind::Event(event) => event.swimlane.as_ref()?.id.as_ref(),
+                _ => None,
+            }
+        })
+        .filter(|lane_id| {
+            seen_lanes.insert((
+                lane_id.namespace.clone(),
+                lane_id.slug.clone(),
+                lane_id.version,
+            ))
+        })
+        .filter_map(|lane_id| swimlane_state_endpoint(lane_id, by_key));
+    events
+        .iter()
         .filter_map(|id| endpoint_for(pb::EntityKind::Event, id, by_key))
+        .chain(lane_state)
         .flat_map(|endpoint| endpoint.fields)
         .map(|f| f.name.to_ascii_lowercase())
         .collect()
@@ -1518,6 +1545,64 @@ mod tests {
         let (gaps, score) = check_completeness(&event_model_scope("ordering"), &all);
         assert!(gaps.is_empty(), "{gaps:?}");
         assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    fn sibling_lane_state_scenario() -> Vec<StoredEntity> {
+        vec![
+            stored(swimlane("order", vec![field("status", string_kind())])),
+            stored(swimlane("shipment", Vec::new())),
+            stored(event(
+                "order-placed",
+                "order",
+                vec![field("order_id", string_kind())],
+            )),
+            stored(event(
+                "shipment-dispatched",
+                "shipment",
+                vec![field("order_id", string_kind())],
+            )),
+            stored(keyed(
+                read_model(
+                    "order-progress",
+                    vec![
+                        field("order_id", string_kind()),
+                        field("status", string_kind()),
+                    ],
+                    vec!["order-placed", "shipment-dispatched"],
+                ),
+                &["order_id"],
+            )),
+            stored(read_model_slice(
+                "progress-placed",
+                vec!["order-placed"],
+                "order-progress",
+            )),
+            stored(read_model_slice(
+                "progress-dispatched",
+                vec!["shipment-dispatched"],
+                "order-progress",
+            )),
+            stored(event_model(
+                "fulfilment",
+                vec![
+                    (pb::EntityKind::ReadModelSlice, "progress-placed"),
+                    (pb::EntityKind::ReadModelSlice, "progress-dispatched"),
+                ],
+            )),
+        ]
+    }
+
+    #[test]
+    fn upsert_slice_does_not_require_fields_a_sibling_slice_gets_from_lane_state() {
+        let all = sibling_lane_state_scenario();
+        let (gaps, score) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "progress-dispatched"),
+            &all,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+        let (gaps, _) = check_completeness(&event_model_scope("fulfilment"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     #[test]
