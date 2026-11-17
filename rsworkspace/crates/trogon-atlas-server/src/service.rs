@@ -3942,15 +3942,6 @@ fn snapshot_digest(
     })
 }
 
-fn runs_scenarios(kind: pb::EntityKind) -> bool {
-    matches!(
-        kind,
-        pb::EntityKind::CommandSlice
-            | pb::EntityKind::ReadModelSlice
-            | pb::EntityKind::AutomationSlice
-    )
-}
-
 fn subject_count(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
 }
@@ -7791,7 +7782,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await?,
         );
 
-        let ran_scenarios = runs_scenarios(kind);
+        let ran_scenarios = validation::runs_scenarios(kind);
         let ran_strategic = is_strategic_kind(kind);
         let mut snapshot_truncated = false;
         let mut scenario_issues = if ran_scenarios {
@@ -8758,7 +8749,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validate_entity_content(&entity)?;
                     check_project_namespace_conflict(&entity)?;
                     check_context_slug(&entity)?;
-                    if runs_scenarios(kind) {
+                    if validation::runs_scenarios(kind) {
                         has_scenario_puts = true;
                     }
                     if is_strategic_kind(kind) {
@@ -9126,7 +9117,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             suites.scenarios = validation::SuiteRun::over(
                 metas
                     .iter()
-                    .filter(|m| m.is_put && runs_scenarios(m.kind) && m.entity.is_some())
+                    .filter(|m| {
+                        m.is_put && validation::runs_scenarios(m.kind) && m.entity.is_some()
+                    })
                     .count(),
             );
             let mut validation_ctx: Vec<StoredEntity> = (*pre_all_for_validation).clone();
@@ -9136,16 +9129,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     etag: String::new(),
                 })
             }));
+            let scenario_index = validation::ScenarioIndex::new(&validation_ctx);
             let mut scenario_errors: Vec<pb::ValidationIssue> = Vec::new();
             let mut first_error_index: Option<usize> = None;
             for (i, m) in metas.iter().enumerate() {
-                if !m.is_put || !runs_scenarios(m.kind) {
+                if !m.is_put || !validation::runs_scenarios(m.kind) {
                     continue;
                 }
                 let Some(entity) = m.entity.as_ref() else {
                     continue;
                 };
-                let issues = validation::validate_scenarios(entity, &validation_ctx);
+                let issues = validation::validate_scenarios_indexed(
+                    entity,
+                    &scenario_index,
+                    &Lens::Everything,
+                );
                 let (errors, non_errors): (Vec<_>, Vec<_>) = issues
                     .into_iter()
                     .partition(|iss| iss.severity == pb::validation_issue::Severity::Error as i32);
@@ -10662,8 +10660,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await?;
         let lens = self.lens(&vis).await?;
         let mut issues = validation::validate_model_within(&model, &all, &lens);
-        let (scenario_issues, slices) =
-            validation::validate_model_scenarios_within(&model, &all, &lens);
+        let (scenario_issues, slices) = validation::validate_model_scenarios_within(
+            &model,
+            &validation::ScenarioIndex::new(&all),
+            &lens,
+        );
         issues.extend(scenario_issues);
         let mut checks = vec![
             validation::ran_against_snapshot(validation::CHECK_MODEL, 1, snapshot_truncated),
@@ -10797,6 +10798,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             Scope::Namespace(ns) => std::iter::once(ns.clone()).collect(),
             _ => strategic_scope_namespaces(all.as_ref(), &scoped_domains),
         };
+        let scenario_index = validation::ScenarioIndex::new(all.as_ref());
         for se in all.iter() {
             let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
                 continue;
@@ -10813,7 +10815,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             let mut issues = validation::validate_model_content_within(em, all.as_ref(), &lens);
             let (scenario_issues, slices) =
-                validation::validate_model_scenarios_within(em, all.as_ref(), &lens);
+                validation::validate_model_scenarios_within(em, &scenario_index, &lens);
             issues.extend(scenario_issues);
             slices_examined.extend(slices);
             scoped_namespaces.insert(id.namespace.clone());
