@@ -827,8 +827,16 @@ function sliceView(entity: Entity): SliceView | undefined {
   return undefined;
 }
 
+// The event-model response can carry one entity twice, for example a bounded
+// context that is both a member and part of the knowledge graph. Keep the first
+// copy, because every view keys canvas nodes and edges by entity.
 export function buildModel(wireEntities: WireEntity[]): Model {
-  return assembleModel(wireEntities.map(normalizeEntity).filter((x): x is Entity => Boolean(x)));
+  const byKey = new Map<string, Entity>();
+  for (const wire of wireEntities) {
+    const e = normalizeEntity(wire);
+    if (e && !byKey.has(e.key)) byKey.set(e.key, e);
+  }
+  return assembleModel([...byKey.values()]);
 }
 
 /**
