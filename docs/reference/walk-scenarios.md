@@ -127,7 +127,8 @@ the step's answer. Numeric placeholders are normalized, so `4` and `4.0`
 fill the same stream id. An
 entity without a swimlane is on no stream and shares no history. After all cases, storyboards and command, read-model and
 automation slice scenarios in the cases' namespaces that no case reached
-are reported as coverage findings. A storyboard counts as walked when a
+are reported as coverage findings. An automation scenario that states
+`noCommand` is not counted, because no step can issue a command for it. A storyboard counts as walked when a
 case exercised any of its slices.
 
 ## Output

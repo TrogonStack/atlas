@@ -2407,6 +2407,11 @@ fn coverage(
                 continue;
             }
             for scenario in arr(slice, "scenarios") {
+                // No step issues a command when the automation stays idle, so
+                // nothing a case does can walk such a scenario.
+                if kind == K::AutomationSlice && scenario.get("noCommand").is_some() {
+                    continue;
+                }
                 let id = str_at(scenario, "id").to_string();
                 cov.scenarios_total += 1;
                 if touched.scenarios.contains(&(kind, key.clone(), id.clone())) {

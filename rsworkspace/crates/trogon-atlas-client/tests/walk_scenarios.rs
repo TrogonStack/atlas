@@ -1004,3 +1004,27 @@ fn a_derived_annotation_with_a_blank_doc_sources_nothing() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn a_scenario_where_the_automation_stays_idle_is_not_a_coverage_gap() {
+    let report = walk_with(
+        &[doc(
+            "AutomationSlice",
+            "idle-approver",
+            &format!(
+                "  emittedCommand: {{command: {cmd}}}\n  scenarios:\n  - {{id: idle, title: idle, given: [], whenDoc: nothing queued, noCommand: {{doc: nothing to approve}}}}\n  - {{id: fires, title: fires, given: [], whenDoc: queued, then: {{command: {cmd}}}}}\n",
+                cmd = r("approve-review")
+            ),
+        )],
+        "  steps:\n  - command: submit-review\n    answer: {review_id: r-1, rating: 4}\n",
+    );
+    let unwalked = unwalked(&report);
+    assert!(
+        !unwalked.iter().any(|m| m.contains("\"idle\"")),
+        "{report:#?}"
+    );
+    assert!(
+        unwalked.iter().any(|m| m.contains("\"fires\"")),
+        "{report:#?}"
+    );
+}
