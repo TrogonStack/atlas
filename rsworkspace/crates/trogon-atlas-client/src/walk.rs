@@ -839,6 +839,13 @@ struct Recorded {
     stream: Option<String>,
 }
 
+impl Recorded {
+    /// Whether the event is on `stream`; with no stream, nothing is.
+    fn on(&self, stream: Option<&str>) -> bool {
+        stream.is_some() && self.stream.as_deref() == stream
+    }
+}
+
 type Rows = BTreeMap<String, Map<String, Value>>;
 
 #[derive(Debug, Default)]
@@ -1044,13 +1051,7 @@ impl CaseRun<'_> {
     }
 
     fn history(&self, stream: Option<&str>) -> Vec<&Recorded> {
-        let Some(stream) = stream else {
-            return Vec::new();
-        };
-        self.log
-            .iter()
-            .filter(|r| r.stream.as_deref() == Some(stream))
-            .collect()
+        self.log.iter().filter(|r| r.on(stream)).collect()
     }
 
     // --- projection ---
@@ -1267,15 +1268,11 @@ impl CaseRun<'_> {
             return;
         };
         for event in emitted {
-            // The stream is fixed before the payload is built, so field
-            // sourcing, lifecycle and recording all use one timeline. An event
-            // on the command's lane lands on the stream the command addressed.
+            // The stream comes from the command's values before the payload is
+            // built, so field sourcing, lifecycle and recording share one
+            // timeline. On the command's own lane it is the command's stream.
             let event_lane = self.lane_of(K::Event, &event);
-            let event_stream = if event_lane == lane {
-                stream.clone()
-            } else {
-                self.stream_of(event_lane.as_ref(), &values)
-            };
+            let event_stream = self.stream_of(event_lane.as_ref(), &values);
             let payload = self.event_payload(
                 &event,
                 &command,
@@ -1284,7 +1281,13 @@ impl CaseRun<'_> {
                 &step.answer,
                 event_stream.as_deref(),
             );
-            self.check_lifecycle(&event, event_stream.as_deref(), &command, &slice_key);
+            self.check_lifecycle(
+                &event,
+                event_lane.as_ref(),
+                event_stream.as_deref(),
+                &command,
+                &slice_key,
+            );
             self.record(&event, &payload, event_stream);
         }
     }
@@ -1600,10 +1603,7 @@ impl CaseRun<'_> {
         let related: Vec<&Key> = self
             .log
             .iter()
-            .filter(|r| {
-                (stream.is_some() && r.stream.as_deref() == stream)
-                    || correlates(&r.payload, values)
-            })
+            .filter(|r| r.on(stream) || correlates(&r.payload, values))
             .map(|r| &r.event)
             .collect();
         let mut rejects: Vec<(String, String)> = Vec::new();
@@ -1693,7 +1693,6 @@ impl CaseRun<'_> {
                 return None;
             }
             let mut keys = Vec::new();
-            let mut undeclared = false;
             for reference in expected {
                 let mut key = self.model.event_key(reference, self.ns());
                 // An unpinned ref to an event outside the model takes the
@@ -1702,7 +1701,6 @@ impl CaseRun<'_> {
                     key = d.clone();
                 }
                 if !declared.contains(&key) {
-                    undeclared = true;
                     self.push(
                         WalkFinding::new(
                             EVENT_NOT_EMITTED_BY_SLICE,
@@ -1745,7 +1743,7 @@ impl CaseRun<'_> {
             }
             // The model cannot produce an event the slice does not emit, so
             // later steps must not see it.
-            if undeclared {
+            if keys.iter().any(|k| !declared.contains(k)) {
                 return None;
             }
             self.push(
@@ -1885,14 +1883,15 @@ impl CaseRun<'_> {
     fn check_lifecycle(
         &mut self,
         event: &Key,
+        lane: Option<&Key>,
         stream: Option<&str>,
         command: &Key,
         slice_key: &Key,
     ) {
-        let (Some(lane), Some(stream)) = (self.lane_of(K::Event, event), stream) else {
+        let (Some(lane), Some(stream)) = (lane, stream) else {
             return;
         };
-        let transitions = self.transitions(&lane);
+        let transitions = self.transitions(lane);
         if transitions.is_empty() {
             return;
         }
@@ -1932,7 +1931,7 @@ impl CaseRun<'_> {
                             LIFECYCLE_START,
                             format!("{event} opens stream {stream}, but the lifecycle only reaches it as a successor"),
                         )
-                        .subject(K::Swimlane, &lane)
+                        .subject(K::Swimlane, lane)
                         .field("transitions"),
                     );
                 }
@@ -1954,7 +1953,7 @@ impl CaseRun<'_> {
                                 legal.join(", ")
                             ),
                         )
-                        .subject(K::Swimlane, &lane)
+                        .subject(K::Swimlane, lane)
                         .field("transitions"),
                     );
                 }

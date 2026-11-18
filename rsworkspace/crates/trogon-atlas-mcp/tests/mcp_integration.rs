@@ -3062,10 +3062,14 @@ spec:
             ),
         )
         .await;
-    assert!(
-        !empty.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false)),
-        "{empty:?}"
-    );
+    let message = match empty {
+        Err(rmcp::ServiceError::McpError(error)) => error.message.to_string(),
+        Ok(result) if result.is_error.unwrap_or(false) => {
+            result.content[0].as_text().unwrap().text.clone()
+        }
+        other => panic!("an empty walk must be refused: {other:?}"),
+    };
+    assert!(message.contains("no Specification"), "{message}");
 
     mcp_service.cancel().await.unwrap();
 }

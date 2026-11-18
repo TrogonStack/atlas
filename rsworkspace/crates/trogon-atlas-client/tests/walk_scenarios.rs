@@ -21,9 +21,13 @@ fn model() -> Model {
     Model::load_paths(&[fixture("model.yaml")]).unwrap()
 }
 
-fn walk_text(cases: &str) -> WalkReport {
+fn walk_on(model: &Model, cases: &str) -> WalkReport {
     let cases = walk::parse_cases(cases, "inline").unwrap();
-    walk::walk(&model(), &cases)
+    walk::walk(model, &cases)
+}
+
+fn walk_text(cases: &str) -> WalkReport {
+    walk_on(&model(), cases)
 }
 
 /// `(case name, step, code)` of every error and warning, in report order.
@@ -423,25 +427,12 @@ fn schema(fields: &[&str]) -> String {
     )
 }
 
-fn lane(slug: Option<&str>) -> String {
-    slug.map(|s| format!("  swimlane: {}\n", r(s)))
-        .unwrap_or_default()
-}
-
-fn event(name: &str, swimlane: Option<&str>, fields: &[&str]) -> String {
-    doc(
-        "Event",
-        name,
-        &format!("{}{}", schema(fields), lane(swimlane)),
-    )
-}
-
-fn command(name: &str, swimlane: Option<&str>, fields: &[&str]) -> String {
-    doc(
-        "Command",
-        name,
-        &format!("{}{}", schema(fields), lane(swimlane)),
-    )
+/// An Event or Command with string fields, on `swimlane` when given.
+fn entity(kind: &str, name: &str, swimlane: Option<&str>, fields: &[&str]) -> String {
+    let lane = swimlane
+        .map(|s| format!("  swimlane: {}\n", r(s)))
+        .unwrap_or_default();
+    doc(kind, name, &format!("{}{lane}", schema(fields)))
 }
 
 /// A command slice; each scenario is `(id, given events, emitted events)`.
@@ -487,8 +478,7 @@ fn walk_with(extra: &[String], spec: &str) -> WalkReport {
     let path = dir.path().join("extra.yaml");
     std::fs::write(&path, extra.concat()).unwrap();
     let model = Model::load_paths(&[fixture("model.yaml"), path]).unwrap();
-    let cases = walk::parse_cases(&inline(spec), "inline").unwrap();
-    walk::walk(&model, &cases)
+    walk_on(&model, &inline(spec))
 }
 
 fn unwalked(report: &WalkReport) -> Vec<&str> {
@@ -507,8 +497,8 @@ fn an_event_on_the_commands_lane_lands_on_the_commands_stream() {
     let report = walk_with(
         &[
             doc("Swimlane", "thread", "  streamId: thread-{thread_id}\n"),
-            command("post-reply", Some("thread"), &["thread_id", "body"]),
-            event("reply.posted", Some("thread"), &["body"]),
+            entity("Command", "post-reply", Some("thread"), &["thread_id", "body"]),
+            entity("Event", "reply.posted", Some("thread"), &["body"]),
             command_slice(
                 "post-reply-slice",
                 "post-reply",
@@ -536,9 +526,9 @@ fn an_event_on_another_lane_reads_its_own_streams_history() {
         &[
             doc("Swimlane", "payment", "  streamId: payment-{payment_id}\n"),
             doc("Swimlane", "ledger", "  streamId: ledger-{account_id}\n"),
-            command("charge", Some("payment"), &["payment_id", "account_id"]),
-            event("ledger.opened", Some("ledger"), &["account_id", "currency"]),
-            event("ledger.charged", Some("ledger"), &["account_id", "currency"]),
+            entity("Command", "charge", Some("payment"), &["payment_id", "account_id"]),
+            entity("Event", "ledger.opened", Some("ledger"), &["account_id", "currency"]),
+            entity("Event", "ledger.charged", Some("ledger"), &["account_id", "currency"]),
             command_slice(
                 "charge-slice",
                 "charge",
@@ -555,11 +545,11 @@ fn an_event_on_another_lane_reads_its_own_streams_history() {
 fn lane_less_commands_do_not_share_a_stream() {
     let report = walk_with(
         &[
-            command("ping", None, &["id"]),
-            event("pinged", None, &["id"]),
-            command("pong", None, &["id"]),
-            event("ponged", None, &["id"]),
-            event("pong.failed", None, &["id"]),
+            entity("Command", "ping", None, &["id"]),
+            entity("Event", "pinged", None, &["id"]),
+            entity("Command", "pong", None, &["id"]),
+            entity("Event", "ponged", None, &["id"]),
+            entity("Event", "pong.failed", None, &["id"]),
             command_slice("ping-slice", "ping", &["pinged"], &[("ping", &[], &["pinged"])]),
             command_slice(
                 "pong-slice",
@@ -578,8 +568,8 @@ fn an_empty_given_needs_an_empty_stream_not_just_no_lifecycle_event() {
     // review.noted is outside the review lifecycle, but it is on the stream.
     let report = walk_with(
         &[
-            command("note-review", Some("review"), &["review_id"]),
-            event("review.noted", Some("review"), &["review_id"]),
+            entity("Command", "note-review", Some("review"), &["review_id"]),
+            entity("Event", "review.noted", Some("review"), &["review_id"]),
             command_slice(
                 "note-review-slice",
                 "note-review",
@@ -601,9 +591,9 @@ fn a_historical_null_does_not_source_an_event_field() {
     // The latest comment cleared detail; the older value must not revive.
     let report = walk_with(
         &[
-            event("review.commented", Some("review"), &["review_id", "detail"]),
-            event("review.flagged", Some("review"), &["review_id", "detail"]),
-            command("flag-review", Some("review"), &["review_id"]),
+            entity("Event", "review.commented", Some("review"), &["review_id", "detail"]),
+            entity("Event", "review.flagged", Some("review"), &["review_id", "detail"]),
+            entity("Command", "flag-review", Some("review"), &["review_id"]),
             command_slice(
                 "flag-review-slice",
                 "flag-review",
@@ -624,7 +614,7 @@ fn a_historical_null_does_not_source_an_event_field() {
 fn an_opaque_event_schema_is_reported() {
     let report = walk_with(
         &[
-            command("archive", None, &["review_id"]),
+            entity("Command", "archive", None, &["review_id"]),
             doc(
                 "Event",
                 "archived",
