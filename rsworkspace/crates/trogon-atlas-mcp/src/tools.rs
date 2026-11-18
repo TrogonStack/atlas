@@ -863,7 +863,7 @@ pub struct WalkScenariosParams {
     )]
     pub cases_yaml: String,
     #[schemars(
-        description = "Namespaces whose stored entities form the walked model. Defaults to the namespaces the cases name. Ignored when manifests_yaml is set."
+        description = "Namespaces to load in addition to the ones the cases name, for example an upstream namespace whose events feed local projections. Ignored when manifests_yaml is set."
     )]
     #[serde(default)]
     pub namespaces: Vec<String>,

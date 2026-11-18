@@ -324,6 +324,8 @@ impl WalkReport {
 #[derive(Debug, Default, Clone)]
 pub struct Model {
     docs: BTreeMap<K, BTreeMap<Key, Value>>,
+    /// Versions the latest entities pin, by (namespace, slug).
+    pins: BTreeMap<(String, String), BTreeSet<u64>>,
 }
 
 impl Model {
@@ -340,6 +342,13 @@ impl Model {
                 Err(err) => skipped.push(format!("{}: {err:#}", export::entity_label(entity))),
             }
         }
+        let mut pins = BTreeMap::new();
+        for kind in model.docs.keys() {
+            for (_, body) in model.live(*kind) {
+                collect_refs(body, &mut pins);
+            }
+        }
+        model.pins = pins;
         (model, skipped)
     }
 
@@ -362,11 +371,7 @@ impl Model {
         namespaces: &[String],
         cases: &[Case],
     ) -> Result<(Self, Vec<String>)> {
-        let namespaces: BTreeSet<&str> = if namespaces.is_empty() {
-            cases.iter().map(|c| c.namespace.as_str()).collect()
-        } else {
-            namespaces.iter().map(String::as_str).collect()
-        };
+        let namespaces = fetch_scope(namespaces, cases);
         let mut scope = TypeScope::default();
         let mut entities = Vec::new();
         for namespace in namespaces {
@@ -397,6 +402,28 @@ impl Model {
             .map(|(key, _)| key.version)
     }
 
+    /// For a bare case ref: the highest version of the entity that the
+    /// model's latest entities pin, so a case follows the version slices use
+    /// rather than a newer one nothing references yet.
+    fn pinned_version(&self, kind: K, namespace: &str, slug: &str) -> Option<u64> {
+        self.pins
+            .get(&(namespace.to_string(), slug.to_string()))?
+            .iter()
+            .rev()
+            .copied()
+            .find(|v| {
+                self.get(
+                    kind,
+                    &Key {
+                        namespace: namespace.to_string(),
+                        slug: slug.to_string(),
+                        version: *v,
+                    },
+                )
+                .is_some()
+            })
+    }
+
     /// Latest version of every entity of `kind`.
     fn live(&self, kind: K) -> impl Iterator<Item = (&Key, &Value)> {
         // Keys sort by (namespace, slug, version): the last of each
@@ -419,7 +446,10 @@ impl Model {
         for kind in kinds {
             let version = match version {
                 Some(v) => v,
-                None => match self.latest_version(*kind, &namespace, &slug) {
+                None => match self
+                    .pinned_version(*kind, &namespace, &slug)
+                    .or_else(|| self.latest_version(*kind, &namespace, &slug))
+                {
                     Some(v) => v,
                     None => continue,
                 },
@@ -451,6 +481,40 @@ impl Model {
             slug,
             version: version.unwrap_or(0),
         }
+    }
+}
+
+/// The namespaces a live walk loads: the cases' own plus `extra`, such as an
+/// upstream namespace whose events feed local projections.
+fn fetch_scope<'a>(extra: &'a [String], cases: &'a [Case]) -> BTreeSet<&'a str> {
+    cases
+        .iter()
+        .map(|c| c.namespace.as_str())
+        .chain(extra.iter().map(String::as_str))
+        .collect()
+}
+
+/// Every `{namespace, slug, version}` ref in an entity body, below its top
+/// level (the top-level `id` is the entity itself).
+fn collect_refs(body: &Value, out: &mut BTreeMap<(String, String), BTreeSet<u64>>) {
+    fn walk(v: &Value, out: &mut BTreeMap<(String, String), BTreeSet<u64>>) {
+        match v {
+            Value::Object(map) => {
+                if let Some(key) = id_key(v).filter(|_| map.contains_key("version")) {
+                    out.entry((key.namespace, key.slug))
+                        .or_default()
+                        .insert(key.version);
+                }
+                map.values().for_each(|c| walk(c, out));
+            }
+            Value::Array(items) => items.iter().for_each(|c| walk(c, out)),
+            _ => {}
+        }
+    }
+    if let Value::Object(map) = body {
+        map.iter()
+            .filter(|(k, _)| k.as_str() != "id")
+            .for_each(|(_, v)| walk(v, out));
     }
 }
 
@@ -1407,7 +1471,7 @@ impl CaseRun<'_> {
         }
 
         let mut offers: BTreeMap<String, Vec<Offer>> = BTreeMap::new();
-        let mut ambiguous: BTreeMap<String, Key> = BTreeMap::new();
+        let mut ambiguous: BTreeMap<String, Vec<Key>> = BTreeMap::new();
         let mut observed: Vec<Key> = Vec::new();
         for (issuer_kind, issuer, rms) in &issuers {
             self.touched.slices.insert(issuer.clone());
@@ -1440,7 +1504,10 @@ impl CaseRun<'_> {
                             value: (*one).clone(),
                         }),
                         _ => {
-                            ambiguous.insert(field.clone(), rm.clone());
+                            let rms = ambiguous.entry(field.clone()).or_default();
+                            if !rms.contains(rm) {
+                                rms.push(rm.clone());
+                            }
                         }
                     }
                 }
@@ -1484,13 +1551,15 @@ impl CaseRun<'_> {
                     value: a.clone(),
                 });
             }
-            if let (Some(a), Some(rm)) = (from_answer, ambiguous.get(name)) {
-                let held = self
-                    .matching_rows(rm, &answer)
-                    .iter()
-                    .any(|row| row.get(name).is_some_and(|v| values_equal(v, a)));
-                if !held {
-                    self.push(
+            let ambiguous_rms = ambiguous.get(name).map_or(&[][..], Vec::as_slice);
+            if let Some(a) = from_answer {
+                for rm in ambiguous_rms {
+                    let held = self
+                        .matching_rows(rm, &answer)
+                        .iter()
+                        .any(|row| row.get(name).is_some_and(|v| values_equal(v, a)));
+                    if !held {
+                        self.push(
                         WalkFinding::new(
                             COMMAND_FIELD_CONFLICT,
                             format!(
@@ -1499,13 +1568,15 @@ impl CaseRun<'_> {
                         )
                         .schema_field(K::Command, command, name),
                     );
+                    }
                 }
             }
-            let ambiguity = ambiguous
-                .get(name)
-                .filter(|_| from_answer.is_none())
-                .cloned();
-            if let Some(rm) = &ambiguity {
+            let ambiguity: &[Key] = if from_answer.is_none() {
+                ambiguous_rms
+            } else {
+                &[]
+            };
+            for rm in ambiguity {
                 // Reported even when another source supplies the field: the
                 // disagreeing rows are still a gap in the model.
                 let unresolved = sources.is_empty() && required;
@@ -1544,7 +1615,7 @@ impl CaseRun<'_> {
                 values.insert(name.clone(), chosen);
                 continue;
             }
-            if ambiguity.is_some() {
+            if !ambiguity.is_empty() {
                 if required {
                     unsupplied.insert(name.clone());
                 }
@@ -2073,7 +2144,9 @@ fn keys_of<'a>(records: &'a [&'a Recorded]) -> impl Iterator<Item = &'a Key> {
 }
 
 fn is_terminal(transitions: &[(Key, Vec<Key>)], event: &Key) -> bool {
-    !transitions.iter().any(|(a, _)| a == event)
+    !transitions
+        .iter()
+        .any(|(a, next)| a == event && !next.is_empty())
 }
 
 /// Stand-in value for a field the runtime generates.
@@ -2367,6 +2440,33 @@ mod tests {
             map(json!({"review_id": "r-1"})),
         ];
         assert!(rows_mismatch(&impossible, &actual).is_some());
+    }
+
+    #[test]
+    fn an_after_entry_with_no_successor_is_terminal() {
+        let key = |slug: &str| Key {
+            namespace: "n".into(),
+            slug: slug.into(),
+            version: 1,
+        };
+        let transitions = vec![(key("a"), vec![key("b")]), (key("b"), vec![])];
+        assert!(!is_terminal(&transitions, &key("a")));
+        assert!(is_terminal(&transitions, &key("b")));
+    }
+
+    #[test]
+    fn extra_namespaces_add_to_the_cases_own() {
+        let cases = parse_cases(
+            "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: Specification\nmetadata: {namespace: local, name: c}\nspec: {}\n",
+            "inline",
+        )
+        .unwrap_or_default();
+        let extra = vec!["upstream".to_string()];
+        let scope = fetch_scope(&extra, &cases);
+        assert_eq!(
+            scope.into_iter().collect::<Vec<_>>(),
+            vec!["local", "upstream"]
+        );
     }
 
     #[test]

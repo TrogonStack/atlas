@@ -50,7 +50,8 @@ spec:
 
 Refs are `slug`, `namespace/slug` or `namespace/slug@version`. A bare slug
 resolves in the case's namespace, and an unpinned ref resolves to the
-latest version. Each part must be a valid id and a version a positive
+highest version that the model's latest entities pin, or else to the latest
+version. Each part must be a valid id and a version a positive
 integer; a malformed ref fails the case file instead of falling back to the
 latest version. References inside the model resolve to the exact version
 they pin. A `given` event may name an event in a namespace that is not
@@ -154,7 +155,7 @@ The MCP tool adds `skipped`, the entities the export path could not render.
 
 | Code | Severity | Title | Trigger |
 | --- | --- | --- | --- |
-| `WALK_REF_UNRESOLVED` | Error | Case names an entity the model lacks | A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the latest version. |
+| `WALK_REF_UNRESOLVED` | Error | Case names an entity the model lacks | A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the highest version the model's latest entities pin, or else to the latest version. |
 | `WALK_CASE_INVALID` | Error | Case is malformed | A step expects both an emit and a reject; state one of them, or neither to let the model decide. |
 | `WALK_VIA_NOT_ISSUER` | Error | `via` does not issue the command | A step's `via` names an AutomationSlice or UiSlice that does not issue the step's command (an automation must emit it; a UI slice must show the command slice's `ui`). |
 | `WALK_SCHEMA_OPAQUE` | Info | Schema not inspected | The entity's schema is a type-library message the walker cannot see into, so its fields are not checked; observed and answered values pass through unchecked. |

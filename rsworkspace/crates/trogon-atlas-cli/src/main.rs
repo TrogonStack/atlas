@@ -605,8 +605,8 @@ enum Cmd {
         /// fetching the model from the server.
         #[arg(short = 'f', long = "filename", num_args = 1.., conflicts_with = "namespaces")]
         filenames: Vec<PathBuf>,
-        /// Namespaces to fetch from the server; defaults to the namespaces
-        /// the cases name.
+        /// Namespaces to fetch from the server in addition to the ones the
+        /// cases name, for example an upstream namespace.
         #[arg(long = "namespace")]
         namespaces: Vec<String>,
     },

@@ -65,9 +65,9 @@ report as one `trogon-atlas.result.v1` document.
 
 ## Walk the live store
 
-Omit `-f` to walk the stored model. By default the command fetches the
-namespaces the cases name; pass `--namespace` (repeatable) to choose them,
-for example to include an upstream namespace. `--branch` walks a branch.
+Omit `-f` to walk the stored model. The command fetches the namespaces
+the cases name. Pass `--namespace` (repeatable) to fetch more, for example an
+upstream namespace. `--branch` walks a branch.
 
 From an agent, call the `walk_scenarios` MCP tool with `cases_yaml`. Set
 `manifests_yaml` to walk a proposed change without applying it.

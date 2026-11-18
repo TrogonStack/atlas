@@ -854,3 +854,53 @@ fn an_answer_no_eligible_row_holds_is_a_conflict() {
         .collect();
     assert_eq!(conflicts, vec!["schema.fields[score]"], "{report:#?}");
 }
+
+#[test]
+fn a_bare_ref_follows_the_version_the_live_model_pins() {
+    // approve-review@2 exists, but approve-review-slice still handles @1.
+    let report = walk_with(
+        &[format!(
+            "---\napiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: Command\nmetadata: {{name: approve-review, namespace: walk-reviews, version: 2}}\nspec:\n  title: approve-review\n{}  swimlane: {}\n",
+            schema(&["review_id", "score"]),
+            r("review")
+        )],
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 4}\n    expect: {emit: [review.approved]}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn an_answer_is_checked_against_every_ambiguous_read_model() {
+    // review-scores holds 3, review-queue does not: the answer still
+    // contradicts review-queue.
+    let report = walk_with(
+        &[
+            doc(
+                "ReadModel",
+                "review-scores",
+                &format!("  key: [review_id]\n{}", schema(&["review_id", "score"])),
+            ),
+            doc(
+                "AutomationSlice",
+                "auto-score",
+                &format!(
+                    "  emittedCommand: {{command: {}}}\n  processor: {{processor: {}}}\n  sourceReadModels: [{{readModel: {}}}]\n",
+                    r("approve-review"),
+                    r("auto-approver"),
+                    r("review-scores")
+                ),
+            ),
+        ],
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {review_id: r-1, score: 2}\n      - {review_id: r-2, score: 5}\n    - readModel: review-scores\n      rows:\n      - {review_id: r-1, score: 3}\n      - {review_id: r-2, score: 6}\n  steps:\n  - command: approve-review\n    answer: {score: 3}\n",
+    );
+    let conflicts: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_COMMAND_FIELD_CONFLICT")
+        .map(|f| f.message.as_str())
+        .collect();
+    assert!(
+        conflicts.iter().any(|m| m.contains("review-queue")),
+        "{report:#?}"
+    );
+}
