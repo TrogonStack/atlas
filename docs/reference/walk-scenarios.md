@@ -50,6 +50,8 @@ spec:
 
 Refs are `slug`, `namespace/slug` or `namespace/slug@version`. A bare slug
 resolves in the case's namespace, and an unpinned ref resolves to the
+latest version. Each part must be a valid id and a version a positive
+integer; a malformed ref fails the case file instead of falling back to the
 latest version. References inside the model resolve to the exact version
 they pin. A `given` event may name an event in a namespace that is not
 walked, so upstream events can feed local projections.
@@ -74,7 +76,8 @@ instead of being ignored.
 3. **Outcome.** The command slice's scenarios are matched against the
    stream's history: the scenario's `given` events must have occurred, in
    order, among the case's events correlated with the command (they share a
-   field and agree on every shared field), and the stream's last event must
+   field and agree on every shared field; derived and state placeholders
+   are left out of the comparison), and the stream's last event must
    be one of them. An empty `given` matches only an empty stream. The step's
    `expect` is compared against the matching scenarios. With no `expect`,
    a matching reject refuses the command, a matching emit emits its events,
@@ -89,8 +92,10 @@ instead of being ignored.
 6. **Projection.** Every latest-version ReadModelSlice that sources the event
    writes the row addressed by the read model's `key` (UPSERT copies the
    event's fields that the read model declares; DELETE removes the row).
-   For each slice scenario whose `when` events have now occurred, every
-   field its `then` payload names must be set on the row.
+   For each slice scenario whose `when` events have now occurred for this
+   row (events carrying the row's key values; every event for a keyless
+   read model), every field its `then` payload names must be set on the
+   row.
 
 Stream instances come from the swimlane's `stream_id` template, filled from
 the payload. After all cases, storyboards and command, read-model and

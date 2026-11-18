@@ -274,3 +274,50 @@ fn acme_reviews_example_walks() {
     assert!(found.is_empty(), "{report:#?}");
     assert!(report.cases.iter().all(|c| c.passed));
 }
+
+#[test]
+fn slice_scenarios_only_count_the_projected_rows_own_events() {
+    // r-1 is submitted and a different review, r-2, is approved: no single
+    // review went submitted -> approved, so the `approved` scenario of
+    // review-queue-decided is not walked.
+    let report = walk_text(&inline(
+        "  steps:\n  - command: submit-review\n    answer: {review_id: r-1, rating: 4}\n  - command: approve-review\n    answer: {review_id: r-2, score: 3}\n",
+    ));
+    let unwalked: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_SCENARIO_UNWALKED")
+        .map(|f| f.message.as_str())
+        .collect();
+    assert!(
+        unwalked
+            .iter()
+            .any(|m| m.contains("\"approved\"") && m.contains("review-queue-decided")),
+        "{unwalked:?}"
+    );
+}
+
+#[test]
+fn malformed_refs_are_refused_at_parse_time() {
+    for bad in [
+        "approve-review@2x",
+        "approve-review@0",
+        "/approve-review",
+        "ns/",
+    ] {
+        let err = walk::parse_cases(
+            &inline(&format!("  steps:\n  - command: {bad:?}\n")),
+            "inline",
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("steps[0].command"),
+            "{bad}: {err:#}"
+        );
+    }
+    assert!(walk::parse_cases(
+        &inline("  steps:\n  - command: walk-reviews/approve-review@1\n"),
+        "inline"
+    )
+    .is_ok());
+}

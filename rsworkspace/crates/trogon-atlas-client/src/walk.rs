@@ -720,6 +720,10 @@ pub fn parse_cases(text: &str, source: &str) -> Result<Vec<Case>> {
         }
         trogon_atlas_core::validate_id_component(&doc.metadata.namespace)
             .map_err(|e| crate::failure::invalid_input(format!("{at}: metadata.namespace: {e}")))?;
+        for (field, reference) in case_refs(&doc.spec) {
+            check_ref(reference)
+                .map_err(|e| crate::failure::invalid_input(format!("{at}: {field}: {e}")))?;
+        }
         cases.push(Case {
             source: at,
             namespace: doc.metadata.namespace,
@@ -728,6 +732,61 @@ pub fn parse_cases(text: &str, source: &str) -> Result<Vec<Case>> {
         });
     }
     Ok(cases)
+}
+
+/// Every entity ref a case names, with the field it came from.
+fn case_refs(spec: &CaseSpec) -> Vec<(String, &str)> {
+    let mut refs = Vec::new();
+    for (i, e) in spec.given.events.iter().enumerate() {
+        refs.push((format!("given.events[{i}].event"), e.event.as_str()));
+    }
+    push_rows(&mut refs, "given.readModels", &spec.given.read_models);
+    for (i, step) in spec.steps.iter().enumerate() {
+        refs.push((format!("steps[{i}].command"), step.command.as_str()));
+        if let Some(via) = &step.via {
+            refs.push((format!("steps[{i}].via"), via.as_str()));
+        }
+        for (j, e) in step.expect.emit.iter().flatten().enumerate() {
+            refs.push((format!("steps[{i}].expect.emit[{j}]"), e.as_str()));
+        }
+        push_rows(
+            &mut refs,
+            &format!("steps[{i}].expect.readModels"),
+            &step.expect.read_models,
+        );
+    }
+    push_rows(&mut refs, "then.readModels", &spec.then.read_models);
+    refs
+}
+
+fn push_rows<'a>(refs: &mut Vec<(String, &'a str)>, prefix: &str, list: &'a [RowsValue]) {
+    for (i, r) in list.iter().enumerate() {
+        refs.push((format!("{prefix}[{i}].readModel"), r.read_model.as_str()));
+    }
+}
+
+/// A ref is `slug`, `ns/slug` or `ns/slug@version`: each part a valid id
+/// component and the version a positive integer.
+fn check_ref(reference: &str) -> std::result::Result<(), String> {
+    let (path, version) = match reference.rsplit_once('@') {
+        Some((path, v)) => (path, Some(v)),
+        None => (reference, None),
+    };
+    if let Some(v) = version {
+        match v.parse::<u64>() {
+            Ok(n) if n >= 1 => {}
+            _ => return Err(format!("{reference:?}: version must be a positive integer")),
+        }
+    }
+    let parts: Vec<&str> = match path.split_once('/') {
+        Some((ns, slug)) => vec![ns, slug],
+        None => vec![path],
+    };
+    for part in parts {
+        trogon_atlas_core::validate_id_component(part)
+            .map_err(|e| format!("{reference:?}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Read cases from files or directories (walked for `.yaml`/`.yml`).
@@ -1014,7 +1073,11 @@ impl CaseRun<'_> {
                     None => row.extend(payload.clone()),
                 }
             }
-            self.check_slice_scenarios(slice_key, slice, &rm, &id, delete);
+            let row_key: Map<String, Value> = key_fields
+                .iter()
+                .filter_map(|k| Some((k.clone(), payload.get(k)?.clone())))
+                .collect();
+            self.check_slice_scenarios(slice_key, slice, &rm, &id, &row_key, delete);
         }
     }
 
@@ -1027,15 +1090,23 @@ impl CaseRun<'_> {
         slice: &Value,
         rm: &Key,
         row_id: &str,
+        row_key: &Map<String, Value>,
         delete: bool,
     ) {
         let Some(last) = self.log.last().map(|r| r.event.clone()) else {
             return;
         };
+        // Only events about this row count toward a scenario's `when`; a
+        // keyless read model has one row, so every event does.
+        let row_history: Vec<Key> = self
+            .log
+            .iter()
+            .filter(|r| row_key.is_empty() || correlates(&r.payload, row_key))
+            .map(|r| r.event.clone())
+            .collect();
         for scenario in arr(slice, "scenarios") {
             let when: Vec<Key> = edge_keys(scenario, "when", "event");
-            let log = self.log.iter().map(|r| &r.event);
-            if when.last() != Some(&last) || !is_subsequence(&when, log) {
+            if when.last() != Some(&last) || !is_subsequence(&when, &row_history) {
                 continue;
             }
             let scenario_id = str_at(scenario, "id").to_string();
@@ -1680,6 +1751,13 @@ fn derived_placeholder(kind: &str) -> Value {
     Value::String(format!("<derived:{kind}>"))
 }
 
+/// Whether `v` is a stand-in the walk put in place of a runtime value.
+fn is_placeholder(v: &Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        (s.starts_with("<derived:") || s.starts_with("<state:")) && s.ends_with('>')
+    })
+}
+
 fn source_rms(slice: &Value) -> Vec<Key> {
     edge_keys(slice, "sourceReadModels", "readModel")
 }
@@ -1707,10 +1785,16 @@ fn row_id(key_fields: &[String], payload: &Map<String, Value>) -> Option<String>
 
 /// An earlier event belongs to the same timeline as the command when they
 /// share at least one field and agree on every shared field.
+///
+/// Placeholders stand for values the runtime picks, so they say nothing about
+/// which timeline an event belongs to and are left out of the comparison.
 fn correlates(payload: &Map<String, Value>, values: &Map<String, Value>) -> bool {
     let mut shared = 0;
     for (k, v) in values {
-        if let Some(p) = payload.get(k) {
+        if is_placeholder(v) {
+            continue;
+        }
+        if let Some(p) = payload.get(k).filter(|p| !is_placeholder(p)) {
             if !values_equal(p, v) {
                 return false;
             }
@@ -1833,4 +1917,30 @@ fn coverage(
         }
     }
     cov
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn map(v: Value) -> Map<String, Value> {
+        let Value::Object(m) = v else { unreachable!() };
+        m
+    }
+
+    #[test]
+    fn placeholders_do_not_decide_correlation() {
+        let values = map(json!({"review_id": "r-1", "updated_at": "<derived:timestamp>"}));
+        // A real value for a field the command only has a placeholder for
+        // must not split the timeline.
+        let same = map(json!({"review_id": "r-1", "updated_at": "2026-01-01T00:00:00Z"}));
+        assert!(correlates(&same, &values));
+        // Matching placeholders alone must not join unrelated timelines.
+        let other = map(json!({"review_id": "r-2", "updated_at": "<derived:timestamp>"}));
+        assert!(!correlates(&other, &values));
+        let only_placeholder = map(json!({"updated_at": "<derived:timestamp>"}));
+        assert!(!correlates(&only_placeholder, &values));
+    }
 }
