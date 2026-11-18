@@ -207,6 +207,60 @@ one without a system still reports each field.
 - A read model that has both source events and an external source skips
   the check for every field, including fields its events should carry.
 
+## Automation inputs reported as dangling or ambiguous
+
+### Rule finding and evidence
+
+`CheckInformationCompleteness` matches each field of the command that an
+automation slice emits to the fields of the automation's source read models,
+by name. Two results looked wrong on a review lane. The automation
+`publish-approved` reads the read model `reviews` and emits the command
+`publish-review`:
+
+- `DANGLING_INPUT` on `reviews.status`. The automation reads `status` to
+  decide whether to fire, so the command never carries it.
+- `AMBIGUOUS_SOURCE` on `publish-review.review_id`. The read models
+  `reviews` and `assignments` both have a `review_id` field.
+
+### Rule change
+
+The checker now applies two rules on an automation link:
+
+- **Decision fields.** A source read-model field counts as consumed when the
+  slice's scenarios depend on it. The field's value in `given` must differ
+  between at least one scenario that issues the command (`then`) and one
+  that does not (`no_command`). A scenario with no `given` row for the
+  read model differs from one that has a row, so every field of that read
+  model counts. The checker compares only top-level fields of
+  `google.protobuf.Struct` payloads, and only values that the scenarios
+  state. A field that never varies, or a slice with no `no_command`
+  scenario, still reports `DANGLING_INPUT`.
+- **Join keys.** When every upstream match for a command field is a field
+  named in the `key` of its own read model, the matches are one source. The
+  field reports no `AMBIGUOUS_SOURCE`, counts as traced and marks every
+  match as consumed. If the same name is not a key in one of the read
+  models, the finding stays, because the two rows can have different values.
+
+Command slices and read-model slices are not affected. Gap kinds and
+confidence values do not change.
+
+### Repair when the finding remains
+
+- For a guard field that reports `DANGLING_INPUT`, add one scenario that
+  fires the command and one that does not, with different values of the
+  guard in `given`. Do not copy the guard onto the command.
+- For an ambiguous name that is a real join key, declare it in each read
+  model's `key`. If the read models can have different values for it,
+  rename one field so the source is explicit.
+
+### Remaining limits
+
+- A `given` payload that is a generated message, not a `Struct`, is not
+  compared, so its fields stay dangling.
+- A field nested inside a payload value is not compared.
+- `InferDataFlow` still lists every same-name match with its ambiguity
+  confidence. Only the completeness check applies the join-key rule.
+
 ## One problem space, contexts realize across namespaces
 
 ### Strategic findings and evidence
