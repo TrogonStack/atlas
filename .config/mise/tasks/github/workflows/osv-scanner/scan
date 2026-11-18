@@ -12,7 +12,7 @@ chrono_is_inactive() {
       packages=$(cargo tree --manifest-path "${lockfile%Cargo.lock}Cargo.toml" \
         --locked --workspace --all-features --target all --edges normal,build,dev \
         --prefix none --format '{p}' --color never) || return 1
-      if grep -q '^chrono v' <<< "$packages"; then
+      if grep -q '^chrono v' <<<"$packages"; then
         return 1
       fi
     done
@@ -24,8 +24,8 @@ if chrono_is_inactive; then
   # Keep scanning every lockfile and omit only this advisory after proving it inactive.
   scanner_config=$(mktemp) || exit 1
   trap 'rm -f "$scanner_config"' EXIT
-  cat rsworkspace/osv-scanner.toml > "$scanner_config" || exit 1
-  cat >> "$scanner_config" <<'TOML' || exit 1
+  cat rsworkspace/osv-scanner.toml >"$scanner_config" || exit 1
+  cat >>"$scanner_config" <<'TOML' || exit 1
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0543"
