@@ -233,6 +233,23 @@ async fn fetch_namespace_entities(client: &mut Client, namespace: &str) -> Resul
     Ok(entities)
 }
 
+/// Render `entities` as manifest documents, returning the labels of the
+/// ones that could not be rendered so callers never drop them silently.
+pub(crate) fn entities_to_docs(
+    entities: &[pb::Entity],
+    types: &TranscodePool,
+) -> (Vec<Value>, Vec<String>) {
+    let mut docs = Vec::new();
+    let mut skipped = Vec::new();
+    for entity in entities {
+        match entity_to_manifest(entity, types) {
+            Ok((_, _, doc)) => docs.push(doc),
+            Err(err) => skipped.push(format!("{}: {err:#}", entity_label(entity))),
+        }
+    }
+    (docs, skipped)
+}
+
 /// Fetch every entity version in `namespace` as manifest documents (the
 /// JSON `export` writes as YAML), plus the labels of entities that could
 /// not be rendered.
@@ -242,15 +259,7 @@ pub async fn namespace_manifest_docs(
 ) -> Result<(Vec<Value>, Vec<String>)> {
     let entities = fetch_namespace_entities(client, namespace).await?;
     let types = namespace_types(client, namespace).await?;
-    let mut docs = Vec::new();
-    let mut skipped = Vec::new();
-    for entity in &entities {
-        match entity_to_manifest(entity, &types) {
-            Ok((_, _, doc)) => docs.push(doc),
-            Err(err) => skipped.push(format!("{}: {err:#}", entity_label(entity))),
-        }
-    }
-    Ok((docs, skipped))
+    Ok(entities_to_docs(&entities, &types))
 }
 
 fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {

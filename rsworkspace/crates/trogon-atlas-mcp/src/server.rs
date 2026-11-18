@@ -2620,16 +2620,7 @@ impl McpServer {
                 resolved.manifests.into_iter().map(|m| m.entity).collect();
             trogon_atlas_client::walk::Model::from_entities(&entities, &resolved.types)
         } else {
-            let mut namespaces = p.namespaces;
-            if namespaces.is_empty() {
-                namespaces = cases.iter().map(|c| c.namespace.clone()).collect();
-                namespaces.sort();
-                namespaces.dedup();
-            }
-            for namespace in &namespaces {
-                validate_id_component("namespaces", namespace)?;
-            }
-            trogon_atlas_client::walk::Model::fetch(&mut client, &namespaces)
+            trogon_atlas_client::walk::Model::fetch(&mut client, &p.namespaces, &cases)
                 .await
                 .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?
         };

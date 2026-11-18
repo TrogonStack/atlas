@@ -579,21 +579,10 @@ async fn run(
         } => {
             let cases = walk::read_case_paths(&cases)?;
             let model = if filenames.is_empty() {
-                let mut namespaces = namespaces;
-                if namespaces.is_empty() {
-                    namespaces = cases.iter().map(|c| c.namespace.clone()).collect();
-                    namespaces.sort();
-                    namespaces.dedup();
-                }
-                for namespace in &namespaces {
-                    trogon_atlas_core::validate_id_component(namespace).map_err(|e| {
-                        trogon_atlas_client::failure::invalid_input(format!("namespace {e}"))
-                    })?;
-                }
                 let mut client =
                     connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
                         .await?;
-                let (model, skipped) = walk::Model::fetch(&mut client, &namespaces).await?;
+                let (model, skipped) = walk::Model::fetch(&mut client, &namespaces, &cases).await?;
                 for line in &skipped {
                     eprintln!("skipped (not walked): {line}");
                 }
