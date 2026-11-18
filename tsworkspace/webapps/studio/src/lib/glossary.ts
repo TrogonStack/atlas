@@ -39,6 +39,7 @@ export interface GlossaryIndexEntry {
   ownerUid?: string;
   etag?: string;
   title?: string;
+  summary?: string;
   audience?: string;
   state?: GlossaryEntryState;
   published?: boolean;

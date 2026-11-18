@@ -221,6 +221,9 @@ export function GlossaryPage() {
                                     <span className="text-sm font-medium">
                                       {entry.title || id?.slug || 'Entry unavailable'}
                                     </span>
+                                    {entry.summary ? (
+                                      <span className="text-sm text-muted-foreground">{entry.summary}</span>
+                                    ) : null}
                                     <span className="break-all font-mono text-[10px] text-muted-foreground">
                                       {id ? glossaryIdLabel(id) : 'Exact identity unavailable'}
                                     </span>
