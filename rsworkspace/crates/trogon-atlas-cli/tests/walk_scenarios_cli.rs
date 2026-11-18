@@ -69,3 +69,11 @@ fn a_malformed_case_file_is_a_validation_failure() {
     let out = walk_cases(&bad, &[]);
     assert_eq!(out.status.code(), Some(5), "{out:?}");
 }
+
+#[test]
+fn case_paths_with_no_case_are_a_validation_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("empty.yaml"), "---\n").unwrap();
+    let out = walk_cases(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(5), "{out:?}");
+}

@@ -141,7 +141,7 @@ The report also carries `cases` (per case: steps, error and warning counts,
 `passed`) and `coverage` (storyboards and scenarios walked out of the total).
 The MCP tool adds `skipped`, the entities the export path could not render.
 `trogon-atlas walk-scenarios` exits `1` when any error is reported, and
-`5` for an invalid case file
+`5` for an invalid case file or case paths that hold no case
 (see [exit codes](trogon-atlas-exit-codes.md)).
 
 ## Findings

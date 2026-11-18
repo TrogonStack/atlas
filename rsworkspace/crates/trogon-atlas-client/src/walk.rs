@@ -824,6 +824,10 @@ pub fn read_case_paths(paths: &[PathBuf]) -> Result<Vec<Case>> {
             .with_context(|| format!("reading {}", file.display()))?;
         cases.extend(parse_cases(&text, &file.display().to_string())?);
     }
+    // A path with no case would otherwise pass as a clean walk in CI.
+    if cases.is_empty() {
+        crate::invalid_input!("no Specification document found in the case paths");
+    }
     Ok(cases)
 }
 
