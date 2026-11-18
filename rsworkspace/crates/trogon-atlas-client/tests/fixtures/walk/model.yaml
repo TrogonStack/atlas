@@ -1,0 +1,566 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: review
+  namespace: walk-reviews
+spec:
+  state:
+  - name: status
+    type:
+      string: {}
+  streamId: review-{review_id}
+  title: Review
+  transitions:
+  - after:
+      id:
+        namespace: walk-reviews
+        slug: review.submitted
+        version: '1'
+    next:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.approved
+          version: '1'
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.rejected
+          version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: review.submitted
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: rating
+      type:
+        int: {}
+    - name: status
+      type:
+        string: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: review.submitted
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: review.approved
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: score
+      type:
+        int: {}
+    - name: status
+      type:
+        string: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: review.approved
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: review.rejected
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: status
+      type:
+        string: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: review.rejected
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: submit-review
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: rating
+      type:
+        int: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: submit-review
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: approve-review
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: score
+      type:
+        int: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: approve-review
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: reject-review
+  namespace: walk-reviews
+spec:
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+  swimlane:
+    id:
+      namespace: walk-reviews
+      slug: review
+      version: '1'
+  title: reject-review
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: review-queue
+  namespace: walk-reviews
+spec:
+  key:
+  - review_id
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: review_id
+      type:
+        string: {}
+    - name: status
+      type:
+        string: {}
+    - name: score
+      type:
+        int: {}
+  sourceEvents:
+  - id:
+      namespace: walk-reviews
+      slug: review.submitted
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: review.approved
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: review.rejected
+      version: '1'
+  title: Review queue
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: review-queue-submitted
+  namespace: walk-reviews
+spec:
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: walk-reviews
+        slug: review-queue
+        version: '1'
+  scenarios:
+  - id: queued
+    then:
+      payload:
+        '@type': type.googleapis.com/google.protobuf.Struct
+        value:
+          review_id: r-1
+          status: submitted
+      readModel:
+        id:
+          namespace: walk-reviews
+          slug: review-queue
+          version: '1'
+    title: Submitted review is queued
+    when:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.submitted
+          version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.submitted
+        version: '1'
+  title: Queue a submitted review
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: review-queue-decided
+  namespace: walk-reviews
+spec:
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: walk-reviews
+        slug: review-queue
+        version: '1'
+  scenarios:
+  - id: approved
+    then:
+      payload:
+        '@type': type.googleapis.com/google.protobuf.Struct
+        value:
+          review_id: r-1
+          score: 4.0
+          status: approved
+      readModel:
+        id:
+          namespace: walk-reviews
+          slug: review-queue
+          version: '1'
+    title: Approved review shows its score
+    when:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.submitted
+          version: '1'
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.approved
+          version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.approved
+        version: '1'
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.rejected
+        version: '1'
+  title: Record the decision
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: submit-review-slice
+  namespace: walk-reviews
+spec:
+  command:
+    command:
+      id:
+        namespace: walk-reviews
+        slug: submit-review
+        version: '1'
+  emittedEvents:
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.submitted
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: walk-reviews
+        slug: reviewer
+        version: '1'
+  scenarios:
+  - emit:
+      events:
+      - event:
+          id:
+            namespace: walk-reviews
+            slug: review.submitted
+            version: '1'
+    id: first
+    title: First submission
+    when:
+      command:
+        id:
+          namespace: walk-reviews
+          slug: submit-review
+          version: '1'
+  title: Submit review
+  ui:
+    ui:
+      id:
+        namespace: walk-reviews
+        slug: review-form
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: approve-review-slice
+  namespace: walk-reviews
+spec:
+  command:
+    command:
+      id:
+        namespace: walk-reviews
+        slug: approve-review
+        version: '1'
+  emittedEvents:
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.approved
+        version: '1'
+  scenarios:
+  - emit:
+      events:
+      - event:
+          id:
+            namespace: walk-reviews
+            slug: review.approved
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.submitted
+          version: '1'
+    id: approve
+    title: Submitted review is approved
+    when:
+      command:
+        id:
+          namespace: walk-reviews
+          slug: approve-review
+          version: '1'
+  - given:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.approved
+          version: '1'
+    id: already-approved
+    reject:
+      reasonCode: ALREADY_DECIDED
+    title: Approving twice is refused
+    when:
+      command:
+        id:
+          namespace: walk-reviews
+          slug: approve-review
+          version: '1'
+  title: Approve review
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: reject-review-slice
+  namespace: walk-reviews
+spec:
+  command:
+    command:
+      id:
+        namespace: walk-reviews
+        slug: reject-review
+        version: '1'
+  emittedEvents:
+  - event:
+      id:
+        namespace: walk-reviews
+        slug: review.rejected
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: walk-reviews
+        slug: moderator
+        version: '1'
+  scenarios:
+  - emit:
+      events:
+      - event:
+          id:
+            namespace: walk-reviews
+            slug: review.rejected
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: walk-reviews
+          slug: review.submitted
+          version: '1'
+    id: reject
+    title: Submitted review is rejected
+    when:
+      command:
+        id:
+          namespace: walk-reviews
+          slug: reject-review
+          version: '1'
+  title: Reject review
+  ui:
+    ui:
+      id:
+        namespace: walk-reviews
+        slug: moderation-screen
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: auto-approve
+  namespace: walk-reviews
+spec:
+  emittedCommand:
+    command:
+      id:
+        namespace: walk-reviews
+        slug: approve-review
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: walk-reviews
+        slug: auto-approver
+        version: '1'
+  scenarios:
+  - given:
+    - readModel:
+        id:
+          namespace: walk-reviews
+          slug: review-queue
+          version: '1'
+    id: queued
+    then:
+      command:
+        id:
+          namespace: walk-reviews
+          slug: approve-review
+          version: '1'
+    title: Queued review is approved
+    whenDoc: A queued review scores above the threshold.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: walk-reviews
+        slug: review-queue
+        version: '1'
+  title: Auto-approve
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: UiSlice
+metadata:
+  name: moderation-screen-slice
+  namespace: walk-reviews
+spec:
+  persona:
+    persona:
+      id:
+        namespace: walk-reviews
+        slug: moderator
+        version: '1'
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: walk-reviews
+        slug: review-queue
+        version: '1'
+  title: Moderation screen
+  ui:
+    ui:
+      id:
+        namespace: walk-reviews
+        slug: moderation-screen
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: approval-flow
+  namespace: walk-reviews
+spec:
+  slices:
+  - id:
+      namespace: walk-reviews
+      slug: submit-review-slice
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: review-queue-submitted
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: auto-approve
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: approve-review-slice
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: review-queue-decided
+      version: '1'
+  title: Approval flow
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: moderation-flow
+  namespace: walk-reviews
+spec:
+  slices:
+  - id:
+      namespace: walk-reviews
+      slug: moderation-screen-slice
+      version: '1'
+  - id:
+      namespace: walk-reviews
+      slug: reject-review-slice
+      version: '1'
+  title: Moderation flow

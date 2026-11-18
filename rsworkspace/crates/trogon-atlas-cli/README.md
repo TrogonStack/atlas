@@ -25,6 +25,7 @@ trogon-atlas openslo export --namespace shop -o shop.openslo.yaml --bindings ope
 trogon-atlas fmt manifests/                       # canonical YAML to stdout (single file) or report via --check
 trogon-atlas fmt manifests/ --write               # rewrite files in place
 trogon-atlas fmt manifests/ --check               # CI gate: exit 1 and list files that would change
+trogon-atlas walk-scenarios -f manifests/ --cases specifications/ # walk example cases offline, exit 1 on error findings
 ```
 
 Connection flags (or environment):
@@ -218,6 +219,16 @@ trogon-atlas fmt manifests/ --write          # rewrite every changed file in pla
 trogon-atlas fmt manifests/ --check          # CI gate: list files that would change, exit 1 if any would
 trogon-atlas fmt manifests/foo.yaml --force  # canonicalize anyway, dropping comments
 ```
+
+## Walking example cases
+
+`trogon-atlas walk-scenarios` plays `Specification` cases (initial values,
+ordered command steps, expected read-model rows) through the model and
+prints validation-shaped findings, one per line, with the case and step
+that produced each. With `-f` it walks manifest files offline; without it,
+it fetches the cases' namespaces (or `--namespace`) from the server. See
+`../../../docs/how-to/walk-scenarios.md` and
+`../../../docs/reference/walk-scenarios.md`.
 
 ## Editor completion and validation
 

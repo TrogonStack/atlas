@@ -750,6 +750,25 @@ pub struct ExportNamespaceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct WalkScenariosParams {
+    #[schemars(
+        description = "One or more `Specification` case documents (separated by `---`, apiVersion eventmodel.atlas.trogonstack.com/v1alpha1, kind Specification). Each spec has `given` (initial `events` with payloads and external `readModels` rows), ordered `steps` (`command`, optional `via` automation or UI slice, `answer` with the external values the command receives, and `expect` with `emit` event refs or a `reject` reason code plus `readModels` rows), and `then.readModels` rows expected at the end. Refs are `slug`, `namespace/slug` or `namespace/slug@version`."
+    )]
+    pub cases_yaml: String,
+    #[schemars(
+        description = "Namespaces whose stored entities form the walked model. Defaults to the namespaces the cases name. Ignored when manifests_yaml is set."
+    )]
+    #[serde(default)]
+    pub namespaces: Vec<String>,
+    #[schemars(
+        description = "Walk these manifest documents (as accepted by apply_manifests) instead of the stored model, e.g. to check a proposed change before applying it."
+    )]
+    #[serde(default)]
+    pub manifests_yaml: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportOpensloParams {
     #[schemars(
         description = "Namespace to export: its ServiceLevelIndicators, ServiceLevelObjectives, AlertPolicies, AlertNotificationTargets, and referenced Components, rendered as OpenSLO v1 multi-document YAML."

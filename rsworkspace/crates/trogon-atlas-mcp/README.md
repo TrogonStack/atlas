@@ -46,6 +46,12 @@ JSON view is easier to consume). The previous behavior, embedding
 Rust's `Debug` output alongside the binpb, was removed because that
 format is not wire-stable.
 
+Tools built on `trogon-atlas-client` rather than a single RPC
+(`apply_manifests`, `diff_manifests`, `export_namespace`, `export_openslo`,
+`walk_scenarios`) return plain JSON instead. `walk_scenarios` returns the
+walk report: `cases`, `findings` in the validation finding shape, and
+`coverage` (see `../../../docs/reference/walk-scenarios.md`).
+
 ## Error contract
 
 Internal helpers (`descriptor_for`, `message_from_json`,

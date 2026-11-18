@@ -1,0 +1,29 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Specification
+metadata:
+  namespace: acme-reviews
+  name: order-42-review
+spec:
+  title: Delivered order 42 becomes eligible, then its buyer reviews it
+  given:
+    events:
+    - event: acme-storefront/order.fulfilled
+      payload: {order_id: o-42, buyer_id: b-7, seller_id: s-3}
+  steps:
+  - command: grant-review-eligibility
+    expect:
+      emit: [review-eligibility.granted]
+      readModels:
+      - readModel: orders.delivered-unreviewed
+        rows: []
+      - readModel: eligible-reviews
+        rows:
+        - {order_id: o-42, buyer_id: b-7, seller_id: s-3}
+  - command: submit-review
+    answer: {rating: 4, comment: Arrived on time.}
+    expect:
+      emit: [review.submitted]
+  then:
+    readModels:
+    - readModel: eligible-reviews
+      rows: []

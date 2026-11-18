@@ -1,0 +1,69 @@
+# Cases for model.yaml. Each document is one `Specification`: initial
+# values, ordered steps, expected read-model rows.
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Specification
+metadata:
+  namespace: walk-reviews
+  name: approve-review-42
+spec:
+  title: Submit review 42 with score 4, then approve it
+  steps:
+  - command: submit-review
+    answer: {review_id: r-42, rating: 4, status: submitted}
+    expect:
+      emit: [review.submitted]
+      readModels:
+      - readModel: review-queue
+        rows:
+        - {review_id: r-42, status: submitted}
+  - command: approve-review
+    via: auto-approve
+    answer: {status: approved}
+    expect:
+      emit: [review.approved]
+  then:
+    readModels:
+    - readModel: review-queue
+      rows:
+      - {review_id: r-42, status: approved, score: 4}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Specification
+metadata:
+  namespace: walk-reviews
+  name: reject-review-7
+spec:
+  title: A moderator rejects review 7
+  steps:
+  - command: submit-review
+    answer: {review_id: r-7, rating: 1, status: submitted}
+  - command: reject-review
+    answer: {status: rejected}
+  then:
+    readModels:
+    - readModel: review-queue
+      rows:
+      - {review_id: r-7, status: rejected}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Specification
+metadata:
+  namespace: walk-reviews
+  name: reject-after-approve
+spec:
+  title: An approved review cannot be rejected
+  given:
+    events:
+    - event: review.submitted
+      payload: {review_id: r-9, rating: 5, status: submitted}
+    - event: review.approved
+      payload: {review_id: r-9, score: 5, status: approved}
+  steps:
+  - command: approve-review
+    answer: {review_id: r-9, score: 5}
+  - command: reject-review
+    answer: {review_id: r-9, status: rejected}
+    expect:
+      reject: ALREADY_DECIDED
+  - command: reject-review
+    answer: {review_id: r-9, status: rejected}

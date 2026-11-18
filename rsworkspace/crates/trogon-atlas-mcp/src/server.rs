@@ -31,7 +31,7 @@ use crate::{
         PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
         ResolveTypeParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
         SliceProjectionParams, SupersessionChainParams, UpdateBranchParams,
-        ValidateEventModelParams, ValidateProjectParams,
+        ValidateEventModelParams, ValidateProjectParams, WalkScenariosParams,
     },
 };
 
@@ -458,6 +458,14 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     },
     ToolPolicy {
         tool: "export_namespace",
+        rpcs: &["ListEntities"],
+        min_role: ToolRole::Reader,
+    },
+    // walk_scenarios reads the model through the export path
+    // (trogon_atlas_client::export::namespace_manifest_docs) and walks it
+    // client-side; it never writes.
+    ToolPolicy {
+        tool: "walk_scenarios",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
     },
@@ -2583,6 +2591,55 @@ impl McpServer {
         })
         .to_string();
         Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+    }
+
+    #[tool(
+        description = "Walk example cases through the event model: play each Specification's given values and ordered command steps against the model and report, in the validation finding shape (severity, code, message, subject, subjectField, rule context, plus case and 1-based step), where the model fails to carry the data. Checks per step: lifecycle legality against Swimlane.transitions, command fields supplied by the read models the issuing UI or automation observes or by the step's answer (conflicts flagged), event fields sourced from the command, earlier stream events, swimlane state or a DerivedFieldAnnotation, read-model projections against slice scenarios and the case's expected rows, and rejects (a command after a terminal event must be refused by a reject scenario). Also reports storyboards and scenarios no case walked. Returns {cases, findings, coverage}; it never writes.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn walk_scenarios(
+        &self,
+        Parameters(p): Parameters<WalkScenariosParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let cases = trogon_atlas_client::walk::parse_cases(&p.cases_yaml, "walk_scenarios")
+            .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let mut client = self.client();
+        let (model, skipped) = if let Some(manifests) = &p.manifests_yaml {
+            let documents = trogon_atlas_client::manifest::read_str(manifests, "walk_scenarios")
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+            let resolved =
+                trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
+                    .await
+                    .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+            let entities: Vec<pb::Entity> =
+                resolved.manifests.into_iter().map(|m| m.entity).collect();
+            trogon_atlas_client::walk::Model::from_entities(&entities, &resolved.types)
+        } else {
+            let mut namespaces = p.namespaces;
+            if namespaces.is_empty() {
+                namespaces = cases.iter().map(|c| c.namespace.clone()).collect();
+                namespaces.sort();
+                namespaces.dedup();
+            }
+            for namespace in &namespaces {
+                validate_id_component("namespaces", namespace)?;
+            }
+            trogon_atlas_client::walk::Model::fetch(&mut client, &namespaces)
+                .await
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?
+        };
+        let report = trogon_atlas_client::walk::walk(&model, &cases);
+        let mut body = serde_json::to_value(&report)
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        body["skipped"] = serde_json::json!(skipped);
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
     }
 
     #[tool(

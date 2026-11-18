@@ -22,6 +22,10 @@ trogon-atlas diff  -f examples/manifests/acme-storefront/            # exit 1 on
 `acme-reviews` references entities in `acme-storefront`, so apply them
 together or apply the storefront first.
 
+Example cases that walk these models with concrete data live in
+[`../specifications`](../specifications/). See
+[walk scenarios](../../docs/how-to/walk-scenarios.md).
+
 Every file here is checked against the generated manifest schema by the
 `trogon-atlas-client` tests, and the server's account deletion fixture test
 applies `acme-customer-data-deletion` end to end.
