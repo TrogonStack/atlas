@@ -796,11 +796,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Writer,
         area: ToolArea::Model,
     },
-    // apply_manifests plans with BatchGetEntities, then writes through
-    // BatchMutate (trogon_atlas_client::apply::plan / apply).
+    // apply_manifests plans with BatchGetEntities (and ListEntities when
+    // pruning), then writes through BatchMutate
+    // (trogon_atlas_client::apply::plan / plan_with_prune / apply).
     ToolPolicy {
         tool: "apply_manifests",
-        rpcs: &["BatchGetEntities", "BatchMutate"],
+        rpcs: &["BatchGetEntities", "ListEntities", "BatchMutate"],
         min_role: ToolRole::Writer,
         area: ToolArea::Model,
     },
@@ -808,7 +809,7 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     // never calls apply, so it never reaches BatchMutate.
     ToolPolicy {
         tool: "diff_manifests",
-        rpcs: &["BatchGetEntities"],
+        rpcs: &["BatchGetEntities", "ListEntities"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
@@ -5483,7 +5484,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state. A dry run that sends a batch and has it validated also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal). It is absent when every manifest is unchanged (no batch is sent) or when the server could not compute it; an absent delta never means no findings changed.",
+        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set prune to also delete entities the manifests no longer declare within the namespaces they cover. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state. A dry run that sends a batch and has it validated also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal). It is absent when every manifest is unchanged (no batch is sent) or when the server could not compute it; an absent delta never means no findings changed.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -5505,9 +5506,12 @@ impl McpServer {
             trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
                 .await
                 .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
-            .await
-            .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let plan = if p.prune {
+            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests).await
+        } else {
+            trogon_atlas_client::apply::plan(&mut client, resolved.manifests).await
+        }
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let outcome = trogon_atlas_client::apply::apply(
             &mut client,
             plan,
@@ -5557,9 +5561,12 @@ impl McpServer {
             trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
                 .await
                 .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
-            .await
-            .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let plan = if p.prune {
+            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests).await
+        } else {
+            trogon_atlas_client::apply::plan(&mut client, resolved.manifests).await
+        }
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let (diff, changed) = trogon_atlas_client::apply::render_diff(&plan, &resolved.types)
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let body = serde_json::json!({ "changed": changed, "diff": diff }).to_string();

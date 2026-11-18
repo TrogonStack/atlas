@@ -10,6 +10,11 @@
 // writer overtook is refused as a `StalePlan` instead of overwriting them.
 // A server too old to report revisions can still be diffed, but a plan made
 // against it is refused at apply time rather than written unguarded.
+//
+// With pruning (`plan_with_prune`), entities the manifest set no longer
+// declares, inside the namespaces it covers, become guarded deletes in the
+// same batch. The server refuses the whole batch if anything left behind
+// would still reference a pruned entity.
 
 use std::fmt;
 
@@ -30,6 +35,9 @@ pub enum Action {
     Create,
     Configure,
     Unchanged,
+    /// Live entity the manifest set no longer declares, inside a namespace
+    /// it covers; deleted by `apply` (only produced by `plan_with_prune`).
+    Prune,
 }
 
 impl Action {
@@ -40,6 +48,8 @@ impl Action {
             (Action::Configure, false) => "configured",
             (Action::Configure, true) => "configured (server dry run)",
             (Action::Unchanged, _) => "unchanged",
+            (Action::Prune, false) => "pruned",
+            (Action::Prune, true) => "pruned (server dry run)",
         }
     }
 }
@@ -85,6 +95,8 @@ pub fn classify(desired: &pb::Entity, current: Option<&pb::Entity>) -> Action {
 
 #[derive(Debug)]
 pub struct PlannedChange {
+    /// The declared manifest. For `Action::Prune` there is none: this holds
+    /// the live entity instead, with `source` set to [`PRUNE_SOURCE`].
     pub manifest: LoadedManifest,
     pub action: Action,
     pub current: Option<pb::Entity>,
@@ -190,6 +202,139 @@ pub async fn plan(
             })
         })
         .collect()
+}
+
+/// `LoadedManifest.source` of a pruned entity: it comes from the live store,
+/// not from any manifest file.
+pub const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
+
+/// [`plan`], plus one `Action::Prune` change for every live entity (any
+/// kind, any version) in a namespace the manifest set covers that the set
+/// does not declare. Prunes follow the declared changes, sorted by label.
+///
+/// The scope is the set's namespaces and nothing else: a namespace no
+/// manifest names is never touched, and an empty manifest set prunes
+/// nothing. Each prune is guarded by the revision it was planned against.
+pub async fn plan_with_prune(
+    client: &mut Client,
+    manifests: Vec<LoadedManifest>,
+) -> Result<Vec<PlannedChange>> {
+    let mut changes = plan(client, manifests).await?;
+    let declared: std::collections::HashSet<pb::EntityKey> = changes
+        .iter()
+        .map(|c| pb::EntityKey::new(c.manifest.kind, &c.manifest.id))
+        .collect();
+    let namespaces: std::collections::BTreeSet<String> = changes
+        .iter()
+        .map(|c| c.manifest.id.namespace.clone())
+        .collect();
+
+    let mut undeclared: Vec<(pb::EntityKind, pb::Id)> = Vec::new();
+    for namespace in &namespaces {
+        for entity in list_namespace(client, namespace).await? {
+            let (Some(kind), Some(id)) = (
+                trogon_atlas_core::refs::entity_kind(&entity),
+                trogon_atlas_core::refs::entity_id(&entity),
+            ) else {
+                bail!("server listed an entity without a kind or id in namespace {namespace:?}");
+            };
+            if !declared.contains(&pb::EntityKey::new(kind, id)) {
+                undeclared.push((kind, id.clone()));
+            }
+        }
+    }
+    undeclared.sort_by_cached_key(|(kind, id)| pb::canonical::id_string(*kind, id));
+    undeclared.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    if undeclared.is_empty() {
+        return Ok(changes);
+    }
+
+    // Read each one back for the revision that guards its delete.
+    let keys = undeclared
+        .iter()
+        .map(|(kind, id)| pb::EntityRef {
+            kind: *kind as i32,
+            id: Some(id.clone()),
+        })
+        .collect();
+    let resp = client
+        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
+        .await
+        .context("BatchGetEntities failed")?
+        .into_inner();
+    if resp.found.len() != undeclared.len() || resp.entities.len() != undeclared.len() {
+        bail!(
+            "server returned {} entities / {} found flags for {} keys",
+            resp.entities.len(),
+            resp.found.len(),
+            undeclared.len()
+        );
+    }
+    let etags = if resp.etags.is_empty() {
+        vec![String::new(); undeclared.len()]
+    } else {
+        resp.etags
+    };
+    if etags.len() != undeclared.len() {
+        bail!(
+            "server returned {} etags for {} keys",
+            etags.len(),
+            undeclared.len()
+        );
+    }
+    for ((kind, id), ((entity, found), etag)) in undeclared
+        .into_iter()
+        .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
+    {
+        // Deleted between the listing and the read: nothing left to prune.
+        if !found {
+            continue;
+        }
+        // An empty etag on a found entity means a server too old to report
+        // revisions; `apply` refuses to write that unguarded.
+        let observed = match Revision::from_wire(&etag)? {
+            Revision::Absent => None,
+            revision @ Revision::At(_) => Some(revision),
+        };
+        changes.push(PlannedChange {
+            manifest: LoadedManifest {
+                source: PRUNE_SOURCE.into(),
+                kind,
+                id,
+                entity: entity.clone(),
+            },
+            action: Action::Prune,
+            current: Some(entity),
+            observed,
+        });
+    }
+    Ok(changes)
+}
+
+/// Every version of every entity in `namespace`, on the client's branch.
+async fn list_namespace(client: &mut Client, namespace: &str) -> Result<Vec<pb::Entity>> {
+    let mut entities = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let resp = client
+            .list_entities(pb::ListEntitiesRequest {
+                kinds: vec![],
+                namespaces: vec![namespace.to_string()],
+                latest_versions_only: false,
+                page_size: 200,
+                page_token: page_token.clone(),
+                lifecycle_status_in: vec![],
+                lifecycle_status_not_in: vec![],
+            })
+            .await
+            .context("ListEntities failed")?
+            .into_inner();
+        entities.extend(resp.entities);
+        if resp.next_page_token.is_empty() {
+            return Ok(entities);
+        }
+        page_token = resp.next_page_token;
+    }
 }
 
 /// Refuse a board import whose target lacks a foreign entity the board
@@ -551,6 +696,19 @@ pub async fn apply(
                         id_label(&c.manifest)
                     );
                 };
+                if c.action == Action::Prune {
+                    // FAIL_IF_REFERENCED: the server refuses the batch if
+                    // anything it leaves behind still references this one.
+                    return Ok(pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: c.manifest.kind as i32,
+                            id: Some(c.manifest.id.clone()),
+                            mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                            if_match: observed.to_wire(),
+                            operation_id: String::new(),
+                        })),
+                    });
+                }
                 Ok(pb::BatchMutateOp {
                     op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
                         entity: Some(c.manifest.entity.clone()),
@@ -645,7 +803,11 @@ pub fn render_diff(plan: &[PlannedChange], types: &TranscodePool) -> Result<(Str
             Some(current) => types.entity_to_json(&strip_system(current))? + "\n",
             None => String::new(),
         };
-        let after = types.entity_to_json(&c.manifest.entity)? + "\n";
+        let after = if c.action == Action::Prune {
+            String::new()
+        } else {
+            types.entity_to_json(&c.manifest.entity)? + "\n"
+        };
         let diff = similar::TextDiff::from_lines(&before, &after);
         let _ = write!(
             out,

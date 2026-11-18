@@ -261,6 +261,12 @@ enum Cmd {
         /// and `validate-project`.
         #[arg(long)]
         dry_run: bool,
+        /// Also delete live entities the manifest set no longer declares,
+        /// within the namespaces it covers (every kind and version), in the
+        /// same batch. Refused if anything left behind still references a
+        /// pruned entity.
+        #[arg(long)]
+        prune: bool,
         /// Idempotency key for the batch this apply sends; omit to mint a
         /// fresh one. Printed to stderr either way, so a retry (or
         /// `trogon-atlas operation get`) can reuse the same id.
@@ -273,6 +279,9 @@ enum Cmd {
         /// Manifest files, directories or a board .html file, as for apply.
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
+        /// Also show the deletes `apply --prune` would make.
+        #[arg(long)]
+        prune: bool,
     },
     /// Export a namespace from the live store as manifest YAML. The
     /// migration path away from push scripts: export, then `trogon-atlas diff`
@@ -1554,6 +1563,7 @@ async fn run(
         Cmd::Apply {
             filenames,
             dry_run,
+            prune,
             operation_id,
         } => {
             let operation_id = resolve_operation_id(operation_id)?;
@@ -1569,7 +1579,11 @@ async fn run(
             .await?;
             apply::require_external(&mut client, files.external).await?;
             let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
-            let plan = apply::plan(&mut client, resolved.manifests).await?;
+            let plan = if prune {
+                apply::plan_with_prune(&mut client, resolved.manifests).await?
+            } else {
+                apply::plan(&mut client, resolved.manifests).await?
+            };
             let outcome = apply::apply(&mut client, plan, dry_run, Some(&operation_id)).await?;
             if text {
                 for line in &outcome.lines {
@@ -1590,13 +1604,17 @@ async fn run(
             apply::insert_consequence_delta(&mut data, outcome.consequence_delta.as_ref());
             Ok((ExitCode::SUCCESS, Some(data)))
         }
-        Cmd::Diff { filenames } => {
+        Cmd::Diff { filenames, prune } => {
             let files = manifest::read_paths(&filenames)?;
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             apply::require_external(&mut client, files.external).await?;
             let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
-            let plan = apply::plan(&mut client, resolved.manifests).await?;
+            let plan = if prune {
+                apply::plan_with_prune(&mut client, resolved.manifests).await?
+            } else {
+                apply::plan(&mut client, resolved.manifests).await?
+            };
             let (diff, changed) = apply::render_diff(&plan, &resolved.types)?;
             if text {
                 print!("{diff}");
