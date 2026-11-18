@@ -435,7 +435,8 @@ fn entity(kind: &str, name: &str, swimlane: Option<&str>, fields: &[&str]) -> St
     doc(kind, name, &format!("{}{lane}", schema(fields)))
 }
 
-/// A command slice; each scenario is `(id, given events, emitted events)`.
+/// A command slice; each scenario is `(id, given events, emitted events)`,
+/// and one that emits nothing rejects with `REFUSED`.
 fn command_slice(
     name: &str,
     cmd: &str,
@@ -452,11 +453,15 @@ fn command_slice(
     let scenarios: Vec<String> = scenarios
         .iter()
         .map(|(id, given, emit)| {
+            let outcome = if emit.is_empty() {
+                "reject: {reasonCode: REFUSED}".to_string()
+            } else {
+                format!("emit: {{events: {}}}", events(emit))
+            };
             format!(
-                "  - {{id: {id}, title: {id}, when: {{command: {}}}, given: {}, emit: {{events: {}}}}}",
+                "  - {{id: {id}, title: {id}, when: {{command: {}}}, given: {}, {outcome}}}",
                 r(cmd),
                 events(given),
-                events(emit)
             )
         })
         .collect();
@@ -698,4 +703,154 @@ fn an_expected_event_the_slice_cannot_emit_is_not_walked() {
         vec![case("inline", Some(1), "WALK_EVENT_NOT_EMITTED_BY_SLICE")],
         "{report:#?}"
     );
+}
+
+fn thread_model(scenarios: &[(&str, &[&str], &[&str])]) -> Vec<String> {
+    vec![
+        doc("Swimlane", "thread", "  streamId: thread-{thread_id}\n"),
+        entity(
+            "Command",
+            "post-reply",
+            Some("thread"),
+            &["thread_id", "body"],
+        ),
+        entity("Event", "reply.posted", Some("thread"), &["body"]),
+        command_slice(
+            "post-reply-slice",
+            "post-reply",
+            &["reply.posted"],
+            scenarios,
+        ),
+    ]
+}
+
+#[test]
+fn numeric_stream_ids_ignore_float_form() {
+    let report = walk_with(
+        &thread_model(&[
+            ("first", &[], &["reply.posted"]),
+            ("followup", &["reply.posted"], &["reply.posted"]),
+        ]),
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: 4, body: a}\n  - command: post-reply\n    answer: {thread_id: 4.0, body: b}\n",
+    );
+    assert!(
+        !unwalked(&report).iter().any(|m| m.contains("\"followup\"")),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn another_instance_of_the_same_lane_is_not_related() {
+    // Both threads hold a reply with body "a"; t-2 has no reply yet.
+    let report = walk_with(
+        &thread_model(&[
+            ("first", &[], &["reply.posted"]),
+            ("duplicate", &["reply.posted"], &[]),
+        ]),
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: t-1, body: a}\n  - command: post-reply\n    answer: {thread_id: t-2, body: a}\n    expect: {emit: [reply.posted]}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn seed_rows_without_a_key_do_not_overwrite_each_other() {
+    let report = walk_text(&inline(
+        "  given:\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {score: 1}\n    - readModel: review-queue\n      rows:\n      - {score: 2}\n  then:\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {score: 1}\n      - {score: 2}\n",
+    ));
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn a_destination_stream_key_can_come_from_the_answer() {
+    // account_id is ledger state, not a charge field.
+    let report = walk_with(
+        &[
+            doc("Swimlane", "payment", "  streamId: payment-{payment_id}\n"),
+            doc(
+                "Swimlane",
+                "ledger",
+                "  streamId: ledger-{account_id}\n  state: [{name: account_id, type: {string: {}}}]\n",
+            ),
+            entity("Command", "charge", Some("payment"), &["payment_id"]),
+            entity("Event", "ledger.opened", Some("ledger"), &["account_id", "currency"]),
+            entity("Event", "ledger.charged", Some("ledger"), &["account_id", "currency"]),
+            command_slice(
+                "charge-slice",
+                "charge",
+                &["ledger.charged"],
+                &[("charge", &[], &["ledger.charged"])],
+            ),
+        ],
+        "  given:\n    events:\n    - event: ledger.opened\n      payload: {account_id: a-1, currency: USD}\n  steps:\n  - command: charge\n    answer: {payment_id: p-1, account_id: a-1}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn a_command_accepted_on_a_terminal_stream_is_flagged_wherever_it_emits() {
+    let report = walk_with(
+        &[
+            doc("Swimlane", "audit", ""),
+            entity("Command", "audit-review", Some("review"), &["review_id"]),
+            entity("Event", "audit.logged", Some("audit"), &["review_id"]),
+            command_slice(
+                "audit-review-slice",
+                "audit-review",
+                &["audit.logged"],
+                &[("audit", &["review.approved"], &["audit.logged"])],
+            ),
+        ],
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n    - event: review.approved\n      payload: {review_id: r-1, score: 4}\n  steps:\n  - command: audit-review\n    answer: {review_id: r-1}\n",
+    );
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(1), "WALK_ACCEPTED_AFTER_TERMINAL")],
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn a_scenario_must_reach_the_current_lifecycle_occurrence() {
+    // The ticket was reopened: [opened, closed] describes an earlier cycle.
+    let ticket = r("ticket.opened");
+    let closed = r("ticket.closed");
+    let report = walk_with(
+        &[
+            doc(
+                "Swimlane",
+                "ticket",
+                &format!(
+                    "  streamId: ticket-{{ticket_id}}\n  transitions:\n  - {{after: {ticket}, next: [{{event: {closed}}}]}}\n  - {{after: {closed}, next: [{{event: {ticket}}}]}}\n"
+                ),
+            ),
+            entity("Event", "ticket.opened", Some("ticket"), &["ticket_id"]),
+            entity("Event", "ticket.closed", Some("ticket"), &["ticket_id"]),
+            entity("Command", "close-ticket", Some("ticket"), &["ticket_id"]),
+            command_slice(
+                "close-ticket-slice",
+                "close-ticket",
+                &["ticket.closed"],
+                &[
+                    ("close", &["ticket.opened"], &["ticket.closed"]),
+                    ("already-closed", &["ticket.opened", "ticket.closed"], &[]),
+                ],
+            ),
+        ],
+        "  given:\n    events:\n    - event: ticket.opened\n      payload: {ticket_id: t-1}\n    - event: ticket.closed\n      payload: {ticket_id: t-1}\n    - event: ticket.opened\n      payload: {ticket_id: t-1}\n  steps:\n  - command: close-ticket\n    answer: {ticket_id: t-1}\n    expect: {emit: [ticket.closed]}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn an_answer_no_eligible_row_holds_is_a_conflict() {
+    let report = walk_text(&inline(
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {review_id: r-1, status: submitted, score: 2}\n      - {review_id: r-2, status: submitted, score: 5}\n  steps:\n  - command: approve-review\n    via: auto-approve\n    answer: {score: 3}\n",
+    ));
+    let conflicts: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_COMMAND_FIELD_CONFLICT")
+        .map(|f| f.subject_field.as_str())
+        .collect();
+    assert_eq!(conflicts, vec!["schema.fields[score]"], "{report:#?}");
 }

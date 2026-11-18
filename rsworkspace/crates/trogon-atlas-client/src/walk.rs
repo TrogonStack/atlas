@@ -838,6 +838,7 @@ pub fn read_case_paths(paths: &[PathBuf]) -> Result<Vec<Case>> {
 #[derive(Debug, Clone)]
 struct Recorded {
     event: Key,
+    lane: Option<Key>,
     payload: Map<String, Value>,
     /// `None` for an event without a swimlane: it is on no stream.
     stream: Option<String>,
@@ -944,8 +945,10 @@ impl CaseRun<'_> {
             };
             let key_fields = rm_key_fields(self.model.get(K::ReadModel, &rm));
             let table = self.rows.entry(rm).or_default();
-            for (i, row) in rows.rows.iter().enumerate() {
-                let id = row_id(&key_fields, row).unwrap_or_else(|| format!("given#{i}"));
+            for row in &rows.rows {
+                // Numbered across the table so seeds from several entries all stay.
+                let id =
+                    row_id(&key_fields, row).unwrap_or_else(|| format!("given#{}", table.len()));
                 table.insert(id, row.clone());
             }
         }
@@ -1007,6 +1010,7 @@ impl CaseRun<'_> {
             let name = &rest[start + 1..start + end];
             match payload.get(name) {
                 Some(Value::String(s)) => resolved.push_str(s),
+                Some(Value::Number(n)) => resolved.push_str(&number_key(n)),
                 Some(v) if !v.is_null() => resolved.push_str(&v.to_string()),
                 _ => {
                     missing.push(name.to_string());
@@ -1067,8 +1071,10 @@ impl CaseRun<'_> {
     }
 
     fn record(&mut self, event: &Key, payload: &Map<String, Value>, stream: Option<String>) {
+        let lane = self.lane_of(K::Event, event);
         self.log.push(Recorded {
             event: event.clone(),
+            lane,
             payload: payload.clone(),
             stream,
         });
@@ -1271,12 +1277,31 @@ impl CaseRun<'_> {
         ) else {
             return;
         };
+        self.check_accepted_on_terminal(
+            lane.as_ref(),
+            stream.as_deref(),
+            &emitted,
+            &command,
+            &slice_key,
+        );
+        // Another lane's stream key can be swimlane state the answer gives
+        // rather than a command field.
+        let mut keys = values.clone();
+        for (k, v) in &step.answer {
+            if !v.is_null() && !keys.contains_key(k) {
+                keys.insert(k.clone(), v.clone());
+            }
+        }
         for event in emitted {
-            // The stream comes from the command's values before the payload is
-            // built, so field sourcing, lifecycle and recording share one
-            // timeline. On the command's own lane it is the command's stream.
+            // The stream is fixed before the payload is built, so field
+            // sourcing, lifecycle and recording share one timeline. On the
+            // command's own lane it is the stream the command addressed.
             let event_lane = self.lane_of(K::Event, &event);
-            let event_stream = self.stream_of(event_lane.as_ref(), &values);
+            let event_stream = if event_lane == lane {
+                stream.clone()
+            } else {
+                self.stream_of(event_lane.as_ref(), &keys)
+            };
             let payload = self.event_payload(
                 &event,
                 &command,
@@ -1401,6 +1426,10 @@ impl CaseRun<'_> {
                         if let Some(v) = row.get(field).filter(|v| !v.is_null()) {
                             if !distinct.iter().any(|d| values_equal(d, v)) {
                                 distinct.push(v);
+                                // Two distinct values already make the field ambiguous.
+                                if distinct.len() > 1 {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1454,6 +1483,23 @@ impl CaseRun<'_> {
                     source: "the step's answer".into(),
                     value: a.clone(),
                 });
+            }
+            if let (Some(a), Some(rm)) = (from_answer, ambiguous.get(name)) {
+                let held = self
+                    .matching_rows(rm, &answer)
+                    .iter()
+                    .any(|row| row.get(name).is_some_and(|v| values_equal(v, a)));
+                if !held {
+                    self.push(
+                        WalkFinding::new(
+                            COMMAND_FIELD_CONFLICT,
+                            format!(
+                                "{command} field {name:?} gets {a} from the step's answer, but no matching row of {rm} holds it"
+                            ),
+                        )
+                        .schema_field(K::Command, command, name),
+                    );
+                }
             }
             let ambiguity = ambiguous
                 .get(name)
@@ -1585,31 +1631,36 @@ impl CaseRun<'_> {
         values: &Map<String, Value>,
         stream: Option<&str>,
     ) -> Option<Vec<Key>> {
-        let history: Vec<Key> = self
-            .history(stream)
-            .iter()
-            .map(|r| r.event.clone())
-            .collect();
+        let history = self.history(stream);
         // The stream's state is its last lifecycle event; events outside
         // the lifecycle (comments, notes) do not change which scenarios
         // apply. Without a lifecycle, the last event is the state.
-        let transitions = self
-            .lane_of(K::Command, command)
-            .map(|lane| self.transitions(&lane))
+        let lane = self.lane_of(K::Command, command);
+        let transitions = lane
+            .as_ref()
+            .map(|lane| self.transitions(lane))
             .unwrap_or_default();
         let state = if transitions.is_empty() {
-            history.last()
+            history.last().copied()
         } else {
-            history.iter().rev().find(|k| in_lifecycle(&transitions, k))
+            history
+                .iter()
+                .rev()
+                .find(|r| in_lifecycle(&transitions, &r.event))
+                .copied()
         };
-        // Events on the command's own stream always belong to its timeline;
-        // events on other streams join it by agreeing on shared fields.
-        let related: Vec<&Key> = self
+        // Events on the command's own stream always belong to its timeline.
+        // Events on other lanes join it by agreeing on shared fields; other
+        // instances of its own lane never do.
+        let related: Vec<&Recorded> = self
             .log
             .iter()
-            .filter(|r| r.on(stream) || correlates(&r.payload, values))
-            .map(|r| &r.event)
+            .filter(|r| {
+                r.on(stream)
+                    || (!(lane.is_some() && r.lane == lane) && correlates(&r.payload, values))
+            })
             .collect();
+        let at = state.and_then(|s| related.iter().position(|r| std::ptr::eq(*r, s)));
         let mut rejects: Vec<(String, String)> = Vec::new();
         let mut emits: Vec<(String, Vec<Key>)> = Vec::new();
         for scenario in arr(slice, "scenarios") {
@@ -1618,12 +1669,22 @@ impl CaseRun<'_> {
                 continue;
             }
             let given: Vec<Key> = edge_keys(scenario, "given", "event");
-            let tail_ok = if given.is_empty() {
-                history.is_empty()
-            } else {
-                state.is_none_or(|last| given.iter().any(|g| same_event(g, last)))
+            // The scenario must describe the stream's current state: its last
+            // mention of that state is the current occurrence, so what it
+            // lists before or after must have happened before or after it.
+            let applies = match (state, at) {
+                _ if given.is_empty() => history.is_empty(),
+                (None, _) => is_subsequence(&given, keys_of(&related)),
+                (Some(s), Some(at)) => given
+                    .iter()
+                    .rposition(|g| same_event(g, &s.event))
+                    .is_some_and(|j| {
+                        is_subsequence(&given[..j], keys_of(&related[..at]))
+                            && is_subsequence(&given[j + 1..], keys_of(&related[at + 1..]))
+                    }),
+                (Some(_), None) => false,
             };
-            if !tail_ok || !is_subsequence(&given, related.iter().copied()) {
+            if !applies {
                 continue;
             }
             let id = str_at(scenario, "id").to_string();
@@ -1638,7 +1699,7 @@ impl CaseRun<'_> {
         let history_label = if history.is_empty() {
             "an empty stream".to_string()
         } else {
-            let names: Vec<String> = history.iter().map(|k| k.slug.clone()).collect();
+            let names: Vec<String> = history.iter().map(|r| r.event.slug.clone()).collect();
             format!("stream history [{}]", names.join(", "))
         };
 
@@ -1882,6 +1943,52 @@ impl CaseRun<'_> {
         payload
     }
 
+    fn last_lifecycle(&self, transitions: &[(Key, Vec<Key>)], stream: &str) -> Option<Key> {
+        self.history(Some(stream))
+            .into_iter()
+            .rev()
+            .map(|r| r.event.clone())
+            .find(|k| in_lifecycle(transitions, k))
+    }
+
+    /// A command accepted on a stream that already ended is a gap even when
+    /// its events land on other lanes; ones landing here are checked per event.
+    fn check_accepted_on_terminal(
+        &mut self,
+        lane: Option<&Key>,
+        stream: Option<&str>,
+        emitted: &[Key],
+        command: &Key,
+        slice_key: &Key,
+    ) {
+        let (Some(lane), Some(stream)) = (lane, stream) else {
+            return;
+        };
+        if emitted
+            .iter()
+            .any(|e| self.lane_of(K::Event, e).as_ref() == Some(lane))
+        {
+            return;
+        }
+        let transitions = self.transitions(lane);
+        let Some(prev) = self
+            .last_lifecycle(&transitions, stream)
+            .filter(|p| is_terminal(&transitions, p))
+        else {
+            return;
+        };
+        self.push(
+            WalkFinding::new(
+                ACCEPTED_AFTER_TERMINAL,
+                format!(
+                    "{command} was accepted after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
+                ),
+            )
+            .subject(K::CommandSlice, slice_key)
+            .field("scenarios"),
+        );
+    }
+
     /// Checks 1 and 5: the event must be a legal successor of the stream's
     /// previous lifecycle event.
     fn check_lifecycle(
@@ -1899,16 +2006,11 @@ impl CaseRun<'_> {
         if transitions.is_empty() {
             return;
         }
-        let previous = self
-            .history(Some(stream))
-            .into_iter()
-            .rev()
-            .map(|r| r.event.clone())
-            .find(|k| in_lifecycle(&transitions, k));
+        let previous = self.last_lifecycle(&transitions, stream);
         // After a terminal event nothing may land on the stream, lifecycle
         // event or not.
         if let Some(prev) = &previous {
-            if !transitions.iter().any(|(a, _)| a == prev) {
+            if is_terminal(&transitions, prev) {
                 self.push(
                     WalkFinding::new(
                         ACCEPTED_AFTER_TERMINAL,
@@ -1964,6 +2066,14 @@ impl CaseRun<'_> {
             }
         }
     }
+}
+
+fn keys_of<'a>(records: &'a [&'a Recorded]) -> impl Iterator<Item = &'a Key> {
+    records.iter().map(|r| &r.event)
+}
+
+fn is_terminal(transitions: &[(Key, Vec<Key>)], event: &Key) -> bool {
+    !transitions.iter().any(|(a, _)| a == event)
 }
 
 /// Stand-in value for a field the runtime generates.
@@ -2069,10 +2179,8 @@ fn number_key(n: &serde_json::Number) -> String {
         return u.to_string();
     }
     match n.as_f64() {
-        // Below 2^53 an integral f64 is exact.
-        Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => {
-            format!("{f:.0}")
-        }
+        // `{:.0}` prints an integral f64's exact value at any magnitude.
+        Some(f) if f.fract() == 0.0 => format!("{f:.0}"),
         Some(f) => f.to_string(),
         None => n.to_string(),
     }
@@ -2259,6 +2367,14 @@ mod tests {
             map(json!({"review_id": "r-1"})),
         ];
         assert!(rows_mismatch(&impossible, &actual).is_some());
+    }
+
+    #[test]
+    fn large_integral_floats_equal_their_exact_integer() {
+        assert!(values_equal(
+            &json!(9_223_372_036_854_775_808_u64),
+            &json!(9_223_372_036_854_775_808.0_f64)
+        ));
     }
 
     #[test]

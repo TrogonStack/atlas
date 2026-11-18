@@ -30,7 +30,7 @@ spec:
     readModels:                  # rows of externally fed read models
     - readModel: review-queue
       rows:
-      - {review_id: r-42, status: submitted}
+      - {review_id: r-42, status: submitted, score: 4}
   steps:                         # walked in order
   - command: approve-review
     via: auto-approve            # optional: the AutomationSlice or UiSlice issuing it
@@ -58,7 +58,8 @@ walked, so upstream events can feed local projections.
 
 Expected `rows` list every row of the read model: the count must match, and
 the expected rows must pair one-to-one with actual rows, each matching on the
-fields it names, in any order.
+fields it names, in any order. An expected `null` also matches a row that
+does not have the field, so it cannot assert that the field is present.
 `rows: []` asserts the read model is empty.
 
 Unknown fields are refused, so a typo such as `stepz` fails the run
@@ -83,7 +84,10 @@ instead of being ignored.
    shared field; derived and state placeholders are left out of the
    comparison), and the stream's current state (its last lifecycle event,
    or its last event when the swimlane has no lifecycle) must be one of
-   them. An empty `given` matches only an empty stream. The step's `expect`
+   them. The scenario's last mention of that state is the current
+   occurrence: the `given` events listed before it must come before it, and
+   the ones listed after it must come after it. Other instances of the
+   command's own swimlane never join its timeline. An empty `given` matches only an empty stream. The step's `expect`
    is compared against the matching scenarios: an expected reject the model
    does not make is reported and the walk continues with what the model
    does; an expected emit that contradicts a matching scenario is reported
@@ -115,7 +119,9 @@ matches whichever version a slice or scenario pins.
 Stream instances come from the swimlane's `stream_id` template. A
 command's stream is filled from the command's values. An event on the
 command's swimlane lands on that stream. An event on another swimlane lands
-on the stream its own template names, filled from the command's values. An
+on the stream its own template names, filled from the command's values and
+the step's answer. Numeric placeholders are normalized, so `4` and `4.0`
+fill the same stream id. An
 entity without a swimlane is on no stream and shares no history. After all cases, storyboards and command, read-model and
 automation slice scenarios in the cases' namespaces that no case reached
 are reported as coverage findings. A storyboard counts as walked when a
@@ -159,7 +165,7 @@ The MCP tool adds `skipped`, the entities the export path could not render.
 | `WALK_EVENT_FIELD_UNSOURCED` | Error | Event field gets no value | At this step an emitted event field gets no value from the command, from an earlier event on the same stream, from the swimlane's `state`, or from a DerivedFieldAnnotation. |
 | `WALK_EVENT_NOT_EMITTED_BY_SLICE` | Error | Expected event is not one the slice emits | The case expects an event the command's CommandSlice does not list in `emitted_events`. Unless a scenario decides the step, the walk emits nothing, so later steps do not see the event. |
 | `WALK_LIFECYCLE_VIOLATION` | Error | Event is not a legal successor | The emitted event is not a `next` of the stream's previous lifecycle event in `Swimlane.transitions`. The step may be legal on its own but not after the steps before it. |
-| `WALK_ACCEPTED_AFTER_TERMINAL` | Error | Command accepted after a terminal event | The stream's previous lifecycle event has no successor, yet the command emitted an event because no reject scenario refuses it. Add a reject scenario for this history. |
+| `WALK_ACCEPTED_AFTER_TERMINAL` | Error | Command accepted after a terminal event | The stream's previous lifecycle event has no successor, yet the command emitted an event because no reject scenario refuses it. This also applies to a command on that stream whose events land on another swimlane. Add a reject scenario for this history. |
 | `WALK_LIFECYCLE_START` | Warning | Stream starts mid-lifecycle | The first lifecycle event on the stream is only ever reached as a successor of another event. Give the earlier event in the case's `given`, or model the event as a lifecycle start. |
 | `WALK_REJECT_UNMODELED` | Error | Expected reject is not modeled | The case expects the command to be refused, but no reject scenario on the command slice matches the stream's history, so the model accepts the command. |
 | `WALK_REJECT_REASON_MISMATCH` | Warning | Reject reason differs | A reject scenario refuses the command, but with a different reason code than the case expects. |
