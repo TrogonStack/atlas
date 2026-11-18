@@ -8,7 +8,10 @@ use async_nats::jetstream::{
 };
 use async_trait::async_trait;
 use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, Region, RequestChecksumCalculation},
+    config::{
+        endpoint::{Endpoint, EndpointFuture, Params, ResolveEndpoint},
+        Builder as S3ConfigBuilder, Region, RequestChecksumCalculation,
+    },
     presigning::PresigningConfig,
     primitives::ByteStream,
     Client as S3Client,
@@ -192,18 +195,27 @@ pub struct S3StorageConfig {
     pub allow_http: bool,
 }
 
+const S3_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct S3BlobStorage {
     client: S3Client,
     bucket: String,
 }
 
+#[derive(Debug)]
+struct S3BucketEndpoint(Endpoint);
+
+impl ResolveEndpoint for S3BucketEndpoint {
+    fn resolve_endpoint(&self, _params: &Params) -> EndpointFuture<'_> {
+        EndpointFuture::ready(Ok(self.0.clone()))
+    }
+}
+
 impl S3BlobStorage {
-    pub async fn new(mut config: S3StorageConfig) -> Result<Self, Status> {
-        if config.endpoint.is_none() {
-            config.endpoint = ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT"]
-                .into_iter()
-                .find_map(|name| std::env::var(name).ok());
-        }
+    pub async fn new(config: S3StorageConfig) -> Result<Self, Status> {
+        let inherited_endpoint = ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL", "AWS_ENDPOINT"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok());
         let shared = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
             .load()
@@ -212,7 +224,7 @@ impl S3BlobStorage {
         Self::with_builder(
             config,
             S3ConfigBuilder::new().credentials_provider(credentials),
-            None,
+            inherited_endpoint,
         )
     }
 
@@ -233,7 +245,13 @@ impl S3BlobStorage {
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
         if let Some(endpoint) = config.endpoint.or(inherited_endpoint) {
             validate_endpoint(&endpoint, config.allow_http)?;
-            builder = builder.endpoint_url(endpoint);
+            builder = if config.force_path_style {
+                builder.endpoint_url(endpoint)
+            } else {
+                // A custom virtual-hosted endpoint already identifies the bucket.
+                builder
+                    .endpoint_resolver(S3BucketEndpoint(Endpoint::builder().url(endpoint).build()))
+            };
         }
         Ok(Self {
             client: S3Client::from_conf(builder.build()),
@@ -263,39 +281,43 @@ impl BlobStorage for S3BlobStorage {
 
     async fn get(&self, key: &str, max_bytes: usize) -> Result<Bytes, Status> {
         validate_key(key)?;
-        let result = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|error| {
-                if error
-                    .raw_response()
-                    .is_some_and(|r| r.status().as_u16() == 404)
-                {
-                    not_found()
-                } else {
-                    unavailable()
-                }
-            })?;
-        let length = result
-            .content_length()
-            .and_then(|length| usize::try_from(length).ok())
-            .ok_or_else(unavailable)?;
-        if length > max_bytes {
-            return Err(too_large());
-        }
-        let mut stream = result.body;
-        let mut bytes = BytesMut::new();
-        while let Some(chunk) = stream.try_next().await.map_err(|_| unavailable())? {
-            if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+        tokio::time::timeout(S3_READ_TIMEOUT, async {
+            let result = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .send()
+                .await
+                .map_err(|error| {
+                    if error
+                        .raw_response()
+                        .is_some_and(|r| r.status().as_u16() == 404)
+                    {
+                        not_found()
+                    } else {
+                        unavailable()
+                    }
+                })?;
+            let length = result
+                .content_length()
+                .and_then(|length| usize::try_from(length).ok())
+                .ok_or_else(unavailable)?;
+            if length > max_bytes {
                 return Err(too_large());
             }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes.freeze())
+            let mut stream = result.body;
+            let mut bytes = BytesMut::new();
+            while let Some(chunk) = stream.try_next().await.map_err(|_| unavailable())? {
+                if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+                    return Err(too_large());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes.freeze())
+        })
+        .await
+        .map_err(|_| unavailable())?
     }
 
     async fn delete(&self, key: &str) -> Result<(), Status> {
@@ -506,6 +528,151 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn public_s3_constructor_preserves_environment_endpoint_precedence() {
+        const EXPECTED: &str = "ATLAS_TEST_S3_ENDPOINT_HOST";
+        if let Ok(expected) = std::env::var(EXPECTED) {
+            let endpoint =
+                (expected == "explicit.invalid").then(|| "https://explicit.invalid".into());
+            let storage = S3BlobStorage::new(fixture_config(endpoint)).await.unwrap();
+            let signed = storage
+                .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                Url::parse(&signed).unwrap().host_str(),
+                Some(expected.as_str())
+            );
+            return;
+        }
+
+        for (expected, generic, legacy, service) in [
+            (
+                "generic.invalid",
+                Some("https://generic.invalid"),
+                None,
+                None,
+            ),
+            ("legacy.invalid", None, Some("https://legacy.invalid"), None),
+            (
+                "generic.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                None,
+            ),
+            (
+                "service.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                Some("https://service.invalid"),
+            ),
+            (
+                "explicit.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                Some("https://service.invalid"),
+            ),
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "artifacts::storage::tests::public_s3_constructor_preserves_environment_endpoint_precedence"])
+                .env_clear()
+                .env(EXPECTED, expected)
+                .env("AWS_ACCESS_KEY_ID", "artifact-fixture-access")
+                .env("AWS_SECRET_ACCESS_KEY", "artifact-fixture-signing-key")
+                .env("AWS_EC2_METADATA_DISABLED", "true");
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                command.env("LLVM_PROFILE_FILE", profile);
+            }
+            for (name, value) in [
+                ("AWS_ENDPOINT_URL", generic),
+                ("AWS_ENDPOINT", legacy),
+                ("AWS_ENDPOINT_URL_S3", service),
+            ] {
+                if let Some(value) = value {
+                    command.env(name, value);
+                }
+            }
+            let output = command.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "expected one successful endpoint probe for {expected}: {stdout}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_virtual_hosted_endpoints_keep_their_bucket_destination() {
+        for (endpoint, expected_host, expected_path) in [
+            (
+                Some("https://artifact-test.objects.invalid/tenant"),
+                "artifact-test.objects.invalid",
+                "/tenant/artifacts/capture",
+            ),
+            (
+                Some("https://objects.invalid/tenant"),
+                "objects.invalid",
+                "/tenant/artifacts/capture",
+            ),
+            (
+                None,
+                "artifact-test.s3.us-east-1.amazonaws.com",
+                "/artifacts/capture",
+            ),
+        ] {
+            let mut config = fixture_config(endpoint.map(str::to_owned));
+            config.force_path_style = false;
+            let storage = S3BlobStorage::with_builder(config, fixture_builder(), None).unwrap();
+            let signed = storage
+                .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+                .await
+                .unwrap()
+                .unwrap();
+            let url = Url::parse(&signed).unwrap();
+            assert_eq!(url.host_str(), Some(expected_host));
+            assert_eq!(url.path(), expected_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_virtual_hosted_custom_endpoint_handles_direct_and_presigned_writes() {
+        let server = MockServer::start().await;
+        let mut config = fixture_config(Some(format!("{}/tenant", server.uri())));
+        config.force_path_style = false;
+        let storage = S3BlobStorage::with_builder(config, fixture_builder(), None).unwrap();
+        Mock::given(method("PUT"))
+            .and(path("/tenant/artifacts/capture"))
+            .respond_with(ResponseTemplate::new(200).insert_header("etag", "\"stored\""))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let data = Bytes::from_static(b"artifact bytes");
+        let digest = trogon_atlas_client::artifacts::sha256_hex(&data);
+        storage
+            .put("artifacts/capture", data.clone())
+            .await
+            .unwrap();
+        let signed = storage
+            .presign_put(
+                "artifacts/capture",
+                Duration::from_secs(60),
+                u64::try_from(data.len()).unwrap(),
+                &digest,
+                "image/png",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let mut request = reqwest::Client::new().put(signed.url).body(data);
+        for (name, value) in signed.headers {
+            request = request.header(name, value);
+        }
+        assert!(request.send().await.unwrap().status().is_success());
+    }
+
     #[test]
     fn inherited_s3_endpoint_cannot_contain_url_credentials() {
         let result = S3BlobStorage::with_builder(
@@ -629,6 +796,38 @@ mod tests {
             tonic::Code::ResourceExhausted
         );
         storage.delete("staging/capture").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn s3_read_times_out_when_the_provider_stalls_before_response_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let storage =
+            S3BlobStorage::with_builder(fixture_config(Some(endpoint)), fixture_builder(), None)
+                .unwrap();
+
+        let read = storage.get("staging/capture", 4);
+        let request_arrives = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.read_exact(&mut [0]).await.unwrap();
+            socket
+        };
+        tokio::pin!(read);
+        let stalled_connection = tokio::select! {
+            socket = tokio::time::timeout(Duration::from_secs(5), request_arrives) => {
+                socket.expect("provider must receive the request")
+            }
+            result = &mut read => panic!("read finished before the provider stalled: {result:?}"),
+        };
+        tokio::time::pause();
+        let test_deadline = tokio::time::timeout(Duration::from_secs(31), read);
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = test_deadline
+            .await
+            .expect("S3 read must return before the test deadline")
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        drop(stalled_connection);
     }
 
     #[tokio::test]
