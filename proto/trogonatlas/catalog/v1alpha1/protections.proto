@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package trogonatlas.catalog.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// ---------- Entity protection registry ---------------------------------------
+//
+// Protection belongs to an identity (kind, namespace, slug), not to one
+// stored version: it covers every version that exists and every version a
+// writer might try to add. Keeping it in its own registry rather than on the
+// entity body means no write to the entity, and no merge or revert of one,
+// can carry the protection away with it, and a delete cannot reset it.
+//
+// Only an authenticated admin sets or lifts a row. Every route that changes
+// an entity looks up the row of each identity it touches and refuses with
+// `ENTITY_PROTECTED`, or with `PROTECTION_STATE_UNKNOWN` when the row cannot
+// be read. See docs/explanation/entity-protection.md.
+message EntityProtection {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Why the identity is protected, as the admin stated it.
+  string reason = 4;
+  // Authenticated principal that set the protection. Never caller-supplied.
+  string protected_by = 5;
+  // RFC 3339 timestamp.
+  string protected_at = 6;
+  // Changeset that recorded the protection, for the durable audit trail.
+  string changeset_id = 7;
+  // Revision of the stored row. Pass it as `UnprotectEntityRequest.if_match`
+  // to lift exactly the protection that was read.
+  uint64 revision = 8;
+}
+
+// What a lookup learned about one identity's protection.
+enum ProtectionState {
+  PROTECTION_STATE_UNSPECIFIED = 0;
+  PROTECTION_STATE_UNPROTECTED = 1;
+  PROTECTION_STATE_PROTECTED = 2;
+  // The row exists but cannot be decoded, or the registry did not answer.
+  // Writes treat the identity as protected until the state is known again.
+  PROTECTION_STATE_UNKNOWN = 3;
+}
+
+// An identity whose protection state could not be read.
+message EntityProtectionUnknown {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Why the state is unknown, for an operator.
+  string cause = 4;
+  // Revision of the unreadable row; an admin lifts it at this revision to
+  // repair the identity. Zero when the registry itself could not be read.
+  uint64 revision = 5;
+}

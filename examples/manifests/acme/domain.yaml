@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata:
+  name: acme
+  namespace: acme
+spec:
+  doc: Selling, paying for, and fulfilling physical goods online, keeping buyer confidence high after the sale, helping shoppers keep track of products they want, and honoring requests to delete the personal data Acme holds.
+  project:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Acme

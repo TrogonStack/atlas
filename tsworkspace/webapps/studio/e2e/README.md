@@ -90,6 +90,9 @@ human or CI job created out-of-band before the suite runs.
   - (d) the branch picker lists the fixture branch and switches to/from it.
   - (e) the conflict drawer opens from the Review button and shows the
     fixture's diff entry.
+- `export-html.spec.ts`: Export HTML downloads a board, and the saved file
+  renders from `file://` with every network request refused and holds only
+  the board's read responses.
 - `overview-to-board.spec.ts`: the original browser-route-mocked navigation
   check (Overview → board). Kept as-is: cheap, still a valid regression check
   for the click-through, complementary to the real-stack suite above.

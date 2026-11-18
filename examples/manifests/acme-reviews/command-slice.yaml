@@ -26,12 +26,6 @@ spec:
             namespace: acme-reviews
             slug: review-eligibility.granted
             version: '1'
-    given:
-    - event:
-        id:
-          namespace: acme-storefront
-          slug: order.fulfilled
-          version: '1'
     id: delivered
     title: Eligibility granted
     when:

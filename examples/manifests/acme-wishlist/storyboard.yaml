@@ -1,0 +1,44 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: add-to-wishlist
+  namespace: acme-wishlist
+spec:
+  doc: The shopper saves a product and sees it on the wishlist.
+  entry:
+    human:
+      persona:
+        persona:
+          id:
+            namespace: acme-wishlist
+            slug: shopper
+            version: '1'
+      ui:
+        ui:
+          id:
+            namespace: acme-wishlist
+            slug: wishlist-page
+            version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-wishlist
+          slug: wishlist-items
+          version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-wishlist
+          slug: wishlist-item.added
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-wishlist
+      slug: add-item-to-wishlist-slice
+      version: '1'
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist-items-upsert-rms
+      version: '1'
+  title: Add to wishlist

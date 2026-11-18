@@ -1,12 +1,12 @@
 # Event Modeling service
 
 A Rust gRPC service that exposes the Event Modeling schema (`event_model.proto`)
-as a queryable, denormalized keyspace, plus an MCP stdio adapter that lets an
+as a queryable, denormalized keyspace, plus MCP over Streamable HTTP at `/mcp` that lets an
 LLM drive it.
 
 There is no second data model. MCP tools call gRPC; the service is the source
 of truth; the canonical proto contract lives at
-`proto/event_model.proto`.
+`proto/trogonatlas/eventmodel/v1alpha1/event_model.proto`.
 
 ## What this is
 
@@ -14,15 +14,17 @@ of truth; the canonical proto contract lives at
   commands, read models, processors, UIs, personas, swimlanes, the slice
   kinds, storyboards, event models, strategic knowledge entities, schema
   entities, screens, and language entities).
-- The 24-RPC `EventModelService` surface: direct CRUD, batch mutate,
-  graph queries (impact, supersession), projections (slice, storyboard,
-  event model), structural diff, AI analysis (data-flow inference and
-  information-completeness gaps), full-text search, and a change feed.
+- The 50-RPC `EventModelService` surface
+  (`proto/trogonatlas/api/eventmodel/v1alpha1/service.proto`): direct CRUD,
+  batch mutate, graph queries (impact, supersession), projections (slice,
+  storyboard, event model), structural diff, validation, AI analysis
+  (data-flow inference and information-completeness gaps), full-text
+  search, a change feed, changesets, branches, and type libraries.
 - A git side-channel that mirrors every successful mutation to a working tree
   on disk (one commit per `PutEntity` / `DeleteEntity` / `BatchMutate`), so
   history is human-auditable without becoming the system of record.
-- A stdio MCP adapter (`trogon-atlas-mcp`) exposing every gRPC method as an MCP
-  tool with JSON Schema parameters.
+- MCP over Streamable HTTP, served by the server at `/mcp`, exposing every
+  gRPC method as an MCP tool with JSON Schema parameters.
 
 ## What this is not
 
@@ -36,30 +38,29 @@ of truth; the canonical proto contract lives at
 
 ## Crates
 
-The implementation lives under `rustworkspace/`:
+The implementation lives under `rsworkspace/crates/`:
 
 | Crate | Purpose |
 | --- | --- |
 | `trogon-atlas-proto` | Generated `prost`/`tonic` types from `event_model.proto`. |
 | `trogon-atlas-store` | Storage trait + in-memory backend + NATS JetStream KV backend. |
-| `trogon-atlas-server` | gRPC service implementation, graph indices, projections, validation, diff, search, AI analysis, git mirror, CLI binary. |
-| `trogon-atlas-mcp` | stdio MCP adapter that turns each RPC into an MCP tool. |
+| `trogon-atlas-server` | gRPC service implementation, graph indices, projections, validation, diff, search, AI analysis, git mirror, MCP endpoint, CLI binary. |
+| `trogon-atlas-mcp` | MCP tools over Streamable HTTP, one per RPC, served by `trogon-atlas-server`. |
 
 ## Run it
 
-Both binaries take `--help`. The minimum useful invocation:
+The binary takes `--help`. The minimum useful invocation:
 
 ```sh
-# In one terminal, start the gRPC server on :50069 with the in-memory store
-# and mirror every mutation into ./mirror as a git tree.
+# Start the gRPC server on :50069 with the in-memory store, mirror every
+# mutation into ./mirror as a git tree, and serve MCP on that same port.
+# MCP clients (Claude Code, Inspector, etc.) connect to
+# http://127.0.0.1:50069/mcp.
 cargo run -p trogon-atlas-server -- \
   --listen 0.0.0.0:50069 \
   --store memory \
-  --git-mirror ./mirror
-
-# In another, start the MCP stdio adapter pointing at it. An MCP client
-# (Claude Code, Inspector, etc.) speaks JSON-RPC over this process's stdio.
-cargo run -p trogon-atlas-mcp -- --grpc http://127.0.0.1:50069
+  --git-mirror ./mirror \
+  --mcp
 ```
 
 Re-import a previously mirrored tree:
@@ -71,25 +72,26 @@ cargo run -p trogon-atlas-server -- import-git ./mirror
 Container artifacts live next to this README:
 
 ```sh
-# Build static-musl images and stand up server + NATS + MCP adapter.
+# Build static-musl images and stand up server + NATS.
+# MCP clients connect to http://127.0.0.1:50069/mcp.
 docker compose -f devops/docker/compose/dev/compose.yaml up --build
 ```
 
 The compose file is the recommended deployment shape: NATS JetStream is the
 store (data survives restarts via the `nats-data` volume), the server's git
 mirror is persisted on `trogon-atlas-mirror`, every service is set to
-`restart: unless-stopped`, NATS reports a healthcheck against its monitoring
-port, and the server's Prometheus exporter is exposed on `:9100`.
+`restart: unless-stopped`, and NATS reports a healthcheck against its
+monitoring port. The server's metrics go out over OTLP; see
+"Observability" below.
 
-`devops/docker/images/trogon-atlas-server/Dockerfile` and
-`devops/docker/images/trogon-atlas-mcp/Dockerfile` are multi-stage builds that compile
-each binary against `*-unknown-linux-musl` and ship from Alpine 3.20. Both
-images run the binary under `tini` as a non-root user. The server image also
-bundles `git` (required by the git-mirror side-channel).
+`devops/docker/images/trogon-atlas-server/Dockerfile` is a multi-stage build
+that compiles the binary against `*-unknown-linux-musl` and ships from Alpine
+3.20. The image runs the binary under `tini` as a non-root user and bundles
+`git` (required by the git-mirror side-channel).
 
 ## Author a model
 
-The fast path is to drive `trogon-atlas-mcp` from an LLM. The slow path is to
+The fast path is to drive the server's MCP tools from an LLM. The slow path is to
 craft `Entity` messages directly via gRPC. A fully populated e-commerce model
 (2 swimlanes, 2 personas, 3 events, 3 commands, 2 read models, 2 UIs, 2
 processors, 7 slices, 1 storyboard, 1 event model) is built programmatically
@@ -109,9 +111,21 @@ Each mutation flows through the same path:
 
 ## Drive it via MCP
 
-`trogon-atlas-mcp` exposes every gRPC method as an MCP tool. Read tools return
-both a human-readable Debug dump and `binpb_base64` so callers can decode the
-exact proto bytes. Mutations have two surfaces:
+The server speaks MCP over Streamable HTTP at `/mcp`, on the same port as
+gRPC, when `TROGON_ATLAS_MCP` is set; the compose stack publishes it on
+`http://127.0.0.1:50069/mcp`. Point an MCP client at that URL using its
+Streamable HTTP (sometimes labelled "HTTP") transport.
+
+When the server requires authentication, have the client send its own key
+as `Authorization: Bearer <token>`; every tool call goes through the same
+authentication and authorization as a gRPC call made with that token, so
+each client acts as its own principal. Send `x-trogon-atlas-branch: <name>`
+to scope a request to a branch.
+
+It exposes every gRPC method as an MCP tool. Read tools return the protobuf
+response as `binpb_base64` in a JSON text block. Some tools accept `json: true`
+and return proto3 JSON instead. See "What the tools return" in
+`rsworkspace/crates/trogon-atlas-mcp/README.md`. Mutations have two surfaces:
 
 - **JSON** (no protobuf tooling required): `get_entity_json` -> edit the
   proto3 JSON -> `put_entity_json` / `batch_mutate_json`.
@@ -119,6 +133,37 @@ exact proto bytes. Mutations have two surfaces:
   `batch_mutate`.
 
 ## Configuration
+
+### Artifact storage
+
+Artifact storage is disabled by default. To enable NATS-backed file uploads
+in this Compose deployment, add a local override file:
+
+```yaml
+services:
+  trogon-atlas-server:
+    environment:
+      TROGON_ATLAS_ARTIFACT_BACKEND: nats
+      TROGON_ATLAS_ARTIFACT_NATS_BUCKET: atlas_artifacts
+      TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET: atlas_artifact_catalog
+      TROGON_ATLAS_MAX_MESSAGE_BYTES: "37748736"
+```
+
+Start Compose with the base file and this override, then run
+`trogon-atlas artifacts info` against its exposed endpoint. The NATS Object
+Store and catalog use the existing persistent NATS volume. Artifact metadata,
+upload completion and NATS byte transfer all use the existing gRPC endpoint;
+there are no additional Atlas artifact HTTP routes to expose.
+
+For S3, set `TROGON_ATLAS_ARTIFACT_BACKEND=s3`, configure the server's bucket
+and region, and inject provider credentials from the deployment's secret
+manager. S3-compatible endpoints must be reachable from the server container
+and upload clients. An internal Compose hostname alone will not work in
+presigned URLs used by a host-side CLI. Grant creation remains an RPC; only
+direct S3 byte PUT/GET requests use those URLs.
+
+See [Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
+for server settings, direct S3 uploads, CLI/MCP operations, and retention.
 
 `trogon-atlas-server` honors both CLI flags and environment variables:
 
@@ -136,7 +181,8 @@ exact proto bytes. Mutations have two surfaces:
 | `--git-mirror` | `TROGON_ATLAS_GIT_MIRROR` | unset |
 | `--git-author-name` | `TROGON_ATLAS_GIT_AUTHOR_NAME` | `trogon-atlas-server` |
 | `--git-author-email` | `TROGON_ATLAS_GIT_AUTHOR_EMAIL` | `trogon-atlas@local` |
-| `--metrics-listen` | `TROGON_ATLAS_METRICS_LISTEN` | unset (disabled) |
+| `--mcp` | `TROGON_ATLAS_MCP` | `false` (serves `/mcp` on the gRPC listener when set) |
+| `--mcp-allowed-hosts` | `TROGON_ATLAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` (`*` disables the check) |
 | `--auth-token` | `TROGON_ATLAS_AUTH_TOKEN` | unset (auth disabled, dev only) |
 | `--tls-cert` / `--tls-key` | `TROGON_ATLAS_TLS_CERT` / `TROGON_ATLAS_TLS_KEY` | unset (plaintext) |
 | `--max-message-bytes` | `TROGON_ATLAS_MAX_MESSAGE_BYTES` | `4194304` |
@@ -152,10 +198,6 @@ the recommended setting whenever data must outlive the process. `memory`
 is suitable for local development, CI, and one-shot fixture replay; the
 server logs a prominent warning when it starts ephemeral.
 
-`trogon-atlas-mcp` is configured with `--grpc` / `TROGON_ATLAS_GRPC` (use an
-`https://` endpoint for TLS) and `--auth-token` / `TROGON_ATLAS_AUTH_TOKEN`
-to match the server's shared bearer token.
-
 ### Seeding and restore
 
 `trogon-atlas-server seed --fixture <path>` applies a `BatchMutateRequest`
@@ -166,38 +208,42 @@ fixture (`.binpb` or `.textproto`) to the configured store; pass
 
 ## Observability
 
-Both binaries emit JSON structured logs to stderr via `tracing-subscriber`.
+The server emits JSON structured logs to stderr via `tracing-subscriber`.
 The server installs a `trace_fn` on the tonic transport so every RPC opens a
 span named `rpc` with the gRPC method path attached. Set `RUST_LOG` (e.g.
 `RUST_LOG=info,trogon_atlas_server=debug`) to control verbosity.
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://otel-collector:4317`) to
-export the `rpc` and `llm.complete` spans over OTLP/gRPC; without it spans
-are only visible in the logs.
-
-When `--metrics-listen=0.0.0.0:9100` is set, the server installs a global
-Prometheus recorder and exposes `/metrics`. Emitted families:
-`rpc_requests_total{service,method,code}`,
-`rpc_request_duration_seconds{service,method}`,
-`rpc_errors_total{service,method,code}` for the subset where `code != "ok"`,
-`rpc_stream_terminations_total{method,outcome}` for server-streaming RPCs,
-`changes_stream_messages` / `changes_stream_bytes` /
-`changes_stream_oldest_age_seconds` gauges polled every 30s from the
-configured store (NATS only; `MemStore` reports nothing), and
-`llm_requests_total` / `llm_request_duration_seconds` /
-`llm_tokens_total` / `llm_prompt_truncations_total` when the LLM path is
-enabled. A standard gRPC health service (`grpc.health.v1.Health`) is
-served alongside the main service for readiness probes.
+export the `rpc` and `llm.complete` spans, and metrics, over OTLP/gRPC to
+your own Collector; without it, neither is exported and spans are only
+visible in the logs. This compose stack does not run a Collector itself,
+so point the variable at one reachable from the `trogon-atlas` network.
+There is no scrape endpoint: metrics are push-only. Emitted instruments:
+`rpc.server.call.duration` (histogram, seconds; `rpc.system.name`,
+`rpc.method`, `rpc.response.status_code`, `error.type` on failure),
+`trogon_atlas.rpc.server.stream.terminations` (`rpc.method`,
+`trogon_atlas.stream.outcome`) for server-streaming RPCs,
+`trogon_atlas.change_stream.message.count` /
+`trogon_atlas.change_stream.size` (bytes) /
+`trogon_atlas.change_stream.oldest_message.age` (seconds) gauges polled
+every 30s from the configured store (NATS only; `MemStore` reports
+nothing), and `trogon_atlas.llm.request.duration` (histogram, seconds) /
+`trogon_atlas.llm.tokens` (`trogon_atlas.llm.token.type=input|output`) /
+`trogon_atlas.llm.prompt_truncations` when the LLM path is enabled.
+Readiness and liveness are served on the gRPC port, over plain HTTP at
+`/-/readiness` and `/-/liveness` and over `grpc.health.v1.Health` as the
+services `readiness`, `liveness`, and `""` (readiness).
 
 Suggested alerts on the change-stream gauges:
 
-- `changes_stream_oldest_age_seconds > $((85 * 24 * 3600))` when the
-  configured `--changes-max-age-days=90`: retention is about to bite.
-- `changes_stream_messages > 0.9 * $TROGON_ATLAS_CHANGES_MAX_MSGS`: same
-  for the message cap.
-- `changes_stream_oldest_age_seconds == 0` for more than an hour while
-  the model is being actively edited: the publisher loop or the NATS
-  connection is broken.
+- `trogon_atlas.change_stream.oldest_message.age > $((85 * 24 * 3600))`
+  when the configured `--changes-max-age-days=90`: retention is about to
+  bite.
+- `trogon_atlas.change_stream.message.count > 0.9 * $TROGON_ATLAS_CHANGES_MAX_MSGS`:
+  same for the message cap.
+- `trogon_atlas.change_stream.oldest_message.age == 0` for more than an
+  hour while the model is being actively edited: the publisher loop or
+  the NATS connection is broken.
 
 ## Status
 
@@ -228,3 +274,13 @@ files together. If a second how-to is added, move both into
 `docs/how-to/`.
 
 - `RUNBOOK.md` (how-to): operations, backup/restore.
+
+Atlas requires NATS JetStream with `max_payload: 8388608` (8 MiB).
+The 1 MiB catalog owner contract covers the complete prepared Entity, including
+assigned identities and SystemMeta. KV headers and journal or branch envelopes
+need additional transport capacity. The Store checks the negotiated server capacity
+before opening buckets. Configure every server in an external NATS cluster with this
+capacity; the Helm chart does not install or configure NATS. This transport
+capacity does not increase entity validation limits. Existing stream-specific
+message limits must also permit these messages. Backups and restores retain
+the existing stream and KV formats; restore servers need the same capacity.

@@ -12,6 +12,13 @@ import "trogonatlas/type/v1alpha1/id.proto";
 // EventExample/CommandExample/ReadModelExample, inside TypeRef, etc.).
 // Where a connection between entities can carry data (slice endpoints,
 // storyboard entry/outcome), the schema uses Edge messages instead.
+message DataProductRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message SpecificationRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message SchemaRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message ChannelRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DataStoreRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
 message EventRef      { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message CommandRef    { trogonatlas.type.v1alpha1.Id id = 1; }
@@ -29,6 +36,8 @@ message PersonaRef      { trogonatlas.type.v1alpha1.Id id = 1; }
 message SwimlaneRef   { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message ExternalSystemRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message SystemGroupRef    { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message DomainRef         { trogonatlas.type.v1alpha1.Id id = 1; }
 
@@ -83,4 +92,21 @@ enum EntityKind {
   ENTITY_KIND_ALERT_POLICY = 27;
   ENTITY_KIND_ALERT_NOTIFICATION_TARGET = 28;
   ENTITY_KIND_TYPE_LIBRARY = 29;
+  ENTITY_KIND_CHANNEL = 30;
+  ENTITY_KIND_DATA_STORE = 31;
+  ENTITY_KIND_SPECIFICATION = 32;
+  ENTITY_KIND_DATA_PRODUCT = 33;
+  ENTITY_KIND_TEAM = 34;
+  ENTITY_KIND_PERSON = 35;
+  ENTITY_KIND_DECISION = 36;
+  ENTITY_KIND_DOCUMENT = 37;
+  ENTITY_KIND_DESIGN_GRAPH = 38;
+  ENTITY_KIND_SYSTEM_GROUP = 39;
 }
+
+message TeamRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message PersonRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message DecisionRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DocumentRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DesignGraphRef { trogonatlas.type.v1alpha1.Id id = 1; }

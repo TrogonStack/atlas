@@ -1,2 +1,3 @@
 exclude_loopback = true
 no_progress = true
+exclude_path = ["(^|/)node_modules/"]

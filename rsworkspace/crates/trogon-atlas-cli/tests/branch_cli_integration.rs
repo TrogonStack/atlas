@@ -12,13 +12,13 @@ use std::{process::Command, sync::Arc};
 use tokio::net::TcpListener;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -206,6 +206,35 @@ spec: { title: On branch }
         "{:?}",
         merged.stdout
     );
+    assert!(
+        merged.stdout.contains("1 added, 0 changed, 0 deleted"),
+        "{:?}",
+        merged.stdout
+    );
+    assert!(
+        merged
+            .stdout
+            .contains("validation after merge: 0 errors, 0 warnings, 0 info"),
+        "{:?}",
+        merged.stdout
+    );
+
+    let as_json = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-dry",
+            "--dry-run",
+        ],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&as_json.stdout).unwrap();
+    assert_eq!(doc["data"]["added_count"], 1, "{doc}");
+    assert_eq!(doc["data"]["changed_count"], 0, "{doc}");
+    assert_eq!(doc["data"]["deleted_count"], 0, "{doc}");
+    assert_eq!(doc["data"]["validation_summary"]["errors"], 0, "{doc}");
 
     // Dry run must not persist: baseline still lacks the entity.
     let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
@@ -222,6 +251,80 @@ spec: { title: On branch }
         })
         .await;
     assert!(missing.is_err(), "dry run must not persist");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_branch_merge_dry_run_invalid_reports_counts_and_findings() {
+    let endpoint = start_server().await;
+
+    let created = trogon_atlas(&endpoint, &["branch", "create", "cli-inv"]);
+    assert!(created.status.success(), "{:?}", created.stderr);
+
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("invalid.yaml");
+    std::fs::write(
+        &manifest_path,
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Term
+metadata: { namespace: cli-inv-ns, name: ghost-term }
+spec:
+  title: Ghost
+  embodiedBy:
+  - kind: ENTITY_KIND_EVENT
+    id: { namespace: cli-inv-ns, slug: does-not-exist, version: '1' }
+",
+    )
+    .unwrap();
+    let applied = trogon_atlas_branched(
+        &endpoint,
+        "cli-inv",
+        &["apply", "-f", manifest_path.to_str().unwrap()],
+    );
+    assert!(applied.status.success(), "{:?}", applied.stderr);
+
+    let merged = trogon_atlas(&endpoint, &["branch", "merge", "cli-inv", "--dry-run"]);
+    assert_eq!(merged.status.code(), Some(1), "{:?}", merged.stderr);
+    assert!(
+        merged
+            .stderr
+            .contains("would have landed: 1 added, 0 changed, 0 deleted"),
+        "{:?}",
+        merged.stderr
+    );
+    assert!(
+        merged.stderr.contains("validation after merge: 1 errors"),
+        "{:?}",
+        merged.stderr
+    );
+    assert!(
+        merged.stderr.contains("TERM_DANGLING_ENTITY"),
+        "{:?}",
+        merged.stderr
+    );
+
+    let as_json = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-inv",
+            "--dry-run",
+        ],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&as_json.stdout).unwrap();
+    assert_eq!(doc["data"]["status"], "invalid", "{doc}");
+    assert_eq!(doc["data"]["added_count"], 1, "{doc}");
+    assert_eq!(doc["data"]["validation_summary"]["errors"], 1, "{doc}");
+    let finding = doc["data"]["validation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["code"] == "TERM_DANGLING_ENTITY")
+        .unwrap_or_else(|| panic!("{doc}"));
+    assert_eq!(finding["severity"], "error", "{doc}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -333,4 +436,116 @@ fn tempfile_dir() -> tempfile::TempDir {
         .prefix("trogon-atlas-branch-cli-test-")
         .tempdir()
         .unwrap()
+}
+
+// A BoundedContext realizing a Subdomain that is not stored yet lands with
+// an Error-severity REALIZES_DANGLING finding; the write succeeded, so apply
+// exits 0 and still reports the finding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_apply_exits_zero_when_only_strategic_errors_ride_a_landed_write() {
+    let endpoint = start_server().await;
+    let ns = "cli-apply-strategic-error";
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("context.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec:
+  title: Checkout
+  realizes:
+  - id: {{ namespace: {ns}, slug: checkout, version: '1' }}
+"
+        ),
+    )
+    .unwrap();
+
+    let applied = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "apply",
+            "-f",
+            manifest_path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let doc: serde_json::Value = serde_json::from_str(&applied.stdout).unwrap();
+    let dangling = doc["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "REALIZES_DANGLING")
+        .unwrap_or_else(|| panic!("no REALIZES_DANGLING in {doc}"));
+    assert_eq!(dangling["severity"], "error", "{doc}");
+}
+
+// An applied merge carries strategic findings (non-blocking at any severity).
+// Depends on the server returning them on STATUS_APPLIED.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_branch_merge_applied_prints_and_returns_strategic_findings() {
+    let endpoint = start_server().await;
+    let ns = "cli-merge-strategic";
+
+    let created = trogon_atlas(&endpoint, &["branch", "create", "cli-merge-strategic"]);
+    assert!(created.status.success(), "{:?}", created.stderr);
+
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("strategic.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec: {{ title: Shop }}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec: {{ title: Shop }}
+"
+        ),
+    )
+    .unwrap();
+    let applied = trogon_atlas_branched(
+        &endpoint,
+        "cli-merge-strategic",
+        &["apply", "-f", manifest_path.to_str().unwrap()],
+    );
+    assert!(applied.status.success(), "{:?}", applied.stderr);
+
+    let merged = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-merge-strategic",
+            "--keep-branch",
+        ],
+    );
+    assert_eq!(merged.status.code(), Some(0), "{merged:?}");
+    let doc: serde_json::Value = serde_json::from_str(&merged.stdout).unwrap();
+    assert_eq!(doc["data"]["status"], "applied", "{doc}");
+    assert!(
+        doc["data"]["validation_summary"]["warnings"]
+            .as_u64()
+            .unwrap()
+            >= 1,
+        "{doc}"
+    );
+    let codes: Vec<_> = doc["data"]["validation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"DOMAIN_IN_CONTEXT_NAMESPACE"), "{doc}");
 }

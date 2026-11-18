@@ -104,11 +104,26 @@ The design, whatever it is, must satisfy these:
 
 - Reimplementing git. No rebase, cherry-pick, or branch-off-branch in the
   first design. One level: baseline and branches off it.
-- Locking. Two branches may touch the same entity; the second merge sees a
-  conflict. No reservations, no pessimistic locks.
+- Locking work in progress. Two branches may touch the same entity; the
+  second merge sees a conflict. No reservations, no pessimistic locks.
+  [Entity protection](entity-protection.md) is not that: it freezes an
+  identity that should not change at all, and an admin sets and lifts it.
+  A protected identity refuses branch writes and merges as it refuses
+  baseline writes, so an old branch cannot overwrite it or strip it.
 - Replacing draft-then-land's annotations. `LifecycleAnnotation` remains
   meaningful on the live model (a landed entity can still be marked
   proposed); branches are about *where* work happens, not entity lifecycle.
+- Content-based write policy, for now. A rule that inspects what a write
+  changes and then denies it, demands that it go through a branch, or demands
+  a review (`Deny`, `RequireBranch`, `RequireReview`) is declined. The server
+  holds no durable, authorized evidence that a review happened, so a review
+  requirement could only check a claim the caller makes about itself. The
+  `Deny` case is partly covered by authorization, entity protection and
+  [invariant gates](invariant-gates.md). Protection freezes a whole identity,
+  and a gate refuses a write that would introduce a declared validation
+  finding. A namespace writer can still remove an invariant from a model that
+  is not protected. None of these controls can forbid one field while allowing
+  other edits to the same entity. Review stays a team convention.
 
 ## Merge conflicts
 
@@ -117,25 +132,54 @@ Detection alone is half a design; this section is the other half.
 **Conflict classes.** Four, and the fourth has no git analog:
 
 1. *Edit/edit*: baseline and branch both changed the same entity, and the
-   results differ semantically. (If they converged on the same content,
-   that is not a conflict; semantic equality already knows.)
+   results differ in content or owner incarnation. Matching edits converge when
+   both agree.
 2. *Edit/delete*: the branch deleted what the baseline meanwhile changed.
 3. *Delete/edit*: the branch changed what the baseline meanwhile deleted.
 4. *Compositional invalidity*: no entity conflicts at all, but the merged
-   world fails the server's own validation. Baseline added a slice
-   referencing an entity the branch deletes; both sides gave the same
-   command an issuer. Three-way comparison cannot see this class. Only
-   validating the whole post-merge world catches it, which is why the
-   merge gate always runs the dry-run overlay validation, even for
-   "clean" merges.
+   world fails server validation that three-way comparison cannot see.
+   Baseline added a slice referencing an entity the branch deletes; both
+   sides gave the same command an issuer. For a conflict-free merge that
+   also passes type-library, namespace, and architecture-admission checks,
+   the merge gate runs `store_hygiene` on the post-merge world (an
+   in-memory overlay for a dry run, a projected world for a real merge)
+   and on the baseline before the merge. The merge is refused only for
+   errors that the merge adds. An error that was already in the baseline,
+   in any namespace, stays in `validation[]` with severity `INFO` and a
+   note that it predates the merge. The gate then reports advisory
+   strategic findings. Conflicts or those earlier check failures stop the
+   merge as an RPC error before any hygiene `validation[]` is produced. The gate is **not** a full-model validate:
+   EventModel-wide rules, scenarios, and most dangling-reference passes
+   still require `ValidateEventModel` / `ValidateProject` (or a future,
+   deliberate expansion of the merge gate). See
+   [validation coverage](validation-coverage.md).
+
+A dry run that reaches the hygiene gate reports the same suites without
+landing anything: the landable entries split into added, changed and
+deleted, plus the hygiene and strategic findings that gate actually runs.
+A reviewer who needs model-wide rules still runs validate separately (or
+waits for coverage reporting to make the narrower merge scope explicit on
+the wire).
+
+Independently creating the same key on baseline and a branch creates distinct
+owner incarnations, even when the authored content matches. This remains an
+edit/edit conflict with `system.uid` as a conflicting path. Choose an incarnation
+explicitly with keep-ours or take-theirs; automatically discarding either
+incarnation would invalidate references to it. There is no common ancestor for a
+structural merge. See [connection identity](../reference/connection-identity.md).
 
 **Resolution happens on the branch, never inside the merge.** Merge is
 all-or-nothing: it either lands everything or reports conflicts and
 changes nothing. Resolving is ordinary branch work, not a special mode:
-take the baseline's version by dropping the branch delta, keep the
+take the baseline's version, keep the
 branch's version, take the structural merge of the two, or write a
 hand-merged entity onto the branch, and in every case the key's recorded
 base refreshes to the current baseline.
+Within the same owner incarnation, the recorded branch base identifies
+connections deleted by the discarded side. If the resolution restores one,
+that occurrence receives a fresh ID instead of reviving a stale
+reference. Taking the baseline's content can therefore leave an identity delta
+to land. See [connection identity](../reference/connection-identity.md).
 Merge again, now clean. There are no half-merged states, no resolution
 write path distinct from the normal one, and every surface renders the
 same conflict payload: per entity, `{base, ours, theirs}` as canonical
@@ -320,7 +364,9 @@ atomic batch, then deletes the branch.
   edit/delete and delete/edit: keeping versus dropping a key has no
   field-level reading to combine.
 - **Anyone with write access may resolve and merge.** Review gates are team
-  convention, not mechanism, until proven otherwise.
+  convention, not mechanism, until proven otherwise. The exception is a
+  protected identity, which no merge or resolution may change; see
+  [entity protection](entity-protection.md).
 - **Baseline protection: opt-in server flag; when on, only merges and
   admin principals change baseline.** It is consultable per namespace
   (`--protect-baseline-namespaces=orders,shop-*`), so a context under review

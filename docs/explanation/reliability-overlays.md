@@ -11,6 +11,11 @@ An indicator that points at a `Connection` the validator can resolve
 closes that gap: the objective is provably attached to a real edge, not a
 description of one.
 
+The measurement-span selector described here is distinct from the persisted
+IDs of individual connection occurrences. See the
+[connection identity contract](../reference/connection-identity.md) for durable
+selection, reorder, removal and retarget behavior.
+
 ## Why a connection, not a metadata tag
 
 An indicator could have been a free-text label on an edge, or a

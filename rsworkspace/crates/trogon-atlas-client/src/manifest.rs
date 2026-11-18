@@ -125,14 +125,30 @@ pub async fn load_with_tenant_types(
     Ok(ResolvedManifests { manifests, types })
 }
 
+/// Manifest documents read from files, with the external ones a board file
+/// bundles kept apart.
+#[derive(Debug, Clone, Default)]
+pub struct ManifestFiles {
+    pub documents: Vec<ManifestDocument>,
+    /// Foreign entities a board references directly. Their own namespace
+    /// owns them, so an import checks that they exist and never writes them.
+    pub external: Vec<ManifestDocument>,
+}
+
 /// Collect manifest files from files/directories into a sorted, deduped
 /// list, so callers (apply, fmt) see a stable order regardless of
 /// filesystem iteration order. Directories are walked recursively for
 /// `.yaml`/`.yml`.
 pub(crate) fn collect_yaml_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    collect_manifest_files(paths, false)
+}
+
+/// Like `collect_yaml_files`, and with `html` also takes a board `.html`
+/// file named explicitly. `fmt` passes false: it would rewrite the file as YAML.
+fn collect_manifest_files(paths: &[PathBuf], html: bool) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for path in paths {
-        collect_files(path, &mut files, true)?;
+        collect_files(path, &mut files, true, html)?;
     }
     files.sort();
     files.dedup();
@@ -145,18 +161,65 @@ pub(crate) fn collect_yaml_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 /// Collect manifest files from files/directories and parse every document
 /// in each one.
 pub fn load_paths(paths: &[PathBuf]) -> Result<Vec<LoadedManifest>> {
-    load_builtin(&read_paths(paths)?)
+    load_builtin(&read_paths(paths)?.documents)
 }
 
 /// Collect manifest files from files/directories and read every document
 /// in each one, leaving their specs for `load_with_tenant_types`.
-pub fn read_paths(paths: &[PathBuf]) -> Result<Vec<ManifestDocument>> {
-    let files = collect_yaml_files(paths)?;
-    let mut documents = Vec::new();
-    for file in &files {
-        documents.extend(read_file(file)?);
+pub fn read_paths(paths: &[PathBuf]) -> Result<ManifestFiles> {
+    let mut out = ManifestFiles::default();
+    for file in &collect_manifest_files(paths, true)? {
+        if is_html(file) {
+            let board = read_board_html(&read_text(file)?, &file.display().to_string())?;
+            out.documents.extend(board.documents);
+            out.external.extend(board.external);
+        } else {
+            out.documents.extend(read_file(file)?);
+        }
     }
-    Ok(documents)
+    Ok(out)
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+fn is_html(path: &Path) -> bool {
+    has_extension(path, &["html"])
+}
+
+/// Read the manifests a board file saved by Studio's Export HTML carries in
+/// its `atlas-snapshot` data block. The block's JSON writes every `<` as
+/// `\u003c`, so its first `</script` is its end.
+fn read_board_html(html: &str, source: &str) -> Result<ManifestFiles> {
+    let data = html
+        .find("id=\"atlas-snapshot\"")
+        .and_then(|at| html[at..].find('>').map(|end| &html[at + end + 1..]))
+        .and_then(|rest| rest.find("</script").map(|end| &rest[..end]))
+        .ok_or_else(|| {
+            invalid_input(format!(
+                "{source}: no atlas-snapshot data block; save the board with Studio's Export HTML"
+            ))
+        })?;
+    let snapshot: Value = serde_json::from_str(data)
+        .map_err(|e| invalid_input(format!("{source}: invalid atlas-snapshot JSON: {e}")))?;
+    let manifests = snapshot.get("manifests");
+    let field = |name: &str| manifests.and_then(|m| m.get(name)).and_then(Value::as_str);
+    let (Some(model), Some(external)) = (field("model"), field("external")) else {
+        crate::invalid_input!(
+            "{source}: this snapshot has no manifests; export it again from a newer Studio"
+        );
+    };
+    Ok(ManifestFiles {
+        documents: read_str(model, source)?,
+        external: if external.trim().is_empty() {
+            Vec::new()
+        } else {
+            read_str(external, &format!("{source} (external)"))?
+        },
+    })
 }
 
 fn load_builtin(documents: &[ManifestDocument]) -> Result<Vec<LoadedManifest>> {
@@ -169,8 +232,9 @@ fn load_builtin(documents: &[ManifestDocument]) -> Result<Vec<LoadedManifest>> {
 
 /// Walk `path` into `out`. When `explicit` is true (a path the user named
 /// with `-f`), non-yaml files are errors; when walking a directory they are
-/// skipped, matching kubectl's directory walk.
-fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<()> {
+/// skipped, matching kubectl's directory walk. A board `.html` file is only
+/// taken when named, so a saved board next to its YAML is not read twice.
+fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, html: bool) -> Result<()> {
     let meta = std::fs::metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             invalid_input(format!("reading {}: {err}", path.display()))
@@ -182,20 +246,17 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<
         for entry in
             std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))?
         {
-            collect_files(&entry?.path(), out, false)?;
+            collect_files(&entry?.path(), out, false, html)?;
         }
         return Ok(());
     }
-    let is_yaml = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"));
-    if is_yaml {
+    if has_extension(path, &["yaml", "yml"]) || (explicit && html && is_html(path)) {
         out.push(path.to_path_buf());
     } else if explicit {
         crate::invalid_input!(
-            "{}: not a .yaml/.yml manifest file (unsupported)",
-            path.display()
+            "{}: not a .yaml/.yml manifest file{} (unsupported)",
+            path.display(),
+            if html { " or .html board file" } else { "" }
         );
     }
     Ok(())
@@ -207,14 +268,17 @@ pub fn parse_file(path: &Path) -> Result<Vec<LoadedManifest>> {
 }
 
 fn read_file(path: &Path) -> Result<Vec<ManifestDocument>> {
-    let text = std::fs::read_to_string(path).map_err(|err| {
+    read_str(&read_text(path)?, &path.display().to_string())
+}
+
+pub(crate) fn read_text(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             invalid_input(format!("reading {}: {err}", path.display()))
         } else {
             anyhow::Error::new(err).context(format!("reading {}", path.display()))
         }
-    })?;
-    read_str(&text, &path.display().to_string())
+    })
 }
 
 /// Parse every YAML document in a string. `source` labels errors.
@@ -229,7 +293,7 @@ pub fn parse_str(text: &str, source: &str) -> Result<Vec<LoadedManifest>> {
 pub fn read_str(text: &str, source: &str) -> Result<Vec<ManifestDocument>> {
     use serde::Deserialize as _;
     let mut out = Vec::new();
-    for (i, doc) in serde_yaml::Deserializer::from_str(text).enumerate() {
+    for (i, doc) in serde_norway::Deserializer::from_str(text).enumerate() {
         let value = Value::deserialize(doc)
             .map_err(|e| invalid_input(format!("{source}#doc{i}: invalid YAML: {e}")))?;
         if value.is_null() {
@@ -361,6 +425,10 @@ fn str_field(map: &Map<String, Value>, key: &str) -> Result<String> {
 /// True when `md` is a Ref-style wrapper: a single `id` field of type Id
 /// (EventRef, CommandRef, ..., and EntityRef which adds a `kind` field).
 pub(crate) fn is_ref_like(md: &MessageDescriptor) -> bool {
+    // An EntityRef without its kind names no exact target.
+    if md.full_name() == "trogonatlas.eventmodel.v1alpha1.EntityRef" {
+        return false;
+    }
     md.get_field_by_name("id").is_some_and(|f| match f.kind() {
         FieldKind::Message(inner) => inner.full_name() == ID_MESSAGE,
         _ => false,
@@ -372,6 +440,25 @@ pub(crate) fn is_ref_like(md: &MessageDescriptor) -> bool {
 pub(crate) fn shorthand_ref_field(
     md: &MessageDescriptor,
 ) -> Option<prost_reflect::FieldDescriptor> {
+    if matches!(
+        md.full_name(),
+        "trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+            | "trogonatlas.eventmodel.v1alpha1.SystemGroupMember"
+            | "trogonatlas.eventmodel.v1alpha1.DomainMember"
+            | "trogonatlas.eventmodel.v1alpha1.SystemActorTarget"
+            | "trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+            | "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
+            | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
+            | "trogonatlas.eventmodel.v1alpha1.ConnectionRef"
+            | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
+            | "trogonatlas.eventmodel.v1alpha1.CatalogSubject"
+            | "trogonatlas.eventmodel.v1alpha1.DocumentSelection"
+            | "trogonatlas.eventmodel.v1alpha1.TopologyStepTarget"
+            | "trogonatlas.eventmodel.v1alpha1.DecisionMaker"
+            | "trogonatlas.eventmodel.v1alpha1.UiHosting"
+    ) {
+        return None;
+    }
     md.fields().find(|f| match f.kind() {
         FieldKind::Message(inner) => is_ref_like(&inner),
         _ => false,
@@ -485,6 +572,12 @@ fn normalize_message(value: &mut Value, desc: &MessageDescriptor, default_ns: &s
     let Value::Object(map) = value else {
         return Ok(());
     };
+    if desc.full_name() == "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelector"
+        && !map.contains_key("path")
+        && !map.contains_key("opaque")
+    {
+        crate::invalid_input!("a field selector requires exactly one of path or opaque");
+    }
     for (key, val) in map.iter_mut() {
         let Some(field) = desc
             .fields()
@@ -542,6 +635,163 @@ mod tests {
         let mut all = parse_str(yaml, "test.yaml").expect("parse");
         assert_eq!(all.len(), 1);
         all.remove(0)
+    }
+
+    fn assert_ambiguous_target_rejected(
+        kind: &str,
+        field: &str,
+        ambiguous: Value,
+        explicit: Value,
+    ) {
+        let schema = crate::manifest_schema::generate().unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let mut document = serde_json::json!({
+            "apiVersion": API_VERSION,
+            "kind": kind,
+            "metadata": {"namespace":"catalog","name":"choice","version":1},
+            "spec": {}
+        });
+        document["spec"][field] = ambiguous;
+        assert!(
+            parse_str(&document.to_string(), "ambiguous.yaml").is_err(),
+            "{kind}.{field} must not choose an arm from a bare string"
+        );
+        assert!(!validator.is_valid(&document), "{kind}.{field}");
+
+        document["spec"][field] = explicit;
+        let parsed = parse_str(&document.to_string(), "explicit.yaml").unwrap();
+        assert!(validator.is_valid(&document), "{kind}.{field}");
+        match &parsed[0].entity.kind {
+            Some(pb::entity::Kind::DesignGraph(graph)) => {
+                let Some(pb::topology_step_target::Selection::Subflow(target)) =
+                    &graph.steps[0].target.as_ref().unwrap().selection
+                else {
+                    panic!("expected an explicit subflow");
+                };
+                let id = target.id.as_ref().unwrap();
+                assert_eq!(
+                    (&*id.namespace, &*id.slug, id.version),
+                    ("catalog", "child", 2)
+                );
+            }
+            Some(pb::entity::Kind::Decision(decision)) => {
+                assert!(matches!(
+                    decision.decision_makers[0].assignee,
+                    Some(pb::decision_maker::Assignee::Person(_))
+                ));
+                assert!(matches!(
+                    decision.decision_makers[1].assignee,
+                    Some(pb::decision_maker::Assignee::Team(_))
+                ));
+            }
+            _ => panic!("unexpected owner"),
+        }
+    }
+
+    #[test]
+    fn ambiguous_topology_target_requires_a_typed_arm() {
+        assert_ambiguous_target_rejected(
+            "DesignGraph",
+            "steps",
+            serde_json::json!([{"stepId":{"value":"entry"},"target":"child@2"}]),
+            serde_json::json!([{"stepId":{"value":"entry"},"target":{"subflow":"child@2"}}]),
+        );
+    }
+
+    #[test]
+    fn ambiguous_decision_maker_requires_a_typed_arm() {
+        assert_ambiguous_target_rejected(
+            "Decision",
+            "decisionMakers",
+            serde_json::json!(["reviewer@2"]),
+            serde_json::json!([{"person":"reviewer@2"},{"team":"reviewers@3"}]),
+        );
+    }
+
+    #[test]
+    fn architecture_resources_roundtrip_exact_selectors_and_optional_claims() {
+        let source = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Channel
+metadata: { namespace: shop, name: delivery, version: 2 }
+spec:
+  title: Order delivery
+  supersedes: delivery@1
+  protocols: [{value: nats}]
+  externalSystem: broker@3
+  bindings:
+    - connectionId: {value: '01963410-1000-7000-8000-000000000001'}
+      observation:
+        owner: {kind: automation_slice, id: observe-orders@4}
+        ownerUid: owner-incarnation
+        id: {value: '01963410-1000-7000-8000-000000000002'}
+      parameterValues: {region: west}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: DataStore
+metadata: { namespace: shop, name: order-cache }
+spec:
+  title: Order cache
+  storeClass: {known: KNOWN_CACHE}
+  authoritative: false
+  attachments:
+    - connectionId: {value: '01963410-1000-7000-8000-000000000003'}
+      readModel: order-feed@3
+";
+        let resources = parse_str(source, "resources.yaml").unwrap();
+        assert_eq!(resources[0].kind, pb::EntityKind::Channel);
+        assert_eq!(resources[1].kind, pb::EntityKind::DataStore);
+        let Some(pb::entity::Kind::Channel(channel)) = &resources[0].entity.kind else {
+            panic!("expected Channel");
+        };
+        let selector = channel.bindings[0].observation.as_ref().unwrap();
+        assert_eq!(selector.owner_uid, "owner-incarnation");
+        assert_eq!(
+            selector
+                .owner
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .version,
+            4
+        );
+        assert_eq!(channel.supersedes.as_ref().unwrap().version, 1);
+        let Some(pb::entity::Kind::DataStore(store)) = &resources[1].entity.kind else {
+            panic!("expected DataStore");
+        };
+        assert_eq!(store.authoritative, Some(false));
+        assert_eq!(
+            store.attachments[0]
+                .read_model
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .version,
+            3
+        );
+        let types = TranscodePool::builtin().unwrap();
+        let rendered = crate::export::render_board(
+            &resources
+                .iter()
+                .map(|resource| resource.entity.clone())
+                .collect::<Vec<_>>(),
+            &[],
+            &types,
+        )
+        .unwrap();
+        assert_eq!(rendered.skipped, [] as [pb::SkippedEntity; 0]);
+        let roundtrip = parse_str(&rendered.manifests, "export.yaml").unwrap();
+        for resource in resources {
+            let exported = roundtrip
+                .iter()
+                .find(|candidate| candidate.kind == resource.kind)
+                .unwrap();
+            assert_eq!(exported.entity, resource.entity);
+        }
     }
 
     #[test]
@@ -617,11 +867,16 @@ spec:
       given: [order-queue]
       whenDoc: poll finds a row
       then: fulfill
+    - id: idle
+      title: Queue empty
+      given: [order-queue]
+      whenDoc: poll finds nothing
+      noCommand: {doc: nothing to fulfill}
 ");
         let Some(pb::entity::Kind::AutomationSlice(slice)) = m.entity.kind else {
             panic!("expected automationSlice");
         };
-        assert_eq!(slice.scenarios.len(), 1);
+        assert_eq!(slice.scenarios.len(), 2);
         // Scenario id stays the literal string, NOT expanded into an Id.
         assert_eq!(slice.scenarios[0].id, "happy");
         let given = slice.scenarios[0].given[0]
@@ -633,14 +888,18 @@ spec:
         assert_eq!(given.slug, "order-queue");
         assert_eq!(given.namespace, "shop");
         let then = slice.scenarios[0]
-            .then
-            .clone()
-            .unwrap()
-            .command
+            .then_command()
             .unwrap()
             .id
+            .clone()
             .unwrap();
         assert_eq!(then.slug, "fulfill");
+        assert_eq!(
+            slice.scenarios[1].outcome,
+            Some(pb::automation_scenario::Outcome::NoCommand(pb::NoCommand {
+                doc: "nothing to fulfill".into(),
+            }))
+        );
         let rms: Vec<pb::Id> = slice
             .source_read_models
             .into_iter()
@@ -771,7 +1030,7 @@ spec: { title: B }
             format!("{err:#}").contains("no manifest documents"),
             "{err:#}"
         );
-        let _ = serde_json::Value::deserialize(serde_yaml::Deserializer::from_str("x: 1"))
+        let _ = serde_json::Value::deserialize(serde_norway::Deserializer::from_str("x: 1"))
             .expect("yaml to json");
     }
 
@@ -936,5 +1195,90 @@ spec: { title: A }
                 || msg.contains("unsupported"),
             "error should name the rejected file or reason, got: {msg}"
         );
+    }
+
+    /// The data block as Studio's Export HTML writes it: every `<` in the
+    /// JSON escaped, so a `</script>` inside a doc cannot end the block.
+    fn board_html(snapshot: &Value) -> String {
+        let data = serde_json::to_string(snapshot)
+            .unwrap()
+            .replace('<', "\\u003c");
+        format!(
+            "<!doctype html>\n<html><body><div id=\"root\"></div>\n\
+             <script id=\"atlas-snapshot\" type=\"application/json\">{data}</script>\n\
+             <script type=\"module\">console.log('\\x3C/script>')</script>\n</body></html>\n"
+        )
+    }
+
+    const BOARD_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: acme-checkout, name: order.placed }
+spec: { title: 'ends with </script>' }
+";
+
+    const FOREIGN_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: acme-payments, name: payment.captured }
+spec: { title: Payment captured }
+";
+
+    #[test]
+    fn board_html_reads_the_model_and_keeps_external_entities_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board.html");
+        let snapshot = serde_json::json!({
+            "version": 1,
+            "responses": {},
+            "manifests": { "model": BOARD_EVENT, "external": FOREIGN_EVENT },
+        });
+        std::fs::write(&path, board_html(&snapshot)).unwrap();
+
+        let files = read_paths(&[path]).unwrap();
+        let loaded = load_builtin(&files.documents).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id.slug, "order.placed");
+        let Some(pb::entity::Kind::Event(event)) = loaded[0].entity.kind.as_ref() else {
+            panic!("expected an event");
+        };
+        assert_eq!(event.title, "ends with </script>");
+        let external: Vec<_> = files.external.iter().map(|d| d.id.slug.as_str()).collect();
+        assert_eq!(external, ["payment.captured"]);
+    }
+
+    #[test]
+    fn board_html_without_manifests_asks_for_a_new_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.html");
+        std::fs::write(&path, board_html(&serde_json::json!({ "responses": {} }))).unwrap();
+        let err = read_paths(&[path]).unwrap_err();
+        assert!(format!("{err:#}").contains("export it again"), "{err:#}");
+
+        let page = dir.path().join("page.html");
+        std::fs::write(&page, "<html><body>hello</body></html>").unwrap();
+        let err = read_paths(&[page]).unwrap_err();
+        assert!(format!("{err:#}").contains("atlas-snapshot"), "{err:#}");
+    }
+
+    #[test]
+    fn html_is_read_only_when_named_and_never_formatted() {
+        let dir = tempfile::tempdir().unwrap();
+        let html = dir.path().join("board.html");
+        let snapshot = serde_json::json!({ "manifests": { "model": BOARD_EVENT, "external": "" } });
+        std::fs::write(&html, board_html(&snapshot)).unwrap();
+        std::fs::write(dir.path().join("payments.yaml"), FOREIGN_EVENT).unwrap();
+
+        // A directory walk keeps to YAML, so a saved board next to manifests is not applied twice.
+        let walked = read_paths(&[dir.path().to_path_buf()]).unwrap();
+        let slugs: Vec<_> = walked
+            .documents
+            .iter()
+            .map(|d| d.id.slug.as_str())
+            .collect();
+        assert_eq!(slugs, ["payment.captured"]);
+        assert!(read_paths(std::slice::from_ref(&html))
+            .unwrap()
+            .external
+            .is_empty());
+        assert!(collect_yaml_files(&[html]).is_err());
     }
 }

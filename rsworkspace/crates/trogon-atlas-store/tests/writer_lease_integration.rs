@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
-use trogon_atlas_store::{NatsStore, NatsStoreConfig, Store, StoreError, WriteContext};
+use trogon_atlas_store::{
+    NatsStore, NatsStoreConfig, Store, StoreError, StoreMetrics, WriteContext,
+};
 
 fn event(ns: &str, slug: &str, version: u64, title: &str) -> pb::Entity {
     pb::Entity {
@@ -32,7 +34,7 @@ fn event(ns: &str, slug: &str, version: u64, title: &str) -> pb::Entity {
 /// defaults so the takeover-after-expiry half of the test does not need
 /// to wait out a real fifteen-second lease.
 fn config(url: &str, suffix: &str, role: WriterRole) -> NatsStoreConfig {
-    let mut config = NatsStoreConfig::new(url);
+    let mut config = NatsStoreConfig::new(url, StoreMetrics::default());
     config.bucket = format!("test-lease-{suffix}");
     config.branches_bucket = format!("test-lease-branches-{suffix}");
     config.changesets_bucket = format!("test-lease-changesets-{suffix}");

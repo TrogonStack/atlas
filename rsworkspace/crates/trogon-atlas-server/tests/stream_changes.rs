@@ -6,7 +6,7 @@ use tokio_stream::StreamExt;
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -34,7 +34,7 @@ fn make_event(ns: &str, slug: &str, version: u64) -> pb::Entity {
 async fn svc() -> Arc<EventModelServiceImpl> {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    Arc::new(EventModelServiceImpl::try_new(Arc::new(store)).unwrap())
+    Arc::new(EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap())
 }
 
 async fn put_event(svc: &EventModelServiceImpl, ns: &str, slug: &str, version: u64) {
@@ -69,11 +69,7 @@ async fn live_changes_arrive_within_50ms() {
         .unwrap();
     let mut stream = stream_resp.into_inner();
 
-    let svc_clone = svc.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        put_event(&svc_clone, "orders", "order-placed", 1).await;
-    });
+    put_event(&svc, "orders", "order-placed", 1).await;
 
     let event = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
@@ -144,11 +140,7 @@ async fn after_token_replays_history_then_streams_live() {
     assert_eq!(first.token, "1");
     assert_eq!(second.token, "2");
 
-    let svc_clone = svc.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        put_event(&svc_clone, "orders", "order-placed", 3).await;
-    });
+    put_event(&svc, "orders", "order-placed", 3).await;
 
     let third = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
@@ -206,12 +198,8 @@ async fn namespace_filter_skips_other_namespaces() {
         .unwrap();
     let mut stream = stream_resp.into_inner();
 
-    let svc_clone = svc.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        put_event(&svc_clone, "billing", "invoice-issued", 1).await;
-        put_event(&svc_clone, "orders", "order-placed", 1).await;
-    });
+    put_event(&svc, "billing", "invoice-issued", 1).await;
+    put_event(&svc, "orders", "order-placed", 1).await;
 
     let event = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
@@ -222,7 +210,7 @@ async fn namespace_filter_skips_other_namespaces() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn kind_filter_skips_other_kinds() {
+async fn kind_filter_skips_other_kinds_after_delayed_writes() {
     let svc = svc().await;
     let stream_resp = svc
         .stream_changes(Request::new(pb::StreamChangesRequest {
@@ -234,32 +222,28 @@ async fn kind_filter_skips_other_kinds() {
         .unwrap();
     let mut stream = stream_resp.into_inner();
 
-    let svc_clone = svc.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-        svc_clone
-            .put_entity(Request::new(pb::PutEntityRequest {
-                operation_id: String::new(),
-                entity: Some(pb::Entity {
-                    system: None,
-                    kind: Some(pb::entity::Kind::Persona(pb::Persona {
-                        id: Some(id("orders", "buyer", 1)),
-                        title: "buyer".into(),
-                        role: "customer".into(),
-                        doc: String::new(),
-                        metadata: Vec::new(),
-                        supersedes: None,
-                    })),
-                }),
-                create_only: true,
-                if_match: String::new(),
-                validate_only: false,
-                force: false,
-            }))
-            .await
-            .unwrap();
-        put_event(&svc_clone, "orders", "order-placed", 1).await;
-    });
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    svc.put_entity(Request::new(pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Persona(pb::Persona {
+                id: Some(id("orders", "buyer", 1)),
+                title: "buyer".into(),
+                role: "customer".into(),
+                doc: String::new(),
+                metadata: Vec::new(),
+                supersedes: None,
+            })),
+        }),
+        create_only: true,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+    }))
+    .await
+    .unwrap();
+    put_event(&svc, "orders", "order-placed", 1).await;
 
     let event = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await

@@ -58,6 +58,39 @@ describe('proto entrypoint contract', () => {
     expect(typeof ctor).toBe('function');
   });
 
+  it('loads the native Specification union and exact nested content through the deployed service package', () => {
+    const definitions = protoLoader.loadSync(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), {
+      keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot],
+    });
+    const entityCodec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    const kind = definitions['trogonatlas.eventmodel.v1alpha1.EntityKind'];
+    expect(kind.type.value).toContainEqual(expect.objectContaining({ name: 'ENTITY_KIND_SPECIFICATION', number: 32 }));
+    const entity = { specification: {
+      id: { namespace: 'shop', slug: 'contract', version: '2' }, title: 'Order contract',
+      artifacts: [{ memberId: { value: '11111111-1111-4111-8111-111111111111' }, name: { value: 'Source' }, content: '{"type":"object"}\r\n', digest: { sha256: 'a'.repeat(64) } }],
+      messages: [{ memberId: { value: '22222222-2222-4222-8222-222222222222' }, name: { value: 'Receipt' }, mapping: { connectionId: { value: '33333333-3333-4333-8333-333333333333' }, readModel: { id: { namespace: 'shop', slug: 'receipt', version: '3' } } } }],
+    } };
+    expect(entityCodec.deserialize(entityCodec.serialize(entity))).toEqual(entity);
+  });
+
+  it('loads DataProduct kind, repeated port/access identities and inspection DTO from the production package', () => {
+    const definitions = protoLoader.loadSync(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), {
+      keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot],
+    });
+    expect(definitions['trogonatlas.eventmodel.v1alpha1.EntityKind'].type.value)
+      .toContainEqual(expect.objectContaining({ name: 'ENTITY_KIND_DATA_PRODUCT', number: 33 }));
+    const id = { namespace: 'shop', slug: 'offering', version: '2' };
+    const product = { id, title: 'Offering', inputs: [{ portId: { value: 'input-port' }, name: { value: 'Input' } }], outputs: [
+      { portId: { value: 'output-port' }, name: { value: 'Output' }, derivedFrom: {}, contract: { connectionId: { value: 'contract-id' }, contractType: { schema: { ownerUid: 'spec-uid', memberId: { value: 'schema-member' }, kind: 'CONTRACT_MEMBER_KIND_SCHEMA', specification: { id } }, expectedDigest: { sha256: 'a'.repeat(64) }, expectedArtifactId: { value: 'artifact-member' } } }, access: ['access-a', 'access-b'].map((value) => ({ connectionId: { value }, operation: { operation: { specification: { id }, ownerUid: 'spec-uid', memberId: { value: 'operation-member' }, kind: 'CONTRACT_MEMBER_KIND_OPERATION' }, response: { owner: { kind: 'ENTITY_KIND_SPECIFICATION', id }, ownerUid: 'spec-uid', id: { value: 'response-id' } } } })) },
+    ] };
+    const codec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    expect(codec.deserialize(codec.serialize({ dataProduct: product }))).toEqual({ dataProduct: product });
+    const response = { product, etag: 'etag', scope: { branch: 'review', revision: 'checked-revision' }, ports: [{ port: { product: { id }, ownerUid: 'product-uid', portId: { value: 'output-port' }, direction: 'DATA_PORT_DIRECTION_OUTPUT' }, data: 'DATA_PRODUCT_SELECTION_STATE_UNDECLARED', incomplete: true }], incomplete: true };
+    const inspectCodec = definitions['trogonatlas.api.eventmodel.v1alpha1.InspectDataProductResponse'];
+    expect(inspectCodec.deserialize(inspectCodec.serialize(response))).toEqual(response);
+    expect(Object.values(loadServiceCtor(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), protoRoot).service).some((method) => method.path.endsWith('/InspectDataProduct'))).toBe(true);
+  });
+
   it('event_model.proto does not expose EventModelService (must not be PROTO_PATH)', () => {
     // service definitions live in service.proto; using event_model.proto as
     // PROTO_PATH leaves EventModelService undefined at studio boot.
@@ -128,7 +161,22 @@ describe('dev compose PROTO_PATH', () => {
 
 describe('helm chart contract', () => {
   beforeAll(() => {
-    execFileSync('helm', ['dependency', 'update', chartDir], { encoding: 'utf8', stdio: 'pipe' });
+    const repositoryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-helm-repositories-'));
+    const repositoryConfig = path.join(repositoryDir, 'repositories.yaml');
+    fs.writeFileSync(repositoryConfig, 'repositories: []\n');
+    try {
+      execFileSync('helm', ['dependency', 'update', chartDir], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HELM_REPOSITORY_CONFIG: repositoryConfig,
+          HELM_REPOSITORY_CACHE: path.join(repositoryDir, 'cache'),
+        },
+      });
+    } finally {
+      fs.rmSync(repositoryDir, { recursive: true, force: true });
+    }
   }, HELM_TIMEOUT_MS);
 
   describe('helm studio auth with tokensFile', { timeout: HELM_TIMEOUT_MS }, () => {
@@ -432,6 +480,42 @@ describe('helm server chart NOTES redact NATS credentials', () => {
   });
 });
 
+describe('helm server chart private port', { timeout: HELM_TIMEOUT_MS }, () => {
+  function servicePort(extra) {
+    const rendered = execFileSync(
+      'helm',
+      ['template', 'test', serverChartDir, '--set', 'auth.insecureAllowAnonymous=true', ...extra],
+      { encoding: 'utf8' },
+    );
+    return JSON.parse(
+      execFileSync(
+        'python3',
+        [
+          '-c',
+          `import sys,yaml,json
+docs=list(yaml.safe_load_all(sys.stdin))
+svc=next(x for x in docs if x and x.get("kind")=="Service")
+print(json.dumps(svc["spec"]["ports"]))
+`,
+        ],
+        { encoding: 'utf8', input: rendered },
+      ),
+    );
+  }
+
+  it('names the port private and declares h2c without TLS', () => {
+    expect(servicePort([])).toEqual([
+      { name: 'private', port: 50069, targetPort: 'private', protocol: 'TCP', appProtocol: 'kubernetes.io/h2c' },
+    ]);
+  });
+
+  it('declares no appProtocol with TLS', () => {
+    expect(servicePort(['--set', 'tls.existingSecret=s', '--set', 'service.port=443'])).toEqual([
+      { name: 'private', port: 443, targetPort: 'private', protocol: 'TCP' },
+    ]);
+  });
+});
+
 describe('helm studio chart readiness and token mount', () => {
   function render(extra) {
     return execFileSync('helm', ['template', 'test', studioChartDir, ...extra], { encoding: 'utf8' });
@@ -458,22 +542,29 @@ print(${pythonExpr})
     expect(out).toBe('False');
   });
 
-  it('falls back to a tcpSocket readiness probe when passthrough has no bridge credential', () => {
-    const rendered = render(['--set', 'auth.passthrough=true']);
+  it.each([
+    ['without a bridge credential', []],
+    ['with passthrough and no bridge credential', ['--set', 'auth.passthrough=true']],
+    ['with a bridge credential', ['--set', 'auth.passthrough=true', '--set', 'auth.token.value=srv-secret']],
+  ])('probes /-/readiness and /-/liveness on the public port %s', (_label, extra) => {
+    const rendered = render(extra);
     const out = studioDeploymentField(
       rendered,
-      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+      '"|".join(f\'{p}={c[p]["httpGet"]["path"]}@{c[p]["httpGet"]["port"]}\' for c in [d["spec"]["template"]["spec"]["containers"][0]] for p in ("startupProbe","readinessProbe","livenessProbe"))',
     );
-    expect(out).toBe('tcpSocket');
+    expect(out).toBe(
+      'startupProbe=/-/liveness@public|readinessProbe=/-/readiness@public|livenessProbe=/-/liveness@public',
+    );
   });
 
-  it('keeps the /api/info readiness probe when a bridge credential is configured', () => {
-    const rendered = render(['--set', 'auth.passthrough=true', '--set', 'auth.token.value=srv-secret']);
+  it('gives liveness a higher failure threshold than readiness', () => {
+    const rendered = render([]);
     const out = studioDeploymentField(
       rendered,
-      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+      '"%s>%s" % (d["spec"]["template"]["spec"]["containers"][0]["livenessProbe"].get("failureThreshold", 3), d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"].get("failureThreshold", 3))',
     );
-    expect(out).toBe('httpGet');
+    const [liveness, readiness] = out.split('>').map(Number);
+    expect(liveness).toBeGreaterThan(readiness);
   });
 });
 
@@ -519,7 +610,7 @@ describe('studio CI lockfile contract', () => {
     expect(miseVersion).toBe('10.3.0');
 
     const dockerfile = fs.readFileSync(studioDockerfile, 'utf8');
-    const dockerfileVersion = dockerfile.match(/npm install -g pnpm@([\d.]+)/)?.[1];
+    const dockerfileVersion = dockerfile.match(/^ARG PNPM_VERSION=([\d.]+)$/m)?.[1];
     expect(dockerfileVersion, 'studio Dockerfile must pin a pnpm version').toBeTruthy();
     expect(dockerfileVersion, 'CI pnpm version (mise.toml) must match the studio Dockerfile pnpm pin').toBe(
       miseVersion,

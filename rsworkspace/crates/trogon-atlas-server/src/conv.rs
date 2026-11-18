@@ -155,6 +155,159 @@ pub mod reason {
     pub const NOT_WRITER: &str = "NOT_WRITER";
     pub const CURSOR_REJECTED: &str = "CURSOR_REJECTED";
     pub const BREAKING_CHANGE: &str = "BREAKING_CHANGE";
+    pub const ENTITY_PROTECTED: &str = "ENTITY_PROTECTED";
+    pub const PROTECTION_STATE_UNKNOWN: &str = "PROTECTION_STATE_UNKNOWN";
+    pub const INVARIANT_VIOLATED: &str = "INVARIANT_VIOLATED";
+    pub const INVARIANT_UNEVALUABLE: &str = "INVARIANT_UNEVALUABLE";
+    pub const INVARIANT_STALE: &str = "INVARIANT_STALE";
+    pub const EXPORT_INCOMPLETE: &str = "EXPORT_INCOMPLETE";
+    pub const SIGNING_KEY_UNAVAILABLE: &str = "SIGNING_KEY_UNAVAILABLE";
+}
+
+/// `FAILED_PRECONDITION`: the write would change an identity an admin has
+/// protected. Nothing was applied. `ErrorInfo` names the first identity and
+/// its reason; a `PreconditionFailure` violation names every one, so a
+/// refused batch reports all of them at once.
+pub fn entity_protected(records: &[trogon_atlas_store::ProtectionRecord]) -> Status {
+    let Some(first) = records.first() else {
+        return Status::internal("entity_protected called without a protected identity");
+    };
+    let message = format!(
+        "{} is protected ({}); an admin must call UnprotectEntity before it can change",
+        first.identity, first.reason
+    );
+    let mut details = ErrorDetails::with_error_info(
+        reason::ENTITY_PROTECTED,
+        ERROR_DOMAIN,
+        HashMap::from([
+            ("identity".to_string(), first.identity.to_string()),
+            ("protection_reason".to_string(), first.reason.to_string()),
+            ("protected_by".to_string(), first.protected_by.clone()),
+        ]),
+    );
+    for record in records {
+        details.add_precondition_failure_violation(
+            reason::ENTITY_PROTECTED,
+            record.identity.to_string(),
+            record.reason.to_string(),
+        );
+    }
+    Status::with_error_details(Code::FailedPrecondition, message, details)
+}
+
+/// `FAILED_PRECONDITION`: the write would break, or cannot be checked
+/// against, the invariant `outcome` describes. Each forbidden finding the
+/// write introduces rides as an `INVARIANT` precondition violation.
+pub fn invariant_refused(outcome: &pb::InvariantOutcome, snapshot_id: &str) -> Status {
+    use pb::invariant_outcome::Status as Verdict;
+    let violated = outcome.status() == Verdict::Violated;
+    let carrier = outcome
+        .carrier
+        .as_ref()
+        .and_then(|c| c.id.as_ref())
+        .map(|id| format!("{}/{}@{}", id.namespace, id.slug, id.version))
+        .unwrap_or_default();
+    let label = if outcome.redacted {
+        "an invariant the caller cannot read".to_string()
+    } else {
+        format!("invariant {:?} declared on {carrier}", outcome.name)
+    };
+    let message = if violated {
+        format!("write would violate {label}")
+    } else {
+        format!(
+            "write cannot be checked against {label}: {}",
+            outcome.reason().as_str_name().trim_start_matches("REASON_")
+        )
+    };
+    let metadata = HashMap::from([
+        ("invariant".to_string(), outcome.name.clone()),
+        ("carrier".to_string(), carrier.clone()),
+        (
+            "status".to_string(),
+            outcome
+                .status()
+                .as_str_name()
+                .trim_start_matches("STATUS_")
+                .to_string(),
+        ),
+        (
+            "reason".to_string(),
+            if violated {
+                String::new()
+            } else {
+                outcome
+                    .reason()
+                    .as_str_name()
+                    .trim_start_matches("REASON_")
+                    .to_string()
+            },
+        ),
+        ("snapshot_id".to_string(), snapshot_id.to_string()),
+        ("redacted".to_string(), outcome.redacted.to_string()),
+    ]);
+    let reason = if violated {
+        reason::INVARIANT_VIOLATED
+    } else {
+        reason::INVARIANT_UNEVALUABLE
+    };
+    let mut details = ErrorDetails::with_error_info(reason, ERROR_DOMAIN, metadata);
+    for issue in &outcome.violations {
+        details.add_precondition_failure_violation(
+            "INVARIANT",
+            carrier.clone(),
+            format!("{}: {}", issue.code, issue.message),
+        );
+    }
+    Status::with_error_details(Code::FailedPrecondition, message, details)
+}
+
+/// `ABORTED`: the scope was written after the invariant verdict's snapshot
+/// was read, so the verdict no longer describes the world the write would
+/// land in. Retrying re-evaluates against the current state.
+pub fn invariant_stale() -> Status {
+    with_reason(
+        Code::Aborted,
+        "the scope changed after its invariants were checked; retry the write",
+        reason::INVARIANT_STALE,
+    )
+}
+
+/// True for the refusals `invariant_refused` builds.
+#[must_use]
+pub fn is_invariant_refusal(status: &Status) -> bool {
+    status.get_details_error_info().is_some_and(|info| {
+        info.domain == ERROR_DOMAIN
+            && (info.reason == reason::INVARIANT_VIOLATED
+                || info.reason == reason::INVARIANT_UNEVALUABLE)
+    })
+}
+
+/// `UNAVAILABLE`: a write would touch an identity whose protection could not
+/// be read, so it is refused as if protected. Distinct from
+/// `ENTITY_PROTECTED` so a caller retries instead of asking for a lift.
+pub fn protection_state_unknown(unknown: &[trogon_atlas_store::ProtectionUnknown]) -> Status {
+    let Some(first) = unknown.first() else {
+        return Status::internal("protection_state_unknown called without an identity");
+    };
+    let message = format!(
+        "protection state of {} is unknown ({}); the write is refused. Retry; if it persists, an admin inspects GetEntityProtection and lifts the unreadable row with UnprotectEntity",
+        first.identity, first.cause
+    );
+    let mut metadata = HashMap::from([("identity".to_string(), first.identity.to_string())]);
+    if let Some(revision) = first.revision {
+        metadata.insert("row_revision".to_string(), revision.to_string());
+    }
+    let mut details =
+        ErrorDetails::with_error_info(reason::PROTECTION_STATE_UNKNOWN, ERROR_DOMAIN, metadata);
+    for u in unknown {
+        details.add_precondition_failure_violation(
+            reason::PROTECTION_STATE_UNKNOWN,
+            u.identity.to_string(),
+            u.cause.to_string(),
+        );
+    }
+    Status::with_error_details(Code::Unavailable, message, details)
 }
 
 /// `UNAVAILABLE`: another call already owns this `operation_id` and has not
@@ -162,6 +315,31 @@ pub mod reason {
 /// the mutation as failed.
 pub fn operation_in_progress(message: impl Into<String>) -> Status {
     with_reason(Code::Unavailable, message, reason::OPERATION_IN_PROGRESS)
+}
+
+/// `FAILED_PRECONDITION`: an attested export could not cover its whole
+/// scope. `reasons` lists the bundle's incomplete reasons, comma-joined.
+/// The caller may ask again with `allow_incomplete` to get the bundle
+/// marked as incomplete instead.
+pub fn export_incomplete(message: impl Into<String>, reasons: String) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::EXPORT_INCOMPLETE,
+        HashMap::from([("reasons".to_string(), reasons)]),
+    )
+}
+
+/// `FAILED_PRECONDITION`: the server is configured to sign attested
+/// bundles and could not load its key, so it refuses rather than return an
+/// unsigned bundle. `source` is the kind of key reference, `file` or `env`.
+pub fn signing_key_unavailable(message: impl Into<String>, source: &str) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::SIGNING_KEY_UNAVAILABLE,
+        HashMap::from([("source".to_string(), source.to_string())]),
+    )
 }
 
 /// `ALREADY_EXISTS`: `operation_id` was already claimed for a request with a
@@ -180,6 +358,71 @@ pub fn cursor_rejected_err(message: impl Into<String>) -> Status {
     with_reason(Code::InvalidArgument, message, reason::CURSOR_REJECTED)
 }
 
+/// `NOT_FOUND` carrying near-match slugs under `did_you_mean`, comma-joined
+/// because `ErrorInfo` metadata values are strings. With no suggestions it is
+/// the same status `store_err` gives, so the two cannot be told apart.
+pub fn not_found_with_suggestions(suggestions: &[String]) -> Status {
+    if suggestions.is_empty() {
+        return store_err(StoreError::NotFound);
+    }
+    with_reason_and_metadata(
+        Code::NotFound,
+        "entity not found",
+        reason::NOT_FOUND,
+        HashMap::from([("did_you_mean".to_string(), suggestions.join(","))]),
+    )
+}
+
+/// `STALE_PRECONDITION` for a single-entity write planned against `expected_etag`
+/// when the store holds `actual_etag` (empty when the entity is absent). Field
+/// names match `BatchMutateResponse.precondition_failure`.
+pub fn stale_precondition(
+    expected_etag: impl Into<String>,
+    actual_etag: impl Into<String>,
+) -> Status {
+    let expected_etag = expected_etag.into();
+    let actual_etag = actual_etag.into();
+    tracing::debug!(expected = %expected_etag, found = %actual_etag, "etag mismatch");
+    with_reason_and_metadata(
+        Code::Aborted,
+        "etag mismatch",
+        reason::STALE_PRECONDITION,
+        HashMap::from([
+            ("expected_etag".to_string(), expected_etag),
+            ("actual_etag".to_string(), actual_etag),
+        ]),
+    )
+}
+
+/// `ALREADY_EXISTS` for `create_only` when the entity is already present.
+/// `expected_etag` is empty (the plan expected absence); `actual_etag` is the
+/// revision the store holds, matching batch precondition_failure.
+pub fn already_exists_at(actual_etag: impl Into<String>) -> Status {
+    with_reason_and_metadata(
+        Code::AlreadyExists,
+        "entity already exists",
+        reason::ALREADY_EXISTS,
+        HashMap::from([
+            ("expected_etag".to_string(), String::new()),
+            ("actual_etag".to_string(), actual_etag.into()),
+        ]),
+    )
+}
+
+/// `NOT_FOUND` for an `if_match` write whose target is gone. Carries the
+/// planned revision so a caller can tell "absent now" from a generic miss.
+pub fn not_found_for_if_match(expected_etag: impl Into<String>) -> Status {
+    with_reason_and_metadata(
+        Code::NotFound,
+        "entity not found",
+        reason::NOT_FOUND,
+        HashMap::from([
+            ("expected_etag".to_string(), expected_etag.into()),
+            ("actual_etag".to_string(), String::new()),
+        ]),
+    )
+}
+
 pub fn store_err(err: StoreError) -> Status {
     match err {
         StoreError::NotFound => with_reason(Code::NotFound, "entity not found", reason::NOT_FOUND),
@@ -188,14 +431,12 @@ pub fn store_err(err: StoreError) -> Status {
             "entity already exists",
             reason::ALREADY_EXISTS,
         ),
-        StoreError::EtagMismatch { expected, found } => {
-            tracing::debug!(expected = %expected, found = %found, "etag mismatch");
-            with_reason(Code::Aborted, "etag mismatch", reason::STALE_PRECONDITION)
-        }
+        StoreError::EtagMismatch { expected, found } => stale_precondition(expected, found),
         StoreError::InvalidArgument(msg) => {
             with_reason(Code::InvalidArgument, msg, reason::VALIDATION_FAILED)
         }
         StoreError::Unavailable(msg) => with_reason(Code::Unavailable, msg, reason::UNAVAILABLE),
+        StoreError::ResourceExhausted(msg) => Status::resource_exhausted(msg),
         StoreError::Backend(msg) => {
             // Backend messages can carry NATS cluster addresses, bucket
             // names, or filesystem paths -- log full detail server-side and
@@ -309,6 +550,16 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::AlertPolicy(_)) => Ok(pb::EntityKind::AlertPolicy),
         Some(K::AlertNotificationTarget(_)) => Ok(pb::EntityKind::AlertNotificationTarget),
         Some(K::TypeLibrary(_)) => Ok(pb::EntityKind::TypeLibrary),
+        Some(K::Channel(_)) => Ok(pb::EntityKind::Channel),
+        Some(K::DataStore(_)) => Ok(pb::EntityKind::DataStore),
+        Some(K::Specification(_)) => Ok(pb::EntityKind::Specification),
+        Some(K::DataProduct(_)) => Ok(pb::EntityKind::DataProduct),
+        Some(K::Team(_)) => Ok(pb::EntityKind::Team),
+        Some(K::Person(_)) => Ok(pb::EntityKind::Person),
+        Some(K::Decision(_)) => Ok(pb::EntityKind::Decision),
+        Some(K::Document(_)) => Ok(pb::EntityKind::Document),
+        Some(K::DesignGraph(_)) => Ok(pb::EntityKind::DesignGraph),
+        Some(K::SystemGroup(_)) => Ok(pb::EntityKind::SystemGroup),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -345,6 +596,16 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::AlertPolicy(x)) => x.id.as_ref(),
         Some(K::AlertNotificationTarget(x)) => x.id.as_ref(),
         Some(K::TypeLibrary(x)) => x.id.as_ref(),
+        Some(K::Channel(x)) => x.id.as_ref(),
+        Some(K::DataStore(x)) => x.id.as_ref(),
+        Some(K::Specification(x)) => x.id.as_ref(),
+        Some(K::DataProduct(x)) => x.id.as_ref(),
+        Some(K::Team(x)) => x.id.as_ref(),
+        Some(K::Person(x)) => x.id.as_ref(),
+        Some(K::Decision(x)) => x.id.as_ref(),
+        Some(K::Document(x)) => x.id.as_ref(),
+        Some(K::DesignGraph(x)) => x.id.as_ref(),
+        Some(K::SystemGroup(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -370,6 +631,28 @@ pub fn entity_to_ref(entity: &pb::Entity) -> Result<pb::EntityRef, Status> {
 pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     use pb::entity::Kind as K;
 
+    trogon_atlas_core::agent_metadata::validate(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+
+    trogon_atlas_core::connections::validate_connection_ids(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+
+    trogon_atlas_core::architectural_relationships::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::ui_hosting::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::communication_intent::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::system_group::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::business_data::validate_entity(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::channel_links::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::storage_claims::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    crate::invariants::check_declarations(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (
             x.title.as_str(),
@@ -421,6 +704,51 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len())
         }
         Some(K::TypeLibrary(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::Channel(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::DataStore(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::Specification(x)) => (
+            x.title.as_str(),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::DataProduct(x)) => (
+            x.title.as_str(),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Team(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Person(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Decision(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Document(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::SystemGroup(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::DesignGraph(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
         None => return Ok(()),
     };
 
@@ -627,6 +955,14 @@ mod validate_id_component_tests {
         });
         let info = status.get_details_error_info().unwrap();
         assert_eq!(info.reason, super::reason::STALE_PRECONDITION);
+        assert_eq!(
+            info.metadata.get("expected_etag").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            info.metadata.get("actual_etag").map(String::as_str),
+            Some("2")
+        );
     }
 
     #[test]

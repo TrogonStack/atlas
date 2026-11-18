@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Validate the otel/registry semantic convention registry"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+weaver registry check --v2 --registry otel/registry

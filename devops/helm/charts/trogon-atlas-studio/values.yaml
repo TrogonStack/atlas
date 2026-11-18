@@ -14,8 +14,10 @@ serviceAccount:
 replicaCount: 1
 
 image:
-  repository: atlas/trogon-atlas-studio
+  repository: images/atlas/trogon-atlas-studio
   tag: ""
+  # Pins the image when set, as sha256:<hex>.
+  digest: ""
   pullPolicy: IfNotPresent
 
 service:
@@ -44,10 +46,10 @@ auth:
 # below is the explicit full override and always wins when set.
 server:
   host: ""
-  grpcPort: 50069
+  port: 50069
 
 config:
-  # gRPC address of the server; defaults to http://<server.host>:<server.grpcPort>.
+  # gRPC address of the server; defaults to http://<server.host>:<server.port>.
   grpcUrl: ""
   corsOrigins: ""
   # Browser-reachable NATS WebSocket URL for the realtime change feed.

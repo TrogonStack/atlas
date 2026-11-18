@@ -17,7 +17,7 @@ clap CLI on top of it, so the MCP adapter can build on the same semantics.
 
 ```sh
 trogon-atlas apply  -f manifests/                 # create + configure + skip unchanged
-trogon-atlas apply  -f manifests/ --dry-run       # server-side validation, nothing persisted
+trogon-atlas apply  -f manifests/ --dry-run       # request-time findings (strategic warnings included), nothing persisted
 trogon-atlas diff   -f manifests/                 # unified diff vs live state, exit 1 on drift
 trogon-atlas export --namespace shop -o manifests # live store -> manifest YAML (one file per kind)
 trogon-atlas export --namespace shop -o manifests --layout slices # one self-contained file per slice
@@ -25,8 +25,46 @@ trogon-atlas openslo export --namespace shop -o shop.openslo.yaml --bindings ope
 trogon-atlas fmt manifests/                       # canonical YAML to stdout (single file) or report via --check
 trogon-atlas fmt manifests/ --write               # rewrite files in place
 trogon-atlas fmt manifests/ --check               # CI gate: exit 1 and list files that would change
+trogon-atlas get event/shop/order.placed          # one entity as manifest YAML (latest version unless @<version>)
+trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields, references in and out
+trogon-atlas tree shop                            # domains, storyboards, slices and what each slice connects
+trogon-atlas tree                                 # the same for every namespace that holds entities
+trogon-atlas namespaces                           # namespaces you can see, with ids and entity counts
+trogon-atlas validate shop/checkout                # full model validation incl. the strategic chain, exit 1 on any error
+trogon-atlas validate-project --namespace shop     # every model in a namespace plus store-level strategic findings
+trogon-atlas validate-project --domain shop/shop   # the models a Domain claims
+trogon-atlas validate-project --project shop/main@2 # the models a Project claims
 trogon-atlas walk-scenarios -f manifests/ --cases specifications/ # walk example cases offline, exit 1 on error findings
 ```
+
+`get`, `describe`, `tree` and `namespaces` are read-only. They take the same kind names
+as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
+exits `6` (`not_found`). They also take the ids that `describe`
+prints, such as `event:shop/order.placed@1`.
+
+`validate <namespace>/<model>[@version]` runs full validation on a stored
+event model: the model-level rules (storyboard entries, projection order,
+field provenance), the scenario checks of the model's slices against the
+current lanes, and the strategic chain of the model's namespace, meaning
+its BoundedContext, the Subdomains it realizes, their Domains, and any Domain
+declared in the namespace. `apply --dry-run` returns only the request-time
+findings for each write, strategic ones included. They never block the
+apply at any severity, so an apply that succeeds exits `0`; run `validate`
+after an apply to see the whole-model findings.
+With `--branch`, it validates the branch's view of the model. It exits `1`
+when any finding is an error and `6` when the model does not exist.
+
+`validate-project` validates every event model in a scope in one call. Pass
+exactly one of `--namespace <ns>`, `--domain <ns/slug[@version]>` or
+`--project <ns/slug[@version]>`; omit `@version` for the latest. Findings
+print per model, then once more in a `store-level` section: the strategic
+findings (BoundedContext, Domain, Subdomain and Project rules) belong to no
+model, so they appear there. A namespace scope also covers problem-space
+namespaces that hold no event model, which is why to run it after editing
+only Project, Domain, Subdomain or BoundedContext entities. It exits `1` when
+any finding is an error. With `--format json`, `data` carries `scope`,
+`validation_summary` and `reports`, one entry per section with `event_model`
+(`null` for the store-level section), `validation_summary` and `validation`.
 
 Connection flags (or environment):
 
@@ -78,6 +116,9 @@ Ergonomics, all schema-derived (see `src/manifest.rs`):
 - Wherever the proto expects an `Id`, a `*Ref`, an `*Edge`, or a scenario
   `*Example`, a bare string works: `slug`, `ns/slug`, or `ns/slug@version`.
   Namespace defaults to the manifest's namespace, version to 1.
+  `export` and `fmt` write this short form. They keep the object form when
+  the wrapper has other fields (such as `doc` or `kind`), or when a string
+  would not read back as the same Id.
 - `EntityKind` enum values accept short forms (`storyboard`) in addition to
   proto names (`ENTITY_KIND_STORYBOARD`).
 - Scenario `id` fields are plain strings and are left untouched; the

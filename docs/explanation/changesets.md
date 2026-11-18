@@ -53,12 +53,21 @@ message Changeset {
   string branch = 5;             // empty = baseline
   repeated ChangesetOp ops = 6;  // every entity this RPC actually wrote
   string rpc = 7;                // "PutEntity", "BatchMutate", "MergeBranch", ...
+  string operation_id = 8;
+  ChangesetValidation validation = 9;  // what was checked when it landed
 }
 ```
 
 One mutation RPC, one changeset. `PutEntity` records one op; `BatchMutate`,
 `DeleteByQuery`, `RetargetReferences` and `MergeBranch` record one op per
 entity that actually moved.
+
+`ProtectEntity` and `UnprotectEntity` record one op of kind `KIND_PROTECTED` or
+`KIND_UNPROTECTED`. They change no content, so as-of reads skip them, and
+`RevertChangeset` refuses a changeset that contains one: the inverse of
+protecting is `UnprotectEntity`, an admin decision, not an undo. A `PutEntity`
+from an admin that carries a `ProtectionAnnotation` records its `KIND_PUT` and
+`KIND_PROTECTED` ops in one changeset. See [entity protection](entity-protection.md).
 
 ## Why UUIDv7
 
@@ -77,11 +86,37 @@ wildcard.
 The author is `Principal.name` from the auth stack, resolved from the
 bearer token. The `x-trogon-atlas-author-name` header is accepted only when
 no principal is present, which is the un-authenticated development path. A
-write that reaches the store outside a mutation RPC (`trogon-atlas-server
-import`, a direct `Store` user, a test) mints no changeset at all, and its
+write that reaches the store outside a mutation RPC (a direct `Store` user,
+`migrate-legacy-fields`, a test) mints no changeset at all, and its
 change events carry an empty `changeset_id` and `author`. That is the
 documented unattributed case, not a bug: inventing an author would be
 worse than admitting there isn't one.
+
+## Imports
+
+`trogon-atlas-server import-git` is the one bulk route that writes entities
+outside an RPC, and it records changesets so a restore can be inspected and
+undone. Each run records baseline changesets with `rpc: "ImportGit"`, at
+most 1,024 entities each, and every imported entity gets a revision row.
+`seed` already goes through `BatchMutate`, and `trogon-atlas apply` through
+the ordinary write RPCs, so both were attributed before.
+
+- **Author.** `unauthenticated`. The command runs outside the auth stack,
+  so no principal vouched for it; the `rpc` says where the write came from.
+- **What is attributed.** Only entities the import created. An entity
+  already in the store is skipped and stays out of the changeset, so
+  reverting the import never removes something it did not write.
+- **Retries.** A rerun skips everything the first run landed, so it records
+  changesets only for what is still missing, and nothing when nothing is.
+- **Partial failure.** An entity that fails to import is skipped and named
+  in the log. What did land is still recorded, so the changeset describes
+  the writes that actually happened.
+- **Lost append.** If a changeset cannot be appended after its entities
+  landed, the command exits non-zero and names it. Those entities carry
+  revision rows that no changeset points to, so they behave as
+  unattributed writes until the run is investigated.
+- **Namespace registry.** `--restore-namespaces` writes registry rows, not
+  entities, and records no changeset.
 
 ## What is deliberately not recorded
 
@@ -91,12 +126,62 @@ worse than admitting there isn't one.
 - **`validate_only` calls.** Nothing was written.
 - **Nothing about reads.** The log is a write log.
 
+## What was checked when it landed
+
+A changeset records the validation its write declared, so a reviewer
+reading history can tell a change that passed every check from one that
+landed while a check was skipped or never ran. Recomputing validation
+later answers a different question: it judges the change against today's
+rules and today's model, not the ones it was written against.
+
+`validation` holds one of two outcomes:
+
+- **`validated`**: the write reported validation coverage. The receipt
+  carries the finding counts by severity, whether coverage was complete,
+  the checks that were not, and `rule_catalog_digest`, the identity of the
+  rule catalogue that ran. `PutEntity`, `BatchMutate` and `MergeBranch`
+  record this.
+- **`unvalidated`**: the write declared no coverage, and the receipt says
+  so with a reason token instead of claiming zero findings. Deletes,
+  bulk rewrites, reverts, branch resolutions, imports and source
+  publication record `no_declared_coverage`. A changeset reconstructed
+  from a write journal during recovery records `recovered`, because the
+  original findings were not journalled.
+
+A changeset written before receipts existed has no `validation` at all.
+Readers must treat that as unknown, never as clean.
+
+A check counts as complete only when it completed, or was skipped for a
+by-design reason such as not applying to the entity kind. A check skipped
+because another suite blocked it, or for any reason the server does not
+recognise counts as incomplete, so an unfamiliar state can never read as
+a pass.
+
+The rule catalogue digest is a SHA-256 over every rule, prose included,
+sorted by code. Any edit to the catalogue, even rewording a description,
+yields a new digest. That is deliberately strict: two receipts with the
+same digest ran exactly the same catalogue, and nothing weaker is
+promised.
+
+Default chosen: writes that declare no coverage record `unvalidated`
+rather than zero counts, and unrecognised skip reasons count as
+incomplete. Both keep a receipt from overstating what was checked.
+
+### Why the receipt has no snapshot id
+
+A receipt does not name the [snapshot](snapshot-identity.md) the write
+produced. Computing one hashes the whole projection, which would put an
+O(model) cost on every write. The changeset id already orders the
+transition, and an [as-of read](#as-of-reads-the-board-after-a-past-changeset)
+followed by `GetSnapshotId` recovers the state on demand when it is
+needed.
+
 ## Ordering: the writes commit first
 
 `append_changeset` runs *after* the entity writes land. When the append
 fails outright the RPC still succeeds (the data is already durable and
 reporting failure would misrepresent that), the failure is logged at ERROR
-with the changeset id and op count, and `trogon_atlas_changesets_lost_total`
+with the changeset id and op count, and `trogon_atlas.changesets.lost`
 increments.
 
 What happens next depends on how many entities the mutation wrote.
@@ -132,9 +217,9 @@ partial to undo, and the residual window stays: a crash between the write
 and the append loses **the attribution for one mutation, never the write
 itself**. The same holds for `MergeBranch` and for branch batches.
 
-Watch `trogon_atlas_changesets_lost_total` alongside
-`trogon_atlas_store_change_events_lost_total` and
-`trogon_atlas_batch_recovery_unresolved_total`. A nonzero value means
+Watch `trogon_atlas.changesets.lost` alongside
+`trogon_atlas.store.change_events.lost` and
+`trogon_atlas.batch_recovery.unresolved`. A nonzero value means
 history has a hole, or for a batch, that recovery has not closed it yet;
 it never means a write was lost. `trogon-atlas-server recover-batches
 --report-only` lists what is outstanding.
@@ -190,7 +275,7 @@ the way `ListChangesets` does.
 **Why both images, rather than a chain.** Storing only `after` and
 reconstructing `before` from the previous row assumes the chain is
 complete. It is not: revisions exist only for attributed writes, so an
-`trogon-atlas-server import-git` in the middle of an entity's life breaks the
+unattributed write in the middle of an entity's life breaks the
 chain silently and every `before` after it would be a lie. Each row
 carries its own pre-image and is true on its own.
 
@@ -207,7 +292,7 @@ pair and its inverse is always one op.
 
 Recording is best-effort with the same posture as the changeset append:
 the entity write is already durable, so a failure logs at ERROR and
-increments `trogon_atlas_store_revisions_lost_total` rather than failing the
+increments `trogon_atlas.store.revisions.lost` rather than failing the
 RPC. For a baseline batch the journal keeps the pre-image, so recovery
 rewrites the row from it and the entity's current value. If another write
 replaced that value first, the after-image is gone; recovery reports the
@@ -264,12 +349,107 @@ since its targets are a fixed list read off a recorded changeset rather
 than a query the caller composes. Both are available as MCP tools
 (`get_entity_history`, `revert_changeset`).
 
+## As-of reads: the board after a past changeset
+
+`GetEventModelProjection` takes `as_of_changeset`. With it set, the
+response is the model and its closure as they stood right after that
+changeset landed. The changeset's own writes are in the view; every later
+write is not.
+
+Nothing stores the past as a whole, because the entities bucket keeps one
+revision per key. The server derives it instead:
+
+1. Page the baseline changeset log from newest down to the target.
+2. For each newer changeset, read the revision row of every op in a
+   namespace the caller can read. Ops in other namespaces are skipped,
+   and a changeset with none of the caller's ops is skipped whole.
+3. Start from the current baseline and put back each key's `before`.
+   `before` absent means a later changeset created the key, so it is
+   removed. When several changesets touched one key, the oldest one's
+   `before` wins.
+4. Resolve the event model from that rebuilt set, then walk its closure
+   as usual. Namespace visibility applies to the result.
+
+The read is baseline only. A branch header is `INVALID_ARGUMENT`, and so is
+a changeset that landed on a branch. An unknown id is `NOT_FOUND`, and so is
+a changeset on a branch the caller cannot see, the same as `GetChangeset`.
+
+**Cost.** O(changesets since the target × their ops) revision reads, plus
+the log pages to find the target. The walk stops after 1,000 newer
+changesets in the caller's namespaces with `FAILED_PRECONDITION`, so an old target fails fast instead
+of holding the request open.
+
+**Gap: unattributed writes.** A write that minted no changeset
+(direct `Store` use, `migrate-legacy-fields`) left no revision row and
+no place in the log. It cannot be rewound, so its effect shows through in
+every as-of view. A newer changeset with a missing revision row (for
+example one whose batch recovery reported the key as `superseded`) makes
+the read `FAILED_PRECONDITION` rather than return a board that never
+existed.
+
+```text
+# The board as it was right after this changeset.
+GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
+                        as_of_changeset: <changeset id>)
+```
+
+The MCP tool `get_event_model_projection` takes the same `as_of_changeset`.
+
+### As of an instant
+
+`as_of_time` takes an RFC 3339 instant instead of an id. The server turns it
+into a changeset, then reads exactly what `as_of_changeset` would read for
+that changeset, and returns the id it chose in the response's
+`as_of_changeset` so the caller can pin the same view later.
+
+The instant picks a position in the log; it does not reconstruct a clock.
+A UUIDv7 id carries the millisecond its RPC minted it, and the chosen
+changeset is the newest baseline changeset with an op in a namespace the
+caller can read whose millisecond is at or before the instant. That keeps
+the view defined by log order, the same order every other as-of rule uses,
+rather than by comparing timestamps written by different processes.
+
+- **Precision.** Milliseconds. A sub-millisecond part is truncated, so every
+  changeset minted in the instant's millisecond is in the view.
+- **Boundary.** Inclusive: a changeset minted in the instant's millisecond is
+  in the view; one minted a millisecond later is not.
+- **Equal timestamps.** Several changesets minted in one millisecond keep
+  their id order, so the newest of them is chosen and all of them are in the
+  view, matching `as_of_changeset` for that newest id.
+- **Other owners.** A changeset with no op the caller can read is never
+  chosen, so the response cannot name another owner's changeset. Leaving it
+  out does not change the caller's view, which is narrowed to readable
+  namespaces anyway.
+- **Branches.** Baseline only, under the same rule as `as_of_changeset`.
+  Sending both fields is `INVALID_ARGUMENT`.
+- **The future.** An instant later than the server clock is
+  `INVALID_ARGUMENT`. Its answer would change as writes keep landing, so it
+  could not name a state.
+- **Before the log.** No readable changeset at or before the instant is
+  `FAILED_PRECONDITION`. The state before the first recorded changeset may
+  include unattributed writes, which the log cannot place in time.
+- **Cost.** One extra walk of the log from newest down to the chosen
+  changeset, under the same rewind cap.
+
+```text
+# The board as it was at the end of a review meeting.
+GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
+                        as_of_time: "2026-10-01T17:30:00Z")
+  -> projection, as_of_changeset: <the changeset it resolved to>
+```
+
+The MCP tool `get_event_model_projection` takes `as_of_time` too, and only
+after the server advertises `as_of_time`. An older server would ignore the
+field and return the current model.
+
 ## Cost, and when to move off this
 
 `list_changesets` scans the bucket's keyspace per page, keeping at most
 `limit` keys in memory (a bounded top-N selection, since JetStream KV
 offers no filtered or ordered scan). Memory is bounded; time is O(total
-changesets) per page.
+changesets) per page. A `branch` or `namespace` filter that rejects most
+records needs several such scans to fill one page, so a rarely touched
+namespace pays the most.
 
 `get_entity_history` carries the same caveat and worse: with no ordered
 range scan, answering for one entity enumerates the whole revision
@@ -293,6 +473,9 @@ ListChangesets(page_token: <id of the oldest row you have>, page_size: 50)
 
 # Only this branch.
 ListChangesets(branch: "checkout-redesign")
+
+# Only changesets that touched this namespace.
+ListChangesets(namespace: "acme.orders")
 
 # Attribute a change event you saw on the feed.
 GetChangeset(id: <event.changeset_id>)

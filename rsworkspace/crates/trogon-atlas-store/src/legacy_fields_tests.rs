@@ -17,6 +17,7 @@ use super::{
 use crate::{
     error::StoreError,
     key::{branch_delta_key, entity_key},
+    metrics::StoreMetrics,
     nats::{NatsStore, NatsStoreConfig, StoreOpenMode, SCHEMA_VERSION_KEY, STORE_SCHEMA_MARKER},
     StoreResult,
 };
@@ -24,7 +25,7 @@ use crate::{
 async fn isolated_config() -> NatsStoreConfig {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("lf-{suffix}");
     config.branches_bucket = format!("lf-branches-{suffix}");
     config.changesets_bucket = format!("lf-changesets-{suffix}");

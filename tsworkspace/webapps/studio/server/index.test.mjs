@@ -1,5 +1,11 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.resolve(here, '..', 'dist');
 
 vi.mock('@grpc/proto-loader', () => {
   return {
@@ -18,7 +24,19 @@ const upstreamCalls = {
   putEntity: null,
   compileTypeLibrary: null,
   getTypeLibraryDescriptorSet: null,
+  exportEventModelManifests: null,
   authorization: null,
+};
+
+const ACME_CHANGESET = {
+  id: '0192f000-0000-7000-8000-000000000003',
+  author: 'acme-agent',
+  at: '2026-01-03T00:00:00Z',
+  message: 'put event acme/order.placed',
+  branch: '',
+  rpc: 'PutEntity',
+  operationId: '',
+  ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'acme', slug: 'order.placed', version: '1' } } }],
 };
 
 const fakeClient = {
@@ -31,6 +49,10 @@ const fakeClient = {
   validateEventModel: (_req, _meta, _opts, cb) => cb(null, { issues: [] }),
   validateProject: (_req, _meta, _opts, cb) => cb(null, { reports: [], totalErrors: 0, totalWarnings: 0, totalInfo: 0 }),
   getEntity: (_req, _meta, _opts, cb) => cb(null, { entity: null }),
+  exportEventModelManifests: (req, _meta, _opts, cb) => {
+    upstreamCalls.exportEventModelManifests = req;
+    cb(null, { manifests: 'kind: EventModel\n', externalManifests: '' });
+  },
   listEntitiesByDomain: (_req, _meta, _opts, cb) => cb(null, { entities: [] }),
   listNamespaces: (_req, meta, _opts, cb) => {
     upstreamCalls.authorization = meta?.get('authorization')?.[0] ?? null;
@@ -87,6 +109,33 @@ const fakeClient = {
         },
       ],
     }),
+  getEntityHistory: (_req, _meta, _opts, cb) =>
+    cb(null, {
+      revisions: [
+        {
+          changesetId: '0192f000-0000-7000-8000-000000000002',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          rpc: 'PutEntity',
+          branch: '',
+          entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'acme', slug: 'order.placed', version: '1' } },
+          kind: 'KIND_PUT',
+          before: { event: { title: 'Order placed' } },
+          after: { event: { title: 'Order placed by shopper' } },
+        },
+      ],
+      nextPageToken: '0192f000-0000-7000-8000-000000000002',
+    }),
+  listChangesets: (_req, _meta, _opts, cb) =>
+    cb(null, {
+      changesets: [ACME_CHANGESET],
+      nextPageToken: '0192f000-0000-7000-8000-000000000003',
+    }),
+  getEventModelProjection: (_req, _meta, _opts, cb) => cb(null, { projection: { entities: {} } }),
+  getChangeset: (req, _meta, _opts, cb) =>
+    req.id === ACME_CHANGESET.id
+      ? cb(null, { changeset: ACME_CHANGESET })
+      : cb(Object.assign(new Error('entity not found'), { code: 5 })),
 };
 
 vi.mock('@grpc/grpc-js', async (importOriginal) => {
@@ -115,7 +164,14 @@ vi.mock('@grpc/grpc-js', async (importOriginal) => {
   return { ...mocked, default: mocked };
 });
 
-vi.mock('protobufjs', () => {
+vi.mock('protobufjs', async (importOriginal) => {
+  const actual = (await importOriginal()).default;
+  const nativePath = await import('node:path');
+  const nativeUrl = await import('node:url');
+  const protoRoot = nativePath.resolve(nativePath.dirname(nativeUrl.fileURLToPath(import.meta.url)), '../../../../proto');
+  const responsibilityRoot = new actual.Root();
+  responsibilityRoot.resolvePath = (_origin, target) => nativePath.resolve(protoRoot, target);
+  responsibilityRoot.loadSync(nativePath.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'));
   const fakeEntityKindValues = {
     ENTITY_KIND_UNSPECIFIED: 0, ENTITY_KIND_EVENT: 1, ENTITY_KIND_COMMAND: 2,
     ENTITY_KIND_READ_MODEL: 3, ENTITY_KIND_PROCESSOR: 4, ENTITY_KIND_UI: 5,
@@ -131,10 +187,11 @@ vi.mock('protobufjs', () => {
   const fakeRoot = {
     resolvePath: () => '',
     load: () => Promise.resolve(fakeRoot),
-    lookupType: () => ({
-      decode: () => ({}),
-      toObject: () => ({}),
-    }),
+    lookupType: (name) => {
+      if (/\.(GetSource|ListSource)/.test(name)) return responsibilityRoot.lookupType(name);
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|ListDecisionAmendments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations|GetDesignGraphDetail|ListSubjectDesignGraphs|TraverseDesignGraphTopology|ListIncomingDesignGraphSubflows|InspectHumanInteraction)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      return { decode: () => ({}), toObject: () => ({}) };
+    },
     lookupEnum: (name) => {
       if (name === 'trogonatlas.eventmodel.v1alpha1.EntityKind') {
         return { values: fakeEntityKindValues };
@@ -144,6 +201,7 @@ vi.mock('protobufjs', () => {
   };
   return {
     default: {
+      ...actual,
       Root: class {
         constructor() {
           Object.assign(this, fakeRoot);
@@ -307,7 +365,7 @@ describe('Global API auth middleware', () => {
     delete process.env.TROGON_ATLAS_AUTH_TOKEN;
   });
 
-  it('allows /api/info without a token (public health endpoint)', async () => {
+  it('allows /api/info without a token', async () => {
     const res = await request(authApp).get('/api/info');
     expect(res.status).toBe(200);
   });
@@ -475,6 +533,71 @@ describe('GET /api/validate-project', () => {
     const res = await request(app).get('/api/validate-project?projectNamespace=../bad&projectSlug=my-project');
     expect(res.status).toBe(400);
   });
+
+  describe('namespace scope', () => {
+    let seen;
+    let original;
+
+    beforeEach(() => {
+      original = fakeClient.validateProject;
+      seen = undefined;
+      fakeClient.validateProject = (req, _meta, _opts, cb) => {
+        seen = req;
+        cb(null, { reports: [], totalErrors: 0, totalWarnings: 0, totalInfo: 0 });
+      };
+    });
+
+    afterEach(() => {
+      fakeClient.validateProject = original;
+    });
+
+    it('maps ?namespace= to the namespace scope', async () => {
+      const res = await request(app).get('/api/validate-project?namespace=accounts');
+      expect(res.status).toBe(200);
+      expect(seen).toEqual({ namespace: 'accounts' });
+    });
+
+    it('still maps project and domain scopes to their ids', async () => {
+      await request(app).get('/api/validate-project?projectNamespace=acme&projectSlug=acme');
+      expect(seen).toEqual({ projectId: { namespace: 'acme', slug: 'acme', version: '1' } });
+      await request(app).get('/api/validate-project?domainNamespace=shop&domainSlug=shop&domainVersion=2');
+      expect(seen).toEqual({ domainId: { namespace: 'shop', slug: 'shop', version: '2' } });
+    });
+
+    it('returns 400 when the namespace is unsafe or too long', async () => {
+      expect((await request(app).get('/api/validate-project?namespace=../bad')).status).toBe(400);
+      expect((await request(app).get(`/api/validate-project?namespace=${'a'.repeat(5000)}`)).status).toBe(400);
+      expect(seen).toBeUndefined();
+    });
+
+    it('returns 400 unless exactly one scope is set', async () => {
+      const both = await request(app).get(
+        '/api/validate-project?namespace=accounts&projectNamespace=acme&projectSlug=acme',
+      );
+      expect(both.status).toBe(400);
+      expect(both.body.error).toMatch(/exactly one/);
+      expect(seen).toBeUndefined();
+      const none = await request(app).get('/api/validate-project');
+      expect(none.status).toBe(400);
+      expect(none.body.error).toMatch(/exactly one/);
+    });
+  });
+});
+
+describe('GET /api/event-model/:namespace/:slug/manifests', () => {
+  it('returns the board manifests for the model', async () => {
+    const res = await request(app).get('/api/event-model/my-ns/my-model/manifests');
+    expect(res.status).toBe(200);
+    expect(res.body.manifests).toBe('kind: EventModel\n');
+    expect(upstreamCalls.exportEventModelManifests).toEqual({
+      id: { namespace: 'my-ns', slug: 'my-model', version: '1' },
+    });
+  });
+
+  it('returns 400 for an unsafe namespace', async () => {
+    const res = await request(app).get('/api/event-model/bad%20ns/my-model/manifests');
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('GET /api/event-model/:namespace/:slug returning 404 for missing entity', () => {
@@ -577,6 +700,103 @@ describe('GET /api/event-model/:namespace/:slug success path (members, halo, kno
     expect(res.body.entities.some((e) => e.boundedContext)).toBe(true);
     expect(res.body.entities.some((e) => e.subdomain)).toBe(true);
     expect(res.body.entities.some((e) => e.domain)).toBe(true);
+  });
+
+  it('loads the domains and subdomains declared in the namespace, and the project a domain names', async () => {
+    const originalGetEntity = fakeClient.getEntity;
+    const originalListEntities = fakeClient.listEntities;
+    const listed = [];
+    fakeClient.getEntity = (req, _meta, _opts, cb) => {
+      const { kind, id } = req;
+      if (kind === 12) {
+        cb(null, { entity: { eventModel: { id, title: 'Stray model', members: [] } } });
+        return;
+      }
+      if (kind === 16) {
+        cb(null, {
+          entity: {
+            boundedContext: {
+              id: { namespace: 'my-ns', slug: 'my-ns', version: '1' },
+              title: 'My context',
+              realizes: [{ id: { namespace: 'problem', slug: 'billing', version: '1' } }],
+            },
+          },
+        });
+        return;
+      }
+      if (kind === 18 && id.slug === 'billing') {
+        cb(null, {
+          entity: {
+            subdomain: {
+              id,
+              title: 'Billing',
+              domain: { id: { namespace: 'problem', slug: 'problem', version: '1' } },
+            },
+          },
+        });
+        return;
+      }
+      if (kind === 17 && id.namespace === 'problem') {
+        cb(null, { entity: { domain: { id, title: 'Problem' } } });
+        return;
+      }
+      if (kind === 20) {
+        cb(null, { entity: { project: { id, title: 'Acme' } } });
+        return;
+      }
+      cb(null, { entity: null });
+    };
+    fakeClient.listEntities = (req, _meta, _opts, cb) => {
+      listed.push(req);
+      const strayDomain = {
+        domain: {
+          id: { namespace: 'my-ns', slug: 'my-ns', version: '1' },
+          title: 'Stray domain',
+          project: { id: { namespace: 'acme', slug: 'acme', version: '1' } },
+        },
+      };
+      const parent = {
+        domain: { id: { namespace: 'problem', slug: 'problem', version: '2' }, title: 'Problem again' },
+      };
+      cb(null, { entities: req.namespaces?.[0] === 'my-ns' ? [strayDomain, parent] : [], nextPageToken: '' });
+    };
+
+    const res = await request(app).get('/api/event-model/my-ns/stray-model');
+
+    fakeClient.getEntity = originalGetEntity;
+    fakeClient.listEntities = originalListEntities;
+
+    expect(res.status).toBe(200);
+    expect(listed.some((r) => r.namespaces?.[0] === 'my-ns' && r.kinds?.join() === '17,18')).toBe(true);
+    const domains = res.body.entities.filter((e) => e.domain).map((e) => e.domain.title);
+    expect(domains.sort()).toEqual(['Problem', 'Stray domain']);
+    expect(res.body.entities.some((e) => e.project?.id?.slug === 'acme')).toBe(true);
+  });
+
+  it('keeps the rest of the knowledge graph when listing the namespace fails', async () => {
+    const originalGetEntity = fakeClient.getEntity;
+    const originalListEntities = fakeClient.listEntities;
+    fakeClient.getEntity = (req, _meta, _opts, cb) => {
+      const { kind, id } = req;
+      if (kind === 12) {
+        cb(null, { entity: { eventModel: { id, title: 'Model', members: [] } } });
+        return;
+      }
+      if (kind === 16) {
+        cb(null, { entity: { boundedContext: { id, title: 'Context' } } });
+        return;
+      }
+      cb(null, { entity: null });
+    };
+    fakeClient.listEntities = (_req, _meta, _opts, cb) => cb(new Error('listing exploded'));
+
+    const res = await request(app).get('/api/event-model/my-ns/list-fails');
+
+    fakeClient.getEntity = originalGetEntity;
+    fakeClient.listEntities = originalListEntities;
+
+    expect(res.status).toBe(200);
+    expect(res.body.entities.map((e) => Object.keys(e)[0]).sort()).toEqual(['boundedContext', 'eventModel']);
   });
 
   it('tolerates a member fetch failure by dropping that member rather than failing the request', async () => {
@@ -698,6 +918,80 @@ describe('GET /api/by-domain kinds query parity', () => {
 
     expect(res.status).toBe(400);
     expect(captured).toBeNull();
+  });
+});
+
+describe('GET /api/by-domain query controls', () => {
+  let invoke;
+
+  beforeEach(() => {
+    invoke = vi.spyOn(fakeClient, 'listEntitiesByDomain').mockImplementation((_req, _meta, _opts, cb) => {
+      cb(null, { entities: [], nextPageToken: 'next+/= token' });
+    });
+  });
+
+  afterEach(() => {
+    invoke.mockRestore();
+  });
+
+  it('preserves omitted defaults without adding page controls', async () => {
+    const res = await request(app).get('/api/by-domain/my-ns/checkout');
+    expect(res.status).toBe(200);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      domainId: { namespace: 'my-ns', slug: 'checkout', version: '1' },
+      kinds: [],
+      latestVersionsOnly: true,
+    });
+    expect(res.body).toEqual({ entities: [], nextPageToken: 'next+/= token' });
+  });
+
+  it.each(['9007199254740993', '18446744073709551615'])(
+    'forwards exact version %s, false, page controls, kinds and branch metadata', async (version) => {
+      const res = await request(app).get('/api/by-domain/my-ns/checkout').query({
+        version, latestVersionsOnly: 'false', pageSize: '2147483647',
+        pageToken: 'opaque+/= token&value', kinds: 'read-model,commandslice,ENTITY_KIND_EVENT',
+        branch: 'review/domain',
+      });
+      expect(res.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual({
+        domainId: { namespace: 'my-ns', slug: 'checkout', version },
+        kinds: [3, 8, 1], latestVersionsOnly: false,
+        pageSize: 2147483647, pageToken: 'opaque+/= token&value',
+      });
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+      expect(res.body).toEqual({ entities: [], nextPageToken: 'next+/= token' });
+    },
+  );
+
+  it('accepts explicit true, minimum numbers, an empty cursor and the branch header', async () => {
+    const res = await request(app).get('/api/by-domain/my-ns/checkout')
+      .set('x-trogon-atlas-branch', 'review/domain')
+      .query({ version: '1', latestVersionsOnly: 'true', pageSize: '1', pageToken: '' });
+    expect(res.status).toBe(200);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      domainId: { namespace: 'my-ns', slug: 'checkout', version: '1' },
+      kinds: [], latestVersionsOnly: true, pageSize: 1, pageToken: '',
+    });
+    expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+  });
+
+  it.each([
+    ...['', '0', '-1', '1.5', '1e2', '+1', ' 1', '01', 'Infinity', '18446744073709551616', '999999999999999999999']
+      .map((value) => `version=${encodeURIComponent(value)}`),
+    ...['', '0', '-1', '1.5', '1e2', '+1', ' 1', '01', 'Infinity', '2147483648']
+      .map((value) => `pageSize=${encodeURIComponent(value)}`),
+    ...['', 'TRUE', 'False', '1', '0', 'yes', ' false']
+      .map((value) => `latestVersionsOnly=${encodeURIComponent(value)}`),
+    ...['version', 'latestVersionsOnly', 'pageSize', 'pageToken'].flatMap((key) => [
+      `${key}=1&${key}=1`, `${key}[]=1`, `${key}[value]=1`,
+    ]),
+  ])('rejects invalid query %s before RPC', async (query) => {
+    const res = await request(app).get(`/api/by-domain/my-ns/checkout?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual(expect.any(String));
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 
@@ -996,6 +1290,280 @@ describe('GET /api/branch-diff', () => {
   });
 });
 
+describe('GET /api/entity-history', () => {
+  it('returns revisions newest first with before/after and the next page token', async () => {
+    const res = await request(app).get('/api/entity-history?kind=event&namespace=acme&slug=order.placed');
+    expect(res.status).toBe(200);
+    expect(res.body.nextPageToken).toBe('0192f000-0000-7000-8000-000000000002');
+    expect(res.body.revisions).toHaveLength(1);
+    expect(res.body.revisions[0]).toMatchObject({
+      changesetId: '0192f000-0000-7000-8000-000000000002',
+      author: 'acme-agent',
+      kind: 'KIND_PUT',
+      before: { event: { title: 'Order placed' } },
+      after: { event: { title: 'Order placed by shopper' } },
+    });
+  });
+
+  it('forwards the ref, page token and branch to getEntityHistory', async () => {
+    let received;
+    const original = fakeClient.getEntityHistory;
+    fakeClient.getEntityHistory = (req, meta, _opts, cb) => {
+      received = { req, branch: meta.get('x-trogon-atlas-branch') };
+      cb(null, { revisions: [] });
+    };
+    const res = await request(app).get(
+      '/api/entity-history?kind=readModel&namespace=acme&slug=orders&version=2&pageToken=0192f000-0000-7000-8000-000000000001&branch=alex/retention-rework',
+    );
+    fakeClient.getEntityHistory = original;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ revisions: [], nextPageToken: '' });
+    expect(received.req).toEqual({
+      ref: { kind: 3, id: { namespace: 'acme', slug: 'orders', version: '2' } },
+      pageToken: '0192f000-0000-7000-8000-000000000001',
+    });
+    expect(received.branch).toEqual(['alex/retention-rework']);
+  });
+
+  it.each([
+    ['slug is missing', '/api/entity-history?kind=event&namespace=acme'],
+    ['namespace is unsafe', '/api/entity-history?kind=event&namespace=..&slug=order.placed'],
+    ['kind is unknown', '/api/entity-history?kind=widget&namespace=acme&slug=order.placed'],
+    ['pageToken is unsafe', '/api/entity-history?kind=event&namespace=acme&slug=order.placed&pageToken=a%2Fb'],
+  ])('returns 400 when %s', async (_why, url) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/changesets', () => {
+  it('returns changesets newest first with their ops and the next page token', async () => {
+    const res = await request(app).get('/api/changesets?namespace=acme');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-000000000003',
+          author: 'acme-agent',
+          at: '2026-01-03T00:00:00Z',
+          message: 'put event acme/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [
+            { kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', namespace: 'acme', slug: 'order.placed', version: '1' } },
+          ],
+        },
+      ],
+      nextPageToken: '0192f000-0000-7000-8000-000000000003',
+    });
+  });
+
+  it('forwards namespace, page token, page size and the previewed branch as the branch filter', async () => {
+    let received;
+    const original = fakeClient.listChangesets;
+    fakeClient.listChangesets = (req, _meta, _opts, cb) => {
+      received = req;
+      cb(null, {});
+    };
+    const res = await request(app).get(
+      '/api/changesets?namespace=acme&pageToken=0192f000-0000-7000-8000-000000000001&pageSize=25&branch=alex/retention-rework',
+    );
+    fakeClient.listChangesets = original;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ changesets: [], nextPageToken: '' });
+    expect(received).toEqual({
+      namespace: 'acme',
+      pageToken: '0192f000-0000-7000-8000-000000000001',
+      pageSize: 25,
+      branch: 'alex/retention-rework',
+    });
+  });
+
+  it('sends no branch filter on baseline, so branch changesets come back tagged with their branch', async () => {
+    let received;
+    const original = fakeClient.listChangesets;
+    fakeClient.listChangesets = (req, _meta, _opts, cb) => {
+      received = req;
+      cb(null, { changesets: [] });
+    };
+    const res = await request(app).get('/api/changesets?namespace=acme');
+    fakeClient.listChangesets = original;
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ namespace: 'acme' });
+  });
+
+  it.each([
+    ['namespace is missing', '/api/changesets'],
+    ['namespace is unsafe', '/api/changesets?namespace=..'],
+    ['pageToken is not a changeset id', '/api/changesets?namespace=acme&pageToken=a%2Fb'],
+    ['pageToken is uppercase', '/api/changesets?namespace=acme&pageToken=0192F000-0000-7000-8000-000000000001'],
+    ['pageSize is not a positive integer', '/api/changesets?namespace=acme&pageSize=-1'],
+    ['branch is unsafe', '/api/changesets?namespace=acme&branch=..%2Fx'],
+  ])('returns 400 when %s', async (_why, url) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/changesets/:id', () => {
+  it('returns one changeset in the list shape', async () => {
+    const res = await request(app).get('/api/changesets/0192f000-0000-7000-8000-000000000003');
+    expect(res.status).toBe(200);
+    expect(res.body.changeset).toMatchObject({
+      id: '0192f000-0000-7000-8000-000000000003',
+      rpc: 'PutEntity',
+      ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', namespace: 'acme', slug: 'order.placed' } }],
+    });
+  });
+
+  it('maps an unknown id to 404', async () => {
+    const res = await request(app).get('/api/changesets/0192f000-0000-7000-8000-0000000000ff');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 for an id that is not a lowercase hyphenated UUID', async () => {
+    const res = await request(app).get('/api/changesets/not-a-uuid');
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/event-model/:namespace/:slug?asOf=', () => {
+  const AS_OF = '0192f000-0000-7000-8000-000000000003';
+  const placed = { namespace: 'acme', slug: 'order.placed', version: '1' };
+  const summary = { namespace: 'acme', slug: 'order.summary', version: '1' };
+  const shipped = { namespace: 'shipping', slug: 'parcel.shipped', version: '1' };
+  const projection = {
+    projection: {
+      eventModel: {
+        id: { namespace: 'acme', slug: 'checkout', version: '1' },
+        title: 'Checkout',
+        members: [
+          { kind: 'ENTITY_KIND_EVENT', id: placed },
+          { kind: 'ENTITY_KIND_READ_MODEL', id: summary },
+        ],
+      },
+      entities: {
+        'event:acme/order.placed@1': { event: { id: placed, title: 'Order placed' } },
+        'read_model:acme/order.summary@1': { readModel: { id: summary, sourceEvents: [{ id: shipped }] } },
+        'event:shipping/parcel.shipped@1': { event: { id: shipped, title: 'Parcel shipped' } },
+        // Reached from a member, but not a member: the live route leaves it out too.
+        'schema:acme/order-placed-payload@1': { schema: { id: { namespace: 'acme', slug: 'order-placed-payload', version: '1' } } },
+      },
+    },
+    truncated: false,
+  };
+
+  /** @param {(req: any, meta: any, cb: Function) => void} impl */
+  async function withProjection(impl, run) {
+    const original = fakeClient.getEventModelProjection;
+    const originalGetEntity = fakeClient.getEntity;
+    fakeClient.getEventModelProjection = (req, meta, _opts, cb) => impl(req, meta, cb);
+    fakeClient.getEntity = () => {
+      throw new Error('an as-of read must not fall back to live getEntity');
+    };
+    try {
+      return await run();
+    } finally {
+      fakeClient.getEventModelProjection = original;
+      fakeClient.getEntity = originalGetEntity;
+    }
+  }
+
+  it('forwards asOfChangeset to getEventModelProjection on baseline and returns the members and halo', async () => {
+    let received;
+    let branchHeader;
+    const res = await withProjection(
+      (req, meta, cb) => {
+        received = req;
+        branchHeader = meta.get('x-trogon-atlas-branch');
+        cb(null, projection);
+      },
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(received).toEqual({
+      id: { namespace: 'acme', slug: 'checkout', version: '1' },
+      includeCrossModel: true,
+      asOfChangeset: AS_OF,
+    });
+    expect(branchHeader).toEqual([]);
+    expect(res.body.entities).toEqual([
+      { eventModel: projection.projection.eventModel },
+      { event: { id: placed, title: 'Order placed' } },
+      { readModel: { id: summary, sourceEvents: [{ id: shipped }] } },
+      { event: { id: shipped, title: 'Parcel shipped' } },
+    ]);
+  });
+
+  it('flags a truncated closure that dropped a halo event', async () => {
+    const { 'event:shipping/parcel.shipped@1': _dropped, ...kept } = projection.projection.entities;
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { projection: { ...projection.projection, entities: kept }, truncated: true }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.incomplete).toBe(true);
+  });
+
+  it('does not flag a truncated closure that kept every member and halo event', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { ...projection, truncated: true }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.incomplete).toBeUndefined();
+  });
+
+  it('maps an unknown changeset to 404', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(Object.assign(new Error('entity not found'), { code: 5 })),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when the model did not exist yet at that changeset', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { projection: { entities: {} } }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ['asOf is not a UUID', '/api/event-model/acme/checkout?asOf=yesterday'],
+    ['asOf is uppercase', '/api/event-model/acme/checkout?asOf=0192F000-0000-7000-8000-000000000003'],
+    ['asOf comes with ?branch=', `/api/event-model/acme/checkout?asOf=${AS_OF}&branch=alex/retention-rework`],
+  ])('returns 400 when %s', async (_why, url) => {
+    let called = false;
+    const res = await withProjection(
+      (_req, _meta, cb) => {
+        called = true;
+        cb(null, projection);
+      },
+      () => request(app).get(url),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+    expect(called).toBe(false);
+  });
+
+  it('returns 400 when asOf comes with the branch header', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, projection),
+      () =>
+        request(app)
+          .get(`/api/event-model/acme/checkout?asOf=${AS_OF}`)
+          .set('x-trogon-atlas-branch', 'alex/retention-rework'),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/baseline/);
+  });
+});
+
 describe('GET /api/event-model/:namespace/:slug isSafeNamespace validation', () => {
   it('returns 400 when namespace contains path traversal characters', async () => {
     const res = await request(app).get('/api/event-model/..%2Fetc%2Fpasswd/slug');
@@ -1258,6 +1826,66 @@ describe('BUG: SPA static fallback swallows /api and missing assets', () => {
   });
 });
 
+describe('SPA/static fallback rate limiter', () => {
+  let createdDist = false;
+
+  beforeAll(() => {
+    if (fs.existsSync(distDir)) return;
+    createdDist = true;
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(path.join(distDir, 'index.html'), '<!doctype html><html></html>');
+  });
+
+  afterAll(() => {
+    if (createdDist) fs.rmSync(distDir, { recursive: true, force: true });
+  });
+
+  it('returns 429 once the SPA fallback ceiling is exceeded', async () => {
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit');
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    const first = await request(spaApp).get('/some-page');
+    expect(first.status).not.toBe(429);
+
+    const second = await request(spaApp).get('/some-page');
+    expect(second.status).toBe(429);
+    expect(second.body).toHaveProperty('error');
+  });
+
+  it('does not count against the /api rate limiter', async () => {
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit-api-isolation');
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    await request(spaApp).get('/some-page');
+    await request(spaApp).get('/some-page');
+
+    const res = await request(spaApp).get('/api/info');
+    expect(res.status).toBe(200);
+  });
+
+  it('is disabled by the same toggle as the /api limiter', async () => {
+    process.env.TROGON_ATLAS_STUDIO_RATE_MAX = '0';
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit-disabled');
+    delete process.env.TROGON_ATLAS_STUDIO_RATE_MAX;
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    const first = await request(spaApp).get('/some-page');
+    expect(first.status).not.toBe(429);
+
+    const second = await request(spaApp).get('/some-page');
+    expect(second.status).not.toBe(429);
+  });
+});
+
 describe('BUG: GET /api/validate does not validate version query param', () => {
   it('returns 400 when version contains unsafe characters', async () => {
     const res = await request(app).get(
@@ -1374,6 +2002,28 @@ describe('TROGON_ATLAS_AUTH_PASSTHROUGH', () => {
       .set('Authorization', 'Bearer alice-key');
     expect(res.status).toBe(200);
     expect(upstreamCalls.authorization).toBe('Bearer alice-key');
+  });
+
+  it('forwards by-domain query controls with caller authorization and branch', async () => {
+    const invoke = vi.spyOn(fakeClient, 'listEntitiesByDomain').mockImplementation((_req, _meta, _opts, cb) => {
+      cb(null, { entities: [], nextPageToken: 'next-domain-page' });
+    });
+    try {
+      const res = await request(ptApp).get('/api/by-domain/acme/checkout')
+        .set('Authorization', 'Bearer domain-caller')
+        .query({ version: '9007199254740993', latestVersionsOnly: 'false', pageSize: '501', pageToken: 'cursor', branch: 'review/domain' });
+      expect(res.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual({
+        domainId: { namespace: 'acme', slug: 'checkout', version: '9007199254740993' },
+        kinds: [], latestVersionsOnly: false, pageSize: 501, pageToken: 'cursor',
+      });
+      expect(invoke.mock.calls[0][1].get('authorization')).toEqual(['Bearer domain-caller']);
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+      expect(res.body).toEqual({ entities: [], nextPageToken: 'next-domain-page' });
+    } finally {
+      invoke.mockRestore();
+    }
   });
 
   it('never substitutes the bridge identity for a caller that has one', async () => {
@@ -1688,5 +2338,576 @@ describe('Type library routes', () => {
       const res = await request(app).get(`/api/type-libraries/messages${q}`);
       expect(res.status).toBe(400);
     }
+  });
+});
+
+describe('/-/readiness and /-/liveness', () => {
+  /** @param {() => Promise<any>} load @param {Record<string, string>} [env] */
+  async function freshServer(load, env = {}) {
+    Object.assign(process.env, env, { NODE_ENV: 'test' });
+    const mod = await load();
+    for (const key of Object.keys(env)) delete process.env[key];
+    return mod;
+  }
+
+  /** @param {(req: unknown, meta: unknown, opts: unknown, cb: Function) => void} impl @param {() => Promise<void>} fn */
+  async function withServerInfo(impl, fn) {
+    const original = fakeClient.getServerInfo;
+    fakeClient.getServerInfo = impl;
+    try {
+      await fn();
+    } finally {
+      fakeClient.getServerInfo = original;
+    }
+  }
+
+  const unavailable = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('connection refused'), { code: 14 }));
+  const unauthenticated = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('unauthenticated'), { code: 16 }));
+
+  it('answers both probes without a token while one is configured', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-auth'), { TROGON_ATLAS_AUTH_TOKEN: 'probe-secret' });
+    await mod.checkUpstream();
+    const readiness = await request(mod.app).get('/-/readiness');
+    const liveness = await request(mod.app).get('/-/liveness');
+    expect(readiness.status).toBe(200);
+    expect(readiness.text).toBe('ok\n');
+    expect(liveness.status).toBe(200);
+    expect(liveness.text).toBe('ok\n');
+  });
+
+  it('is not ready before the first upstream check, while live', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-unchecked'));
+    const readiness = await request(mod.app).get('/-/readiness');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('not ready\n');
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+  });
+
+  it('is not ready when the last upstream check failed, and ready again once one passes', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-failed'));
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+    await withServerInfo(unavailable, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(503);
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+  });
+
+  it('does not call upstream when probed', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-held'));
+    await mod.checkUpstream();
+    let calls = 0;
+    await withServerInfo(
+      (_req, _meta, _opts, cb) => {
+        calls += 1;
+        cb(Object.assign(new Error('connection refused'), { code: 14 }));
+      },
+      async () => {
+        expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+      },
+    );
+    expect(calls).toBe(0);
+  });
+
+  it('treats an unauthenticated answer as not ready when the bridge holds a token', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-badtoken'), { TROGON_ATLAS_AUTH_TOKEN: 'stale-secret' });
+    await withServerInfo(unauthenticated, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(503);
+  });
+
+  it('treats an unauthenticated answer as reachable for a pass-through bridge with no token of its own', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-anonymous'), { TROGON_ATLAS_AUTH_PASSTHROUGH: 'true' });
+    await withServerInfo(unauthenticated, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+  });
+
+  it('lists each check with ?verbose', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-verbose'));
+    await withServerInfo(unavailable, () => mod.checkUpstream());
+    const readiness = await request(mod.app).get('/-/readiness?verbose');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('[+]ping ok\n[-]upstream failed\n[+]shutdown ok\nreadiness check failed\n');
+    const liveness = await request(mod.app).get('/-/liveness?a=1&verbose=true');
+    expect(liveness.status).toBe(200);
+    expect(liveness.text).toBe('[+]ping ok\nliveness check passed\n');
+    expect((await request(mod.app).get('/-/liveness?verbosely')).text).toBe('ok\n');
+  });
+
+  it('goes not ready on shutdown while liveness keeps passing', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-shutdown'));
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+    mod.beginShutdown();
+    await mod.checkUpstream();
+    const readiness = await request(mod.app).get('/-/readiness?verbose');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('[+]ping ok\n[+]upstream ok\n[-]shutdown failed\nreadiness check failed\n');
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+  });
+
+  it('keeps probes out of the access log', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-quiet'));
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await request(mod.app).get('/-/liveness');
+      await request(mod.app).get('/-/readiness');
+      const probeLines = write.mock.calls.map(([line]) => String(line));
+      expect(probeLines.some((line) => line.includes('"http_request"'))).toBe(false);
+      await request(mod.app).get('/api/info');
+      const logged = write.mock.calls.map(([line]) => String(line));
+      expect(logged.some((line) => line.includes('"http_request"'))).toBe(true);
+    } finally {
+      write.mockRestore();
+    }
+  });
+});
+
+describe('GET DataProduct backend inspection', () => {
+  it('forwards exact product, caller authorization and branch and retains checked evidence', async () => {
+    let received;
+    fakeClient.inspectDataProduct = (req, meta, _opts, cb) => {
+      received = { req, branch: meta.get('x-trogon-atlas-branch'), authorization: meta.get('authorization') };
+      cb(null, { etag: 'checked-etag', scope: { branch: 'review', revision: 'checked-context' }, incomplete: true, producing: [{ path: [{ id: { value: 'model-edge' } }] }] });
+    };
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=data-product-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    const res = await request(module.app).get('/api/data-product/acme/offering/inspect?version=3&branch=review').set('Authorization', 'Bearer caller-token');
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ req: { product: { id: { namespace: 'acme', slug: 'offering', version: '3' } } }, branch: ['review'], authorization: ['Bearer caller-token'] });
+    expect(res.body).toMatchObject({ etag: 'checked-etag', incomplete: true, scope: { revision: 'checked-context' }, producing: [{ path: [{ id: { value: 'model-edge' } }] }] });
+    delete fakeClient.inspectDataProduct;
+  });
+  it.each(['', '0', '-1', 'latest', '1.5'])('refuses a nonexact version %s before upstream inspection', async (version) => {
+    const inspect = vi.fn();
+    fakeClient.inspectDataProduct = inspect;
+    const res = await request(app).get(`/api/data-product/acme/offering/inspect?version=${version}`);
+    expect(res.status).toBe(400);
+    expect(inspect).not.toHaveBeenCalled();
+    delete fakeClient.inspectDataProduct;
+  });
+  it('preserves backend operational errors instead of converting them to undeclared data', async () => {
+    fakeClient.inspectDataProduct = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('backend unavailable'), { code: 14 }));
+    const res = await request(app).get('/api/data-product/acme/offering/inspect?version=1');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('backend unavailable');
+    delete fakeClient.inspectDataProduct;
+  });
+});
+
+describe('GET responsibility queries', () => {
+  const id = { namespace: 'acme', slug: 'catalog', version: '7' };
+  const member = { member: { specification: { id }, ownerUid: 'exact-owner', kind: 'CONTRACT_MEMBER_KIND_ARTIFACT', memberId: { value: 'member-id' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
+  it.each([
+    ['subject-assignments', 'listSubjectAssignments', { subject: member, kind: 'RESPONSIBILITY_KIND_STEWARD' }],
+    ['subject-assignments', 'listSubjectAssignments', { subject: { connection: { owner: { kind: 'ENTITY_KIND_AUTOMATION_SLICE', id }, ownerUid: 'occurrence-owner', id: { value: 'edge-b' } } } }],
+    ['subject-assignments', 'listSubjectAssignments', { subject: { port: { product: { id }, ownerUid: 'product-owner', direction: 'DATA_PORT_DIRECTION_INPUT', portId: { value: 'input-b' } } } }],
+    ['assignee-responsibilities', 'listAssigneeResponsibilities', { assignee: { person: { id } } }],
+    ['team-members', 'listTeamMembers', { team: { id } }],
+    ['person-teams', 'listPersonTeams', { person: { id } }],
+    ['team-contacts', 'getTeamContacts', { team: { id }, includeMembers: true }],
+  ])('forwards %s with exact typed request, authorization and checked context', async (route, method, input) => {
+    const invoke = vi.fn((req, meta, _opts, cb) => cb(null, { scope: { branch: 'review', revision: 'checked', visitedSubjects: [member] }, incomplete: true, subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE' }));
+    fakeClient[method] = invoke;
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=responsibility-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    try {
+      const response = await request(module.app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input), branch: 'review' }).set('Authorization', 'Bearer caller-token');
+      expect(response.status).toBe(200);
+      expect(invoke.mock.calls[0][0]).toEqual(input);
+      expect(invoke.mock.calls[0][1].get('authorization')).toEqual(['Bearer caller-token']);
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review']);
+      expect(response.body).toMatchObject({ incomplete: true, scope: { revision: 'checked', visitedSubjects: [member] }, subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE' });
+    } finally { delete fakeClient[method]; }
+  });
+  it.each(['', '[]', 'null', 'broken'])('rejects malformed request %s', async (input) => {
+    const response = await request(app).get('/api/responsibility/subject-assignments').query({ request: input });
+    expect(response.status).toBe(400);
+  });
+  it('refuses unsupported queries, historical hydration and writes', async () => {
+    expect((await request(app).get('/api/responsibility/putEntity').query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/responsibility/team-members').query({ request: '{}', asOf: 'historical' })).status).toBe(400);
+    expect((await request(app).post('/api/responsibility/team-members').send({ team: { id } })).status).toBe(403);
+  });
+  it.each([[14, 503], [8, 429], [7, 403], [5, 404]])('preserves public backend error class %s', async (code, expected) => {
+    fakeClient.listSubjectAssignments = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('query failed'), { code }));
+    try {
+      const response = await request(app).get('/api/responsibility/subject-assignments').query({ request: JSON.stringify({ subject: member }) });
+      expect(response.status).toBe(expected);
+      expect(response.body.error).toContain('query failed');
+      expect(response.body.assignments).toBeUndefined();
+    } finally { delete fakeClient.listSubjectAssignments; }
+  });
+});
+
+
+describe('responsibility strict production serializer boundary', () => {
+  const id = { namespace: 'acme', slug: 'catalog', version: '9007199254740993' };
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
+  const team = { id };
+  const invalid = [
+    ['unknown filter name', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: 'TYPO' }],
+    ['unknown numeric filter', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: 999 }],
+    ['boolean filter', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: true }],
+    ['string false expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: 'false' }],
+    ['numeric expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: 0 }],
+    ['null expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: null }],
+    ['unknown request field', 'team-contacts', 'GetTeamContacts', { team, includeMembers: false, unknown: true }],
+    ['unknown nested field', 'team-members', 'ListTeamMembers', { team: { id, extra: 'ignored' } }],
+    ['multiple subject alternatives', 'subject-assignments', 'ListSubjectAssignments', { subject: { ...subject, port: {} } }],
+    ['multiple assignee alternatives', 'assignee-responsibilities', 'ListAssigneeResponsibilities', { assignee: { team, person: team } }],
+    ['null selector alternative', 'subject-assignments', 'ListSubjectAssignments', { subject: { entity: null } }],
+    ['unknown entity kind', 'subject-assignments', 'ListSubjectAssignments', { subject: { entity: { kind: 'TYPO', id } } }],
+    ['unknown direction', 'subject-assignments', 'ListSubjectAssignments', { subject: { port: { product: team, direction: 'TYPO' } } }],
+    ['unknown member kind', 'subject-assignments', 'ListSubjectAssignments', { subject: { member: { specification: team, kind: 99 } } }],
+    ['numeric owner UID', 'subject-assignments', 'ListSubjectAssignments', { subject: { connection: { owner: subject.entity, ownerUid: 1, id: { value: 'edge' } } } }],
+    ['snake case pin silently lost', 'subject-assignments', 'ListSubjectAssignments', { subject: { member: { specification: team, kind: 'CONTRACT_MEMBER_KIND_ARTIFACT', expected_digest: { sha256: 'a'.repeat(64) } } } }],
+    ['unsafe numeric version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: 9007199254740992 } } }],
+    ['fractional version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: 1.5 } } }],
+    ['overflow version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: '18446744073709551616' } } }],
+    ['negative version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: -1 } } }],
+    ['boolean version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: true } } }],
+  ];
+  it.each(invalid)('rejects %s before permissive production serialization', async (_label, route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const serialize = vi.fn((req, _meta, _opts, cb) => {
+      try { cb(null, { received: codec.deserialize(method.requestSerialize(req)) }); }
+      catch (error) { cb(error); }
+    });
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = serialize;
+    try {
+      const response = await request(app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400);
+      expect(serialize).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].map((kind) => {
+      const input = { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } };
+      return ['subject-assignments', 'ListSubjectAssignments', input, input];
+    }),
+    ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
+    ['subject-assignments', 'ListSubjectAssignments', { subject: { entity: { kind: 1, id } }, kind: 4 }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
+    ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 0 }, { subject, kind: 'RESPONSIBILITY_KIND_UNSPECIFIED' }],
+    ['team-contacts', 'GetTeamContacts', { team, includeMembers: false }, { team, includeMembers: false }],
+    ['team-contacts', 'GetTeamContacts', { team }, { team }],
+  ])('preserves valid %s through the actual gateway and production serializer', async (route, rpc, input, expected) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const invoke = vi.fn((req, _meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)) }));
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual(input);
+      expect(response.body.received).toEqual(expected);
+    } finally { delete fakeClient[name]; }
+  });
+
+});
+
+
+describe('catalog strict gateway serializer boundary', () => {
+  const id = { namespace: 'catalog', slug: 'note', version: '9007199254740993' };
+  const document = { anchor: { document: { id }, ownerUid: 'incarnation', anchorId: { value: 'anchor-b' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
+  it.each([
+    ...[null, '1', -1, 1.5, 4294967296].map((pageSize) => ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize }]),
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'TYPO' }],
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 991 }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: 'false' }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: null }],
+    ['document-detail', 'GetDocumentDetail', { document: {} }],
+    ['document-detail', 'GetDocumentDetail', { document: { ...document, document: { id } } }],
+    ['document-detail', 'GetDocumentDetail', { document: { anchor: { ...document.anchor, owner_uid: 'lost' } } }],
+    ['incoming-documents', 'ListIncomingDocumentDeclarations', { document, unknown: true }],
+  ])('rejects malformed %s before calling serializer', async (route, rpc, input) => {
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    const invoke = vi.fn();
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400);
+      expect(invoke).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].flatMap((kind) => ['subject-decisions', 'subject-documents'].map((route) => [route, route === 'subject-decisions' ? 'ListSubjectDecisions' : 'ListSubjectDocuments', { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } }])),
+    ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize: 1, pageToken: 'opaque-token' }],
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'DECISION_STATUS_ACCEPTED' }],
+    ['subject-documents', 'ListSubjectDocuments', { subject }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: false }],
+    ['document-detail', 'GetDocumentDetail', { document }],
+    ['incoming-decisions', 'ListIncomingDecisionDeclarations', { decision: { id } }],
+    ['incoming-documents', 'ListIncomingDocumentDeclarations', { document }],
+  ])('preserves valid %s through HTTP and real serializer', async (route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find(value => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const invoke = vi.fn((req, meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)), branch: meta.get('x-trogon-atlas-branch')[0], incomplete: true, failures: [{ code: 14, message: 'Unavailable' }] }));
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input), branch: 'review' });
+      expect(response.status).toBe(200);
+      expect(response.body.received).toEqual(input);
+      expect(response.body.branch).toBe('review');
+      expect(response.body.incomplete).toBe(true);
+      expect(response.body.failures[0].code).toBe(14);
+    } finally { delete fakeClient[name]; }
+  });
+  it('refuses unknown routes, mutations and historical hydration', async () => {
+    expect((await request(app).get('/api/catalog/putEntity').query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/catalog/document-detail').query({ request: '{}', asOf: 'historical' })).status).toBe(400);
+    expect((await request(app).post('/api/catalog/document-detail').send({ document })).status).toBe(403);
+  });
+});
+
+
+describe('source read-only gateway', () => {
+  it.each([
+    ['snapshot', 'GetSourceSnapshot', { registrationId: 'r', snapshotId: 's', includeBytes: false }],
+    ['overlay', 'GetSourceOverlay', { registrationId: 'r', snapshotId: 's', pageSize: 100 }],
+    ['run-results', 'ListSourceRunResults', { registrationId: 'r', runId: 'run', pageSize: 100, pageToken: 'opaque' }],
+    ['run-operations', 'ListSourceRunOperations', { registrationId: 'r', runId: 'run', pageSize: 100 }],
+  ])('forwards %s through the actual protobuf serializer and caller branch', async (route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const root = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(root, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [root] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find(value => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = vi.fn((req, meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)), branch: meta.get('x-trogon-atlas-branch')[0], incomplete: true, nextPageToken: 'more' }));
+    try {
+      const response = await request(app).get(`/api/source/${route}`).query({ request: JSON.stringify(input), branch: 'source-review' });
+      expect(response.status).toBe(200);
+      expect(response.body.received).toEqual(input);
+      expect(response.body.branch).toBe('source-review');
+      expect(response.body.incomplete).toBe(true);
+      expect(response.body.nextPageToken).toBe('more');
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ['snapshot', { registrationId: 'r', includeBytes: 'false' }],
+    ['snapshot', { registrationId: 'r', surprise: true }],
+    ['runs', { registrationId: 'r', pageSize: '100' }],
+  ])('refuses malformed %s before calling the backend', async (route, input) => {
+    const name = route === 'runs' ? 'listSourceRuns' : 'getSourceSnapshot';
+    const invoke = vi.fn(); fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/source/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400); expect(invoke).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it('exposes no source mutation route or historical hydration', async () => {
+    for (const query of ['apply', 'recover', 'cancel', 'preview', 'create-registration']) expect((await request(app).get(`/api/source/${query}`).query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/source/run').query({ request: '{"registrationId":"r","runId":"x"}', asOf: 'old' })).status).toBe(400);
+  });
+});
+
+describe('design topology gateway response codec', () => {
+  const version = '9007199254740993';
+  const graphId = { namespace: 'topology', slug: 'flow', version };
+  const step = (value) => ({ value });
+  const owner = { owner: { kind: 'ENTITY_KIND_DESIGN_GRAPH', id: graphId }, ownerUid: 'incarnation-1' };
+  const scope = { revision: '42', authorizedNamespaces: ['topology'], visited: [owner] };
+  const loadCodec = async (rpc) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    return (message) => method.responseDeserialize(method.responseSerialize(message));
+  };
+  it.each([
+    ['design-graph-detail', 'GetDesignGraphDetail', { graph: { id: graphId } }, {
+      entity: { designGraph: { title: { value: 'Flow' }, steps: [{ stepId: step('step-a') }, { stepId: step('step-b') }] } },
+      etag: 'etag-1',
+      targets: [
+        { stepId: step('step-a'), field: 'steps[0].target', state: 'CATALOG_RESOLUTION_STATE_RESOLVED', owner },
+        { stepId: step('step-b'), field: 'steps[1].target', state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE' },
+      ],
+      layoutState: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE',
+      scope,
+      incomplete: true,
+      failures: [{ field: 'layout', code: 14, message: 'Unavailable' }],
+    }],
+    ['subject-design-graphs', 'ListSubjectDesignGraphs', { subject: { entity: { kind: 'ENTITY_KIND_COMPONENT', id: graphId } } }, {
+      scope,
+      subjectState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+    }],
+    ['design-topology', 'TraverseDesignGraphTopology', { root: { id: graphId }, followSubflows: true, maxDepth: 4 }, {
+      nodes: [{ graph: owner, stepId: step('step-a'), depth: 0, authoredEntry: true, targetState: 'CATALOG_RESOLUTION_STATE_RESOLVED' }, { graph: owner, stepId: step('step-b'), depth: 1 }],
+      edges: [
+        { kind: 'KIND_TRANSITION', graph: owner, fromStepId: step('step-a'), connectionId: step('edge-1'), label: { value: 'next' }, toStepId: step('step-b') },
+        { kind: 'KIND_TRANSITION', graph: owner, fromStepId: step('step-a'), connectionId: step('edge-2'), label: { value: 'next' }, toStepId: step('step-b') },
+        { kind: 'KIND_SUBFLOW', graph: owner, fromStepId: step('step-b'), toGraph: { id: { ...graphId, slug: 'callee' } } },
+      ],
+      subflows: [{ graph: owner, stepId: step('step-b'), subflow: { id: { ...graphId, slug: 'callee' } }, state: 'TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE', depth: 1 }],
+      scope,
+      appliedMaxDepth: 4,
+      followSubflows: true,
+    }],
+    ['incoming-subflows', 'ListIncomingDesignGraphSubflows', { graph: { id: graphId } }, {
+      references: [{ owner, field: 'steps[1].target.subflow', state: 'CATALOG_RESOLUTION_STATE_RESOLVED', stepId: step('step-b'), subflow: { id: graphId } }],
+      scope,
+      graphState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+    }],
+  ])('returns the production %s response codec output unchanged with identities, presence and unavailable states', async (route, rpc, input, response) => {
+    const decode = await loadCodec(rpc);
+    const decoded = decode(response);
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
+    try {
+      const result = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input), branch: 'review' });
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(JSON.parse(JSON.stringify(decoded)));
+      expect(JSON.stringify(result.body)).toContain(version);
+      expect(JSON.stringify(result.body)).not.toMatch(/"version":9007/);
+      expect(result.body.scope.revision).toBe('42');
+      if (route === 'design-graph-detail') {
+        expect(result.body.layoutState).toBe('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
+        expect(result.body.targets[1].state).toBe('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
+        expect(result.body.targets[1]).not.toHaveProperty('owner');
+        expect(result.body.incomplete).toBe(true);
+        expect(result.body.failures[0].code).toBe(14);
+      }
+      if (route === 'design-topology') {
+        expect(result.body.edges.map((edge) => edge.connectionId?.value)).toEqual(['edge-1', 'edge-2', undefined]);
+        expect(result.body.nodes[1]).not.toHaveProperty('authoredEntry');
+        expect(result.body.subflows[0].state).toBe('TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE');
+        expect(result.body).not.toHaveProperty('incomplete');
+      }
+      if (route === 'incoming-subflows') expect(result.body.references[0].stepId.value).toBe('step-b');
+    } finally { delete fakeClient[name]; }
+  });
+  it('omits absent layout state, incompleteness and failures instead of inventing defaults', async () => {
+    const decode = await loadCodec('GetDesignGraphDetail');
+    const decoded = decode({ entity: { designGraph: { title: { value: 'Flow' } } }, etag: 'e', scope });
+    fakeClient.getDesignGraphDetail = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
+    try {
+      const result = await request(app).get('/api/catalog/design-graph-detail').query({ request: JSON.stringify({ graph: { id: graphId } }) });
+      expect(result.status).toBe(200);
+      for (const field of ['layoutState', 'incomplete', 'failures', 'targets', 'declarations']) expect(result.body).not.toHaveProperty(field);
+    } finally { delete fakeClient.getDesignGraphDetail; }
+  });
+});
+
+describe('native human interaction gateway', () => {
+  const version = '9007199254740993';
+  const id = (slug) => ({ namespace: 'review', slug, version });
+  const selected = (kind, slug, value) => ({ owner: { kind, id: id(slug) }, ownerUid: `${slug}-uid`, id: { value } });
+  const hosting = selected('ENTITY_KIND_COMPONENT', 'portal', 'hosting-a');
+  const input = {
+    hosting,
+    display: {
+      persona: selected('ENTITY_KIND_UI_SLICE', 'display', 'persona-a'),
+      ui: selected('ENTITY_KIND_UI_SLICE', 'display', 'ui-a'),
+      sourceReadModel: selected('ENTITY_KIND_UI_SLICE', 'display', 'observation-b'),
+    },
+  };
+  it('forwards only the supplied tuple with auth/branch and preserves checked response through real codecs', async () => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const root = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(root, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [root] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith('/InspectHumanInteraction'));
+    const reqCodec = definitions['trogonatlas.api.eventmodel.v1alpha1.InspectHumanInteractionRequest'];
+    const output = {
+      request: input, state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE',
+      consistency: 'HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET',
+      scope: { branch: 'reviewer/check', revision: 'read-set-digest', authorizedNamespaces: ['review'], visited: [{ owner: hosting.owner, uid: hosting.ownerUid, etag: 'component-revision' }] },
+      edges: [{ role: 'HUMAN_INTERACTION_ROLE_READ_MODEL', selection: input.display.sourceReadModel, field: 'source_read_models[1]', target: { kind: 'ENTITY_KIND_READ_MODEL', id: id('summary') }, state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE' }],
+    };
+    fakeClient.inspectHumanInteraction = vi.fn((body, _meta, _opts, cb) => {
+      expect(reqCodec.deserialize(method.requestSerialize(body))).toEqual(input);
+      cb(null, method.responseDeserialize(method.responseSerialize(output)));
+    });
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=human-interaction-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    try {
+      const response = await request(module.app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input), branch: 'reviewer/check' }).set('Authorization', 'Bearer caller-token');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(output);
+      expect(fakeClient.inspectHumanInteraction.mock.calls[0][1].get('authorization')).toEqual(['Bearer caller-token']);
+      expect(fakeClient.inspectHumanInteraction.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['reviewer/check']);
+      expect(response.body.edges[0]).not.toHaveProperty('checkedTarget');
+      expect(response.body).not.toHaveProperty('snapshotId');
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it.each([
+    ['multiple paths', { ...input, issuance: { persona: input.display.persona, ui: input.display.ui, command: input.display.sourceReadModel } }],
+    ['numeric lossy version', { ...input, hosting: { ...hosting, owner: { ...hosting.owner, id: { ...id('portal'), version: Number(version) } } } }],
+    ['unknown nested property', { ...input, hosting: { ...hosting, title: 'discarded' } }],
+  ])('refuses %s without calling the backend', async (_name, body) => {
+    fakeClient.inspectHumanInteraction = vi.fn();
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(body) });
+      expect(response.status).toBe(400);
+      expect(fakeClient.inspectHumanInteraction).not.toHaveBeenCalled();
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it.each([
+    ['NOT_FOUND', 5, 404],
+    ['PERMISSION_DENIED', 7, 403],
+    ['RESOURCE_EXHAUSTED', 8, 429],
+    ['UNAVAILABLE', 14, 503],
+    ['DEADLINE_EXCEEDED', 4, 504],
+    ['UNAUTHENTICATED', 16, 401],
+  ])('keeps backend %s as an operational error and never as an empty or unresolved path', async (_name, code, status) => {
+    fakeClient.inspectHumanInteraction = vi.fn((_body, _meta, _opts, cb) => cb(Object.assign(new Error('backend refusal'), { code })));
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(status);
+      expect(response.body).not.toHaveProperty('state');
+      expect(response.body).not.toHaveProperty('edges');
+      expect(fakeClient.inspectHumanInteraction).toHaveBeenCalledTimes(1);
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it('retains resolved checked targets, uid and etag per edge and every visited owner row without synthesizing a snapshot', async () => {
+    const output = {
+      request: input,
+      state: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+      consistency: 'HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET',
+      scope: {
+        branch: '', revision: 'read-set-digest', authorizedNamespaces: ['review'],
+        visited: [
+          { owner: hosting.owner, uid: hosting.ownerUid, etag: 'component-etag' },
+          { owner: input.display.ui.owner, uid: input.display.ui.ownerUid, etag: 'slice-etag' },
+        ],
+      },
+      edges: [{
+        role: 'HUMAN_INTERACTION_ROLE_READ_MODEL', selection: input.display.sourceReadModel, field: 'ui_slice.source_read_models[1]',
+        target: { kind: 'ENTITY_KIND_READ_MODEL', id: id('summary') }, state: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+        checkedTarget: { uid: 'summary-uid', etag: 'summary-etag' },
+      }],
+    };
+    fakeClient.inspectHumanInteraction = vi.fn((_body, _meta, _opts, cb) => cb(null, output));
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(200);
+      expect(response.body.edges[0].checkedTarget).toEqual({ uid: 'summary-uid', etag: 'summary-etag' });
+      expect(response.body.scope.visited).toEqual(output.scope.visited);
+      expect(response.body.edges[0].target.id.version).toBe(version);
+      expect(response.body).not.toHaveProperty('snapshotId');
+      expect(response.body.consistency).toBe('HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET');
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it('does not allow historical hydration or mutation through this inspection route', async () => {
+    expect((await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input), asOf: 'old' })).status).toBe(400);
+    expect((await request(app).post('/api/catalog/human-interaction').send(input)).status).toBe(403);
   });
 });

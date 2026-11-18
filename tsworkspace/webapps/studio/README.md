@@ -14,6 +14,26 @@ swimlane below), rendered live from the gRPC store.
 - **Search**: server-side Tantivy search.
 - **Live**: polls the change feed and refreshes the board when the model
   changes.
+- **Export HTML**: saves the open board as one HTML file that opens from
+  disk with no backend. The file is a snapshot: it shows when and where it
+  was taken and does not update. It holds only the board's read responses
+  and the runtime from `build:snapshot`. In dev, the server builds that
+  runtime when you export.
+
+## Feature Preview
+
+Open a model's **More actions** menu and choose **Feature Preview**. Select
+**Lane mesh**, **Stream towers** or **State machine** to see its preview and
+turn its switch on. All start off. Each preference applies immediately and is
+saved in your browser for Studio at the same address.
+
+Each preview uses the same view as its model tab, with fictional example
+data. In the 3D previews, drag to rotate, right-drag to pan, or scroll to zoom.
+
+Lane mesh appears when the model has slices. Stream towers appears when a
+swimlane holds events. State machine appears when a swimlane declares
+transitions. Disabling the current view returns to the Board. Saved HTML
+snapshots do not include the 3D views.
 
 ## Architecture
 

@@ -1,4 +1,10 @@
-# Validation repair workflow
+# Atlas agent guidance
+
+Start with the [principles overview](docs/explanation/principles/README.md) unless
+already in context. Read only relevant pages, revisiting them when scope or
+context changes and before final review.
+
+## Validation repair workflow
 
 Before repairing a model validation finding, read
 [the repair playbook](docs/how-to/repair-validation-findings.md) and check
@@ -21,3 +27,8 @@ Documentation is a valid first implementation of a workflow. Extend the
 recorded procedure as repairs reveal repeated steps, then move deterministic
 steps into maintained, tested tools. Do not leave the only reusable knowledge
 in a chat, memory entry, session note, or temporary script.
+
+## Pull request titles
+
+The SemConv check accepts only `feat`, `fix` and `chore`. Title documentation
+changes `chore(docs): <subject>`, not `docs: <subject>`.

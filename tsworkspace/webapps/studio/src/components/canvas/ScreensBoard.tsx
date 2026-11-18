@@ -14,6 +14,7 @@ import type { SelectedEdge, Selection } from '@/components/canvas/Board';
 import { BoardTopRight } from '@/components/canvas/BoardTopRight';
 import { GlyphIcon } from '@/components/canvas/GlyphIcon';
 import { ContextHeaderNode, StoryboardHeaderNode } from '@/components/canvas/StickyNode';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import type { BoardEdgeData } from '@/lib/layout';
 import type { Model } from '@/lib/model';
 import { buildScreensGroups, buildSitemapGroups } from '@/lib/multiboard';
@@ -22,6 +23,12 @@ import { SITE_H, SITE_W, type SitemapNodeData } from '@/lib/sitemap';
 import { cn } from '@/lib/utils';
 import { typedNode } from './nodeTypes';
 import { type FocusRequest, useFocusNode } from './useFocusNode';
+
+const SCREENS_MODES = ['journey', 'sitemap'] as const;
+type ScreensMode = (typeof SCREENS_MODES)[number];
+function isScreensMode(value: unknown): value is ScreensMode {
+  return (SCREENS_MODES as readonly unknown[]).includes(value);
+}
 
 const handleClass = '!h-1.5 !w-1.5 !border-0 !bg-zinc-400/70';
 
@@ -214,10 +221,10 @@ export function ScreensBoard({
   // Two readings of the same data: the journey (every UI moment in temporal
   // order) and the sitemap (surfaces as a navigable map, Overview-style). Mode
   // lives in the URL so studio state stays shareable.
-  const [mode, setMode] = useState<'journey' | 'sitemap'>(() =>
+  const [mode, setMode] = useState<ScreensMode>(() =>
     new URLSearchParams(window.location.search).get('uimode') === 'sitemap' ? 'sitemap' : 'journey',
   );
-  const switchMode = (m: 'journey' | 'sitemap') => {
+  const switchMode = (m: ScreensMode) => {
     setMode(m);
     const p = new URLSearchParams(window.location.search);
     if (m === 'sitemap') p.set('uimode', m);
@@ -293,19 +300,21 @@ export function ScreensBoard({
         <Controls showInteractive={false} />
       </ReactFlow>
       <BoardTopRight>
-        <div className="flex overflow-hidden rounded-md border border-border bg-card text-xs shadow-sm">
-          {(['journey', 'sitemap'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => switchMode(m)}
-              className={`flex items-center gap-1 px-3 py-1.5 font-medium capitalize ${mode === m ? 'bg-foreground text-background' : 'hover:bg-accent'}`}
-            >
-              {m === 'sitemap' ? <MapIcon className="h-3 w-3" /> : null}
-              {m}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          value={mode}
+          onValueChange={(next) => {
+            if (isScreensMode(next)) switchMode(next);
+          }}
+        >
+          <TabsList aria-label="Screens view" className="shadow-sm">
+            {SCREENS_MODES.map((m) => (
+              <TabsTab key={m} value={m} className="capitalize">
+                {m === 'sitemap' ? <MapIcon /> : null}
+                {m}
+              </TabsTab>
+            ))}
+          </TabsList>
+        </Tabs>
       </BoardTopRight>
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">

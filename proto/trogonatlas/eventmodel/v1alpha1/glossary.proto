@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/calendar_date.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+
+message GlossaryEvidence {
+  DocumentRef document = 1;
+  string owner_uid = 2;
+  ContentDigest content_digest = 3;
+  string locator = 4;
+  string quote = 5;
+}
+
+enum GlossaryUsage {
+  GLOSSARY_USAGE_UNSPECIFIED = 0;
+  GLOSSARY_USAGE_ALLOWED = 1;
+  GLOSSARY_USAGE_DEPRECATED = 2;
+  GLOSSARY_USAGE_PROHIBITED = 3;
+}
+
+message GlossaryUsagePolicy {
+  GlossaryUsage usage = 1;
+  TermRef preferred_term = 2;
+  string rationale = 3;
+  trogonatlas.type.v1alpha1.CalendarDate effective_from = 4;
+  trogonatlas.type.v1alpha1.CalendarDate effective_until = 5;
+}
+
+message GlossaryUsagePeriod {
+  trogonatlas.type.v1alpha1.CalendarDate valid_from = 1;
+  trogonatlas.type.v1alpha1.CalendarDate valid_until = 2;
+}
+
+enum GlossaryReviewDisposition {
+  GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED = 0;
+  GLOSSARY_REVIEW_DISPOSITION_ACCEPTED = 1;
+  GLOSSARY_REVIEW_DISPOSITION_REJECTED = 2;
+  GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES = 3;
+}
+
+message GlossaryReview {
+  GlossaryReviewDisposition disposition = 1;
+  string actor = 2;
+  string reviewed_at = 3;
+  ContentDigest content_digest = 4;
+  string owner_uid = 5;
+  string reason = 6;
+}
+
+message GlossaryEntry {
+  repeated GlossaryEvidence evidence = 1;
+  string generation_revision = 2;
+  string audience = 3;
+  trogonatlas.type.v1alpha1.CalendarDate next_review_on = 4;
+  GlossaryUsagePolicy policy = 5;
+  GlossaryReview review = 6;
+  GlossaryUsagePeriod usage_period = 7;
+}

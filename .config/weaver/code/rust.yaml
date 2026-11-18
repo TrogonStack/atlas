@@ -1,0 +1,6 @@
+params:
+  instrumentation_name: trogon-atlas
+  vendor_prefixes:
+    - trogon_atlas
+  header_source: otel/registry
+  regenerate_command: mise run otel:generate

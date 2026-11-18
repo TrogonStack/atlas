@@ -96,7 +96,10 @@ unguarded.
 ## What this does not cover
 
 - Direct `PutEntity`/`BatchMutate` callers get the guarantee only if they
-  send `create_only` or `if_match` themselves.
+  send `create_only` or `if_match` themselves. When they do, a single-entity
+  refusal carries `expected_etag`/`actual_etag` on the status `ErrorInfo`
+  (empty means absent), including for `validate_only` dry runs. BatchMutate
+  still reports that pair on `precondition_failure` instead.
 - The refusal tells the caller what moved, not why. Who wrote the newer
   revision is in the [changeset log](changesets.md).
 

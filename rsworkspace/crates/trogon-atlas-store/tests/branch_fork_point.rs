@@ -10,7 +10,7 @@
 
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    store::{ChangesetOp, ChangesetRecord},
+    store::{ChangesetOp, ChangesetRecord, ChangesetValidation},
     ChangeKind, Store, StoreError,
 };
 
@@ -34,6 +34,7 @@ fn record(id: &str, branch: Option<&str>) -> ChangesetRecord {
             },
         }],
         operation_id: None,
+        validation: ChangesetValidation::NotRecorded,
     }
 }
 

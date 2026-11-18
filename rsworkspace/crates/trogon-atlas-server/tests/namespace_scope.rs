@@ -31,6 +31,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     scope::BaselineProtection,
     service::EventModelServiceImpl,
 };
@@ -76,7 +77,7 @@ async fn start_server(protection: BaselineProtection) -> String {
     let addr = listener.local_addr().unwrap();
 
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store))
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
         .unwrap()
         .with_baseline_protection(protection);
     let grpc = EventModelServiceServer::new(svc);

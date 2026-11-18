@@ -33,6 +33,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
     spicedb::{Freshness, SpiceDbAuthorizer},
 };
@@ -132,7 +133,7 @@ pub async fn serve_with_registry(
 /// authorizer: acme and beta tokens bound by `parent` alone.
 pub async fn client() -> EventModelServiceClient<Channel> {
     let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
-    let svc = EventModelServiceImpl::try_new(store).unwrap();
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
     serve_with_registry(svc, make_registry()).await
 }
 
@@ -397,7 +398,8 @@ pub async fn spicedb_world(tag: &str) -> SpiceDbWorld {
     // service just registered and stays stuck at `Unclaimed`, which sends
     // every write back through claim-on-first-write for a name that is
     // already somebody else's.
-    let svc_shell = EventModelServiceImpl::try_new(store.clone()).unwrap();
+    let svc_shell =
+        EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
     let authorizer = SpiceDbAuthorizer::new(
         &config,
         svc_shell.directory(),

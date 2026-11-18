@@ -1,0 +1,32 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: mark-fulfilled
+  namespace: acme-fulfillment
+spec:
+  doc: Worker-issued. Records that Acme Shipping Carrier confirmed delivery.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker records the outcome
+        kind: KIND_TIMESTAMP
+      name: fulfilled_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-fulfillment
+      slug: fulfillment
+      version: '1'
+  title: Mark fulfilled

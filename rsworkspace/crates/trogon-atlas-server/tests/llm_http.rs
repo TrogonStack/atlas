@@ -5,7 +5,10 @@
 
 use std::time::Duration;
 
-use trogon_atlas_server::llm::{AnthropicClient, AnthropicConfig, LlmClient};
+use trogon_atlas_server::{
+    llm::{AnthropicClient, AnthropicConfig, LlmClient},
+    metrics::ServerMetrics,
+};
 use wiremock::{
     matchers::{header, method, path},
     Mock, MockServer, Request, Respond, ResponseTemplate,
@@ -15,7 +18,7 @@ fn client_for(server: &MockServer) -> AnthropicClient {
     let mut config = AnthropicConfig::new("test-key");
     config.base_url = server.uri();
     config.request_timeout = Duration::from_secs(5);
-    AnthropicClient::new(config).unwrap()
+    AnthropicClient::new(config, ServerMetrics::default()).unwrap()
 }
 
 fn success_body() -> serde_json::Value {
@@ -155,7 +158,7 @@ async fn complete_oversized_body_is_fatal_no_retries() {
     let mut config = AnthropicConfig::new("test-key");
     config.base_url = server.uri();
     config.request_timeout = Duration::from_secs(30);
-    let client = AnthropicClient::new(config).unwrap();
+    let client = AnthropicClient::new(config, ServerMetrics::default()).unwrap();
 
     let err = client.complete("sys", "user").await.unwrap_err();
     let msg = err.to_string();

@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 // operation_id surface: the idempotency-key param on the mutating tools,
 // the get_operation tool, and operation_id showing up in a failed
 // mutation's error data. Same duplex-pipe harness as
@@ -14,13 +16,13 @@ use prost::Message as _;
 use tokio::net::TcpListener;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -38,10 +40,7 @@ type McpServiceRunning =
 
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -59,15 +58,7 @@ async fn mcp_client_for(
     grpc_endpoint: &str,
     branch: Option<&str>,
 ) -> (McpClient, McpServiceRunning) {
-    let mcp_server = trogon_atlas_mcp::server::McpServer::connect(
-        grpc_endpoint,
-        None,
-        None,
-        30,
-        branch.map(str::to_string),
-    )
-    .await
-    .unwrap();
+    let mcp_server = support::mcp_server(grpc_endpoint, branch.map(str::to_string));
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -146,6 +137,26 @@ async fn mcp_put_entity_json_with_operation_id_is_applied_and_retrievable_via_ge
         "{status:?}"
     );
     assert!(!status.changeset_id.is_empty(), "{status:?}");
+
+    mcp_service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_put_entity_json_accepts_the_entity_as_a_json_object() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+
+    let entity: serde_json::Value =
+        serde_json::from_str(&event_json("mcp-obj", "created", 1, "Created")).unwrap();
+    let put_result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(args_obj(&[
+                ("entity_json", entity),
+                ("create_only", serde_json::json!(true)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!put_result.is_error.unwrap_or(false), "{put_result:?}");
 
     mcp_service.cancel().await.unwrap();
 }

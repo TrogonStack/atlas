@@ -3,6 +3,9 @@ import { withNuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({
+  listSubjectDecisions: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, declarations: [] }),
+  listSubjectDocuments: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, declarations: [] }),
+  listSubjectAssignments: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, assignments: [] }),
   api: {
     info: vi.fn(),
     namespaces: vi.fn(),
@@ -10,7 +13,7 @@ vi.mock('@/lib/api', () => ({
     branches: vi.fn(),
     branchDiff: vi.fn(),
     search: vi.fn(),
-    typeMessages: vi.fn(() => Promise.resolve({ messages: [] })),
+    changesets: vi.fn(),
   },
 }));
 
@@ -94,6 +97,20 @@ describe('ModelShell Escape hotkey', () => {
       expect(screen.queryByRole('heading', { name: 'Order Shipped' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Order Placed' })).toBeNull();
     });
+  });
+
+  it('closes namespace history on Escape and returns focus to its button', async () => {
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    rtlRender(<ModelShell model={buildModel([])} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    const trigger = screen.getByRole('button', { name: 'Namespace history' });
+    fireEvent.click(trigger);
+    const close = await screen.findByRole('button', { name: 'Close namespace history' });
+    close.focus();
+    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('closes validation on Escape while preserving the entity selected underneath', async () => {

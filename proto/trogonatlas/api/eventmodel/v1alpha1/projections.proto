@@ -73,6 +73,21 @@ message GetEventModelProjectionRequest {
   // other models. If false, references outside this model appear in the
   // map only by Id (as empty Entity placeholders).
   bool include_cross_model = 2;
+  // Read-only view of the model right after this changeset landed. Baseline
+  // only: the request must not carry a branch header, and the id must name a
+  // baseline changeset. The server rewinds every newer baseline changeset
+  // from its recorded pre-images, so a write that recorded no changeset
+  // cannot be rewound. Empty reads the current model.
+  string as_of_changeset = 3;
+  // Read-only view of the model as of this RFC 3339 instant. The server
+  // resolves it to the newest baseline changeset, among those touching a
+  // namespace the caller can read, whose UUIDv7 id carries a millisecond
+  // timestamp at or before it, then reads as `as_of_changeset` would.
+  // Sub-millisecond precision is truncated. An instant later than the
+  // server clock is INVALID_ARGUMENT, since its answer would still change;
+  // one older than every such changeset is FAILED_PRECONDITION. Mutually
+  // exclusive with `as_of_changeset`; same baseline-only rule.
+  string as_of_time = 4;
 }
 
 message GetEventModelProjectionResponse {
@@ -82,6 +97,42 @@ message GetEventModelProjectionResponse {
   // was clipped. With `include_cross_model = true`, this is the most common
   // case to hit for large models.
   bool truncated = 2;
+  // The changeset an as-of read resolved to, so a caller that asked by
+  // time can pin the same view by id. Empty for a current read.
+  string as_of_changeset = 3;
+}
+
+// ---------- Board manifests --------------------------------------------------
+//
+// Render an event model as the manifests `trogon-atlas apply` reads, so a
+// shared copy of the board can be loaded into another store. The manifests
+// hold what the model reaches inside its own namespace. An entity in another
+// namespace that the board references directly comes back separately and is
+// not walked: a board needs the shape of what it receives from another
+// context, not that context's internals.
+
+message ExportEventModelManifestsRequest {
+  trogonatlas.type.v1alpha1.Id id = 1;
+}
+
+message ExportEventModelManifestsResponse {
+  // Multi-document YAML: the event model and every entity it reaches in its
+  // own namespace, including declared schemas and the type libraries that
+  // own their payload types.
+  string manifests = 1;
+  // Multi-document YAML: each entity in another namespace that `manifests`
+  // references directly. Its own references are not followed.
+  string external_manifests = 2;
+  // Entities that could not be rendered. They are reported, not dropped.
+  repeated SkippedEntity skipped = 3;
+  // True when the closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `manifests` was clipped.
+  bool truncated = 4;
+}
+
+message SkippedEntity {
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  string reason = 2;
 }
 
 // ---------- Subgraph extraction ----------------------------------------------

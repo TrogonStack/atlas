@@ -27,19 +27,4 @@ spec:
         slug: capture-payment-auto
         version: '1'
       kind: ENTITY_KIND_AUTOMATION_SLICE
-  - doc: waiting on carrier sandbox credentials
-    status: TRACK_STATUS_BLOCKED
-    subject:
-      id:
-        namespace: acme-storefront
-        slug: mark-fulfilled-auto
-        version: '1'
-      kind: ENTITY_KIND_AUTOMATION_SLICE
-  - status: TRACK_STATUS_TODO
-    subject:
-      id:
-        namespace: acme-storefront
-        slug: order-tracking-ui-slice
-        version: '1'
-      kind: ENTITY_KIND_UI_SLICE
   title: Storefront buildout

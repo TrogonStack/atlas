@@ -38,6 +38,8 @@ export interface Issue {
    * finding titled like an error is reported as info.
    */
   defaultSeverity?: Severity;
+  /** The author declared the finding intentional, so there is nothing to repair. */
+  acknowledged: boolean;
   subject?: { kind: EntityKind; id: EntityId };
 }
 
@@ -77,6 +79,7 @@ function parseIssue(raw: unknown): Issue | undefined {
     ruleTitle: String(r.ruleTitle ?? ''),
     ruleCategory: String(r.ruleCategory ?? ''),
     defaultSeverity: WIRE_SEVERITY[String(r.ruleDefaultSeverity ?? '')],
+    acknowledged: r.acknowledged === true,
     subject,
   };
 }
@@ -109,6 +112,30 @@ export function buildIssueIndex(raw: unknown, error?: string): IssueIndex {
     error,
     for: (entity) => byKey.get(entityKey(entity.kind, entity.id)) ?? NONE,
   };
+}
+
+/**
+ * The findings of ValidateProject responses as one index. The store-level
+ * report (empty event model id) carries the strategic chain once, and each
+ * model's report repeats the chain of its own namespace, so identical
+ * findings are collapsed, across responses too.
+ */
+export function buildProjectIssueIndex(responses: readonly ({ reports?: unknown[] } | undefined)[]): IssueIndex {
+  const seen = new Set<string>();
+  const raw: unknown[] = [];
+  for (const response of responses) {
+    for (const report of response?.reports ?? []) {
+      const issues = (report as { issues?: unknown } | null)?.issues;
+      if (!Array.isArray(issues)) continue;
+      for (const issue of issues) {
+        const key = JSON.stringify([issue?.code, issue?.severity, issue?.subject, issue?.subjectField, issue?.message]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        raw.push(issue);
+      }
+    }
+  }
+  return buildIssueIndex(raw);
 }
 
 /** Shared empty index: no findings, and no claim that validation ran. */

@@ -5,4 +5,7 @@ metadata:
   namespace: acme-reviews
 spec:
   doc: 'Reviewer-facing: rate and comment on a delivered order.'
+  metadata:
+  - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation
+    doc: The form is prefilled from the eligible-reviews row it submits against, so one surface both displays the order and takes the review.
   title: Review form

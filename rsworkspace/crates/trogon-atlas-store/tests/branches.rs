@@ -13,8 +13,10 @@
 
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    store::{BranchLandOp, ListFilter, MutationOutcome},
-    Store, StoreError, WriteContext,
+    store::{
+        BranchLandOp, ClaimOutcome, ListFilter, MutationOutcome, OperationStatus, RevisionPage,
+    },
+    ChangeKind, ChangesetRef, Store, StoreError, WriteContext,
 };
 
 fn event(ns: &str, slug: &str, version: u64, title: &str) -> pb::Entity {
@@ -691,6 +693,7 @@ async fn land_branch_merge_put_preserves_ours_bytes_verbatim() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(ours.clone()),
+                base: None,
                 expected_baseline_etag: None,
             }],
             WriteContext::baseline(),
@@ -812,6 +815,7 @@ async fn land_branch_merge_rejects_stale_baseline_etag() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(event("p2", "moved", 1, "Branch value")),
+                base: None,
                 expected_baseline_etag: Some("stale-etag-value".to_string()),
             }],
             WriteContext::baseline(),
@@ -862,6 +866,7 @@ async fn land_branch_merge_does_not_stamp_system_and_updates_change_feed() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(ours.clone()),
+                base: None,
                 expected_baseline_etag: None,
             }],
             WriteContext::baseline(),
@@ -883,6 +888,127 @@ async fn land_branch_merge_does_not_stamp_system_and_updates_change_feed() {
         before_seq + 1,
         "land_branch_merge must record exactly one change-feed event per landed op"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn land_branch_merge_ignores_context_branch_and_preserves_attribution() {
+    for (context_branch, deferred) in [
+        (None, false),
+        (Some("ignored-context"), false),
+        (Some("ignored-context"), true),
+    ] {
+        let fixture = trogon_atlas_testsupport::shared().await.store().await;
+        let store: &dyn Store = &fixture;
+        let target = id("shop", "merge-context", 1);
+        let before = store
+            .create(
+                pb::EntityKind::Event,
+                &event("shop", "merge-context", 1, "Before"),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+        store.create_branch("landing", "").await.unwrap();
+        let ours = store
+            .put(
+                pb::EntityKind::Event,
+                &event("shop", "merge-context", 1, "After"),
+                false,
+                WriteContext::branch("landing"),
+            )
+            .await
+            .unwrap();
+        let start = store.current_change_seq().await.unwrap();
+        let changeset_id = uuid::Uuid::now_v7().to_string();
+        let operation_key = format!("merge-context-{changeset_id}");
+        assert!(matches!(
+            store
+                .claim_operation(&operation_key, "digest", "MergeBranch", None)
+                .await
+                .unwrap(),
+            ClaimOutcome::Claimed
+        ));
+        let ctx = WriteContext::scoped(context_branch)
+            .attributed(ChangesetRef {
+                id: &changeset_id,
+                author: "merge-reviewer",
+                rpc: "MergeBranch",
+                operation_id: Some("merge-context-operation"),
+            })
+            .with_operation_key(&operation_key);
+        let ctx = if deferred {
+            ctx.with_deferred_settlement()
+        } else {
+            ctx
+        };
+        store
+            .land_branch_merge(
+                "landing",
+                &[BranchLandOp::Put {
+                    kind: pb::EntityKind::Event,
+                    ours: Box::new(ours.entity.clone()),
+                    base: Some(Box::new(before.entity.clone())),
+                    expected_baseline_etag: Some(before.etag),
+                }],
+                ctx,
+            )
+            .await
+            .unwrap();
+        let landed = store
+            .get(pb::EntityKind::Event, &target, None)
+            .await
+            .unwrap();
+        assert_eq!(landed.entity, ours.entity);
+        let changes = store.read_changes(start, 10).await.unwrap();
+        assert_eq!(changes.len(), 1, "context {context_branch:?}");
+        assert!(matches!(changes[0].kind, ChangeKind::Put));
+        assert_eq!(changes[0].entity_ref.id.as_ref(), Some(&target));
+        assert_eq!(changes[0].changeset_id, changeset_id);
+        assert_eq!(changes[0].author, "merge-reviewer");
+        let revisions = store
+            .list_entity_revisions(
+                pb::EntityKind::Event,
+                &target,
+                RevisionPage {
+                    before: None,
+                    limit: 10,
+                    branch: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(revisions[0].before.as_ref(), Some(&before.entity));
+        assert_eq!(revisions[0].after.as_ref(), Some(&landed.entity));
+        assert_eq!(revisions[0].changeset_id, changeset_id);
+        assert_eq!(revisions[0].branch, None);
+        assert_eq!(store.list_branch_deltas("landing").await.unwrap().len(), 0);
+        let recovered = store
+            .recover_batches(trogon_atlas_store::recovery::RecoveryPolicy::repair_all())
+            .await
+            .unwrap();
+        assert!(recovered.is_converged());
+        let changeset = store.get_changeset(&changeset_id).await.unwrap();
+        assert_eq!(changeset.branch, None);
+        assert_eq!(changeset.author, "merge-reviewer");
+        assert_eq!(changeset.rpc, "MergeBranch");
+        assert_eq!(
+            changeset.operation_id.as_deref(),
+            Some("merge-context-operation")
+        );
+        let operation = store.get_operation(&operation_key).await.unwrap().unwrap();
+        assert_eq!(
+            operation.status,
+            if deferred {
+                OperationStatus::NotApplied
+            } else {
+                OperationStatus::Applied
+            }
+        );
+        assert_eq!(operation.changeset_id, changeset_id);
+        assert_eq!(operation.branch, None);
+        store.read_marker().await.unwrap();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1195,11 +1321,13 @@ async fn land_branch_merge_rolls_back_earlier_op_when_later_op_etag_is_stale() {
         BranchLandOp::Put {
             kind: pb::EntityKind::Event,
             ours: Box::new(event("p2", "rollback-a", 1, "A on branch")),
+            base: None,
             expected_baseline_etag: Some(etag_a.clone()),
         },
         BranchLandOp::Put {
             kind: pb::EntityKind::Event,
             ours: Box::new(event("p2", "rollback-b", 1, "B on branch")),
+            base: None,
             expected_baseline_etag: Some(etag_b.clone()),
         },
     ];

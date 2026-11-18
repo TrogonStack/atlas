@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -234,6 +234,7 @@ fn build_processor(slug: &str, trigger: &str) -> pb::Entity {
 
 fn event_edge(slug: &str) -> pb::EventEdge {
     pb::EventEdge {
+        connection_id: None,
         event: Some(pb::EventRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -244,6 +245,7 @@ fn event_edge(slug: &str) -> pb::EventEdge {
 
 fn command_edge(slug: &str) -> pb::CommandEdge {
     pb::CommandEdge {
+        connection_id: None,
         command: Some(pb::CommandRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -254,6 +256,7 @@ fn command_edge(slug: &str) -> pb::CommandEdge {
 
 fn ui_edge(slug: &str) -> pb::UiEdge {
     pb::UiEdge {
+        connection_id: None,
         ui: Some(pb::UiRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -264,6 +267,7 @@ fn ui_edge(slug: &str) -> pb::UiEdge {
 
 fn persona_edge(slug: &str) -> pb::PersonaEdge {
     pb::PersonaEdge {
+        connection_id: None,
         persona: Some(pb::PersonaRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -274,6 +278,7 @@ fn persona_edge(slug: &str) -> pb::PersonaEdge {
 
 fn read_model_edge(slug: &str) -> pb::ReadModelEdge {
     pb::ReadModelEdge {
+        connection_id: None,
         read_model: Some(pb::ReadModelRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -284,6 +289,7 @@ fn read_model_edge(slug: &str) -> pb::ReadModelEdge {
 
 fn processor_edge(slug: &str) -> pb::ProcessorEdge {
     pb::ProcessorEdge {
+        connection_id: None,
         processor: Some(pb::ProcessorRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -801,7 +807,7 @@ fn ecommerce_ops() -> Vec<pb::BatchMutateOp> {
 async fn seed_service() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let resp = svc
         .batch_mutate(Request::new(pb::BatchMutateRequest {
             operation_id: String::new(),
@@ -898,6 +904,8 @@ async fn fixture_projection_event_model() {
         .get_event_model_projection(Request::new(pb::GetEventModelProjectionRequest {
             id: Some(id(NS, "ecommerce", 1)),
             include_cross_model: false,
+            as_of_changeset: String::new(),
+            as_of_time: String::new(),
         }))
         .await
         .unwrap()
@@ -916,6 +924,7 @@ async fn fixture_impact_from_order_placed() {
             filter_kinds: Vec::new(),
             page_size: 0,
             page_token: String::new(),
+            include_containers: false,
         }))
         .await
         .unwrap()

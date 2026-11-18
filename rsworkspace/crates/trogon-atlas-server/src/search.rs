@@ -420,6 +420,16 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::AlertPolicy(_)) => "alert_policy",
         Some(K::AlertNotificationTarget(_)) => "alert_notification_target",
         Some(K::TypeLibrary(_)) => "type_library",
+        Some(K::Channel(_)) => "channel",
+        Some(K::DataStore(_)) => "data_store",
+        Some(K::Specification(_)) => "specification",
+        Some(K::DataProduct(_)) => "data_product",
+        Some(K::Team(_)) => "team",
+        Some(K::Person(_)) => "person",
+        Some(K::Decision(_)) => "decision",
+        Some(K::Document(_)) => "document",
+        Some(K::DesignGraph(_)) => "design_graph",
+        Some(K::SystemGroup(_)) => "system_group",
         None => "",
     }
     .to_string()
@@ -457,6 +467,16 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::AlertPolicy => "alert_policy",
         pb::EntityKind::AlertNotificationTarget => "alert_notification_target",
         pb::EntityKind::TypeLibrary => "type_library",
+        pb::EntityKind::Channel => "channel",
+        pb::EntityKind::DataStore => "data_store",
+        pb::EntityKind::Specification => "specification",
+        pb::EntityKind::DataProduct => "data_product",
+        pb::EntityKind::Team => "team",
+        pb::EntityKind::Person => "person",
+        pb::EntityKind::Decision => "decision",
+        pb::EntityKind::Document => "document",
+        pb::EntityKind::DesignGraph => "design_graph",
+        pb::EntityKind::SystemGroup => "system_group",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -499,6 +519,31 @@ fn title_of(entity: &pb::Entity) -> String {
         Some(K::AlertPolicy(x)) => x.title.clone(),
         Some(K::AlertNotificationTarget(x)) => x.title.clone(),
         Some(K::TypeLibrary(x)) => x.title.clone(),
+        Some(K::Channel(x)) => x.title.clone(),
+        Some(K::DataStore(x)) => x.title.clone(),
+        Some(K::Specification(x)) => x.title.clone(),
+        Some(K::DataProduct(x)) => x.title.clone(),
+        Some(K::Team(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |value| value.value.clone()),
+        Some(K::Person(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |value| value.value.clone()),
+        Some(K::Decision(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
+        Some(K::Document(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
+        Some(K::SystemGroup(x)) => x.title.clone(),
+        Some(K::DesignGraph(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
         None => String::new(),
     }
 }
@@ -573,6 +618,125 @@ fn body_of(entity: &pb::Entity) -> String {
         Some(K::AlertNotificationTarget(x)) => {
             push(&mut s, &x.doc);
             push(&mut s, &x.target);
+        }
+        Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::Decision(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(value) = &x.context {
+                push(&mut s, &value.value);
+            }
+            if let Some(value) = &x.rationale {
+                push(&mut s, &value.value);
+            }
+            for option in &x.options {
+                if let Some(title) = &option.title {
+                    push(&mut s, &title.value);
+                }
+                if let Some(description) = &option.description {
+                    push(&mut s, &description.value);
+                }
+            }
+            for consequence in &x.consequences {
+                if let Some(text) = &consequence.text {
+                    push(&mut s, &text.value);
+                }
+            }
+        }
+        Some(K::Document(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            match &x.body {
+                Some(pb::document::Body::Retained(body)) => push(&mut s, &body.content),
+                Some(pb::document::Body::Link(link)) => push(&mut s, &link.value),
+                Some(pb::document::Body::RetainedContent(body)) => {
+                    push(&mut s, &String::from_utf8_lossy(&body.content));
+                }
+                None => {}
+            }
+            for anchor in &x.anchors {
+                if let Some(label) = &anchor.label {
+                    push(&mut s, &label.value);
+                }
+            }
+        }
+        Some(K::SystemGroup(x)) => {
+            push(&mut s, &x.doc);
+        }
+        Some(K::DesignGraph(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            for step in &x.steps {
+                if let Some(title) = &step.title {
+                    push(&mut s, &title.value);
+                }
+                if let Some(summary) = &step.summary {
+                    push(&mut s, &summary.value);
+                }
+                for transition in &step.transitions {
+                    if let Some(label) = &transition.label {
+                        push(&mut s, &label.value);
+                    }
+                }
+            }
+        }
+        Some(K::Team(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            push(&mut s, x.purpose.as_deref().unwrap_or_default());
+        }
+        Some(K::Person(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(role) = &x.role {
+                push(&mut s, &role.value);
+            }
+        }
+        Some(K::DataProduct(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(purpose) = &x.purpose {
+                push(&mut s, purpose);
+            }
+            for port in &x.inputs {
+                if let Some(name) = &port.name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = &port.doc {
+                    push(&mut s, doc);
+                }
+            }
+            for port in &x.outputs {
+                if let Some(name) = &port.name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = &port.doc {
+                    push(&mut s, doc);
+                }
+            }
+        }
+        Some(K::Specification(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            for (name, doc) in x
+                .artifacts
+                .iter()
+                .map(|v| (&v.name, &v.doc))
+                .chain(x.schemas.iter().map(|v| (&v.name, &v.doc)))
+                .chain(x.messages.iter().map(|v| (&v.name, &v.doc)))
+                .chain(x.operations.iter().map(|v| (&v.name, &v.doc)))
+            {
+                if let Some(name) = name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = doc {
+                    push(&mut s, doc);
+                }
+            }
+            for artifact in &x.artifacts {
+                if let Some(path) = &artifact.path {
+                    push(&mut s, &path.value);
+                }
+            }
+        }
+        Some(K::DataStore(x)) => {
+            push(&mut s, &x.doc);
+            if let Some(purpose) = &x.purpose {
+                push(&mut s, purpose);
+            }
         }
         Some(K::TypeLibrary(x)) => {
             push(&mut s, &x.doc);

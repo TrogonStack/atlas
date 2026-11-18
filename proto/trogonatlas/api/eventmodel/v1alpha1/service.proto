@@ -7,6 +7,7 @@ import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
 import "trogonatlas/catalog/v1alpha1/changesets.proto";
 import "trogonatlas/catalog/v1alpha1/namespaces.proto";
+import "trogonatlas/catalog/v1alpha1/protections.proto";
 import "trogonatlas/catalog/v1alpha1/snapshots.proto";
 import "trogonatlas/catalog/v1alpha1/branches.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
@@ -14,9 +15,23 @@ import "trogonatlas/api/eventmodel/v1alpha1/analysis.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/search.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/graph.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/impact_classification.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/batch.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/backing.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/glossary.proto";
+
+import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/artifacts.proto";
 
 
 // =============================================================================
@@ -117,6 +132,9 @@ message ListEntitiesRequest {
 message ListEntitiesResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 // SearchEntitiesRequest always searches the baseline index. The
@@ -149,6 +167,9 @@ message ListVersionsResponse {
   // Every version of (namespace, slug), ordered by version ascending.
   repeated trogonatlas.eventmodel.v1alpha1.Entity versions = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 message GetLatestVersionRequest {
@@ -256,6 +277,17 @@ message PutEntityResponse {
   bool no_op = 4;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+  // Suites that ran for this write/dry-run. Absent on operation_id replay
+  // because nothing re-ran; never invent coverage client-side. Empty
+  // `validation` means only the suites listed here ran, not a full model
+  // check.
+  ValidationCoverage coverage = 6;
+  // How the change would move the model's findings. Set only on
+  // `validate_only`; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 7;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 8;
 }
 
 message DeleteEntityRequest {
@@ -300,6 +332,18 @@ message DeleteEntityResponse {
   repeated Reference referrers = 1;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 2;
+  // Strategic findings the delete causes on the entities left behind, for
+  // example REALIZES_DANGLING on a bounded context whose subdomain is gone or
+  // SUBDOMAIN_UNREALIZED on a subdomain whose only realizing context is gone.
+  // Populated when the delete proceeds (including FORCE) and, for DRY_RUN, as
+  // a preview of what the delete would leave. Advisory at every severity: they
+  // never block the delete. Empty on an operation_id replay, which has no
+  // current view to judge.
+  repeated ValidationIssue validation = 3;
+  bool referrers_incomplete = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
@@ -388,6 +432,17 @@ message BatchMutateResponse {
   PreconditionFailure precondition_failure = 5;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 6;
+  // Suites that ran for this batch (or dry-run). Absent on operation_id
+  // replay and when the batch failed before validation (for example a
+  // referrer gate). Never invent coverage client-side; empty per-op
+  // `validation` is not a full-model clean bill of health.
+  ValidationCoverage coverage = 7;
+  // How the batch would move the model's findings. Set only on
+  // STATUS_VALIDATED; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 8;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 9;
 }
 
 // Bulk delete by structural query, replacing the "list every entity then
@@ -427,6 +482,9 @@ message DeleteByQueryResponse {
   // When mode == MODE_DRY_RUN: nothing was deleted, but `deleted`
   // lists what WOULD have been.
   bool dry_run = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
 }
 
 // Static catalog of every EntityKind the system stores. Same shape and
@@ -459,6 +517,9 @@ message ListEntitiesByDomainRequest {
 message ListEntitiesByDomainResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 
@@ -472,13 +533,18 @@ message ListEntitiesByDomainResponse {
 
 message GetImpactRequest {
   trogonatlas.eventmodel.v1alpha1.EntityRef root = 1;
-  // Maximum hops from root. 0 = unlimited. Default 0; large models with
-  // dense fan-out should set a bound to keep responses tractable.
+  // Maximum hops from root. 0 asks for the server maximum, and a larger
+  // value is clamped to it; `GetImpactResponse.effective_max_depth` reports
+  // the bound that applied.
   uint32 max_depth = 2;
   // Restrict the traversal to entities of these kinds. Empty = all kinds.
   repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 3;
   int32 page_size = 4;
   string page_token = 5;
+  // Walk down through every member of a container (event model, component)
+  // reached on the way. Off by default because a container lists all of its
+  // members, so unrelated siblings would otherwise count as impacted.
+  bool include_containers = 6;
 }
 
 message GetImpactResponse {
@@ -486,6 +552,17 @@ message GetImpactResponse {
   // at depth 0. Ordered by depth ascending, then canonical Id.
   repeated ImpactNode nodes = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
+  // The hop bound the traversal actually used.
+  uint32 effective_max_depth = 4;
+  // True when the server replaced the requested `max_depth` with its own
+  // maximum, either because the request asked for 0 or for more.
+  bool depth_clamped = 5;
+  // True when an entity at `effective_max_depth` has a reference the
+  // traversal did not follow, so the impact set continues past the bound.
+  bool depth_limited = 6;
 }
 
 // ---------- Bulk reference retargeting (version promotion) -------------------
@@ -542,6 +619,34 @@ message RetargetReferencesResponse {
   uint32 rewritten = 2;
   // Count of referrers whose write failed.
   uint32 failed = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
+  // Populated only when dry_run is true: `from` when referrers would still
+  // pin it after the rewrite (excluded by filter_kinds, failed to load, or
+  // holding no rewritable pointer) and no entity declares `supersedes` on it.
+  // Advisory: it never blocks the retarget.
+  repeated UnbridgedRemoval unbridged_removals = 5;
+  // True when the dry run's referrer scan did not cover the whole model (a
+  // truncated snapshot, a caller who cannot see every namespace, or a report
+  // that reached its referrer budget), so `unbridged_removals` may be missing
+  // entries.
+  bool unbridged_removals_incomplete = 6;
+}
+
+// An entity version an operation moves away from or removes while
+// references still pin it and no entity of its kind declares `supersedes`
+// on that exact version, so a reader following those references has no
+// recorded way forward. A successor is never inferred from a similar slug.
+message UnbridgedRemoval {
+  // The exact version left behind.
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  // References that would still point at `entity` after the operation, in
+  // reverse index order. Only the latest version of each referring slug
+  // counts, since older versions are history rather than live pins. A
+  // referrer pinning it from several fields appears once per field.
+  // `supersedes` links are not counted.
+  repeated Reference remaining_referrers = 2;
 }
 
 
@@ -574,6 +679,10 @@ message ListChangesetsRequest {
   // Restrict to changesets that touched this branch. Empty = every
   // changeset, baseline and branch alike.
   string branch = 3;
+  // Only changesets with at least one op in this namespace. Empty = every
+  // namespace. A matching changeset comes back whole, including its ops in
+  // other namespaces.
+  string namespace = 4;
 }
 
 message ListChangesetsResponse {
@@ -638,6 +747,9 @@ message RevertChangesetResponse {
   bool dry_run = 3;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // See trogonatlas.catalog.v1alpha1 OperationReceipt for the durable receipt
@@ -770,6 +882,9 @@ message GetServerInfoResponse {
     bool owned_branches = 16;                 // "@owner:name" branches are attributed to an owner for delegation and filtering
     bool who_am_i = 17;                       // WhoAmI; MCP tool listing is filtered by the caller's role
     bool type_libraries = 18;                 // CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
+    bool entity_protection = 19;              // ProtectEntity, UnprotectEntity; writes to a protected identity refuse with ENTITY_PROTECTED, or PROTECTION_STATE_UNKNOWN when its row cannot be read; ProtectionAnnotation is never stored
+    bool impact_classification = 20;          // ClassifyImpact
+    bool as_of_time = 21;                     // GetEventModelProjection.as_of_time; an older server would return the current model
   }
   Features features = 3;
 
@@ -870,6 +985,91 @@ message MoveNamespaceResponse {
   trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
 }
 
+message DeleteNamespaceRequest {
+  // Namespace id, not name, as for MoveNamespace. Refused with
+  // FAILED_PRECONDITION unless the namespace holds no entity on baseline and
+  // on every branch.
+  string id = 1;
+}
+
+message DeleteNamespaceResponse {
+  // The registry row that was removed.
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
+// ---------- Entity protection -------------------------------------------------
+//
+// Protecting an identity freezes it on every route: no new version, no edit,
+// no delete, whether on baseline or on a branch merging into it. Only an
+// authenticated admin may set or lift it, on baseline, and each call records
+// a changeset attributed to that admin. Protecting or unprotecting an
+// identity already in that state is a no-op that records nothing.
+
+message ProtectEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Why the identity is frozen. Required, so the refusal a writer later
+  // receives can say why.
+  string reason = 4;
+  // Check authorization and existence without protecting anything.
+  bool validate_only = 5;
+}
+
+message ProtectEntityResponse {
+  trogonatlas.catalog.v1alpha1.EntityProtection protection = 1;
+  // False when the identity was already protected, in which case
+  // `protection` is the existing row.
+  bool changed = 2;
+}
+
+message UnprotectEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Check authorization without lifting anything.
+  bool validate_only = 4;
+  // Lift only if the row is still at this revision (`EntityProtection.revision`
+  // or `EntityProtectionUnknown.revision`); otherwise refuse with
+  // `STALE_PRECONDITION`. Zero lifts whatever row is current.
+  uint64 if_match = 5;
+}
+
+message UnprotectEntityResponse {
+  // False when the identity was not protected.
+  bool changed = 1;
+  // Changeset recording the lift. Empty when nothing changed.
+  string changeset_id = 2;
+}
+
+message GetEntityProtectionRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+}
+
+message GetEntityProtectionResponse {
+  // Set when `state` is PROTECTED.
+  trogonatlas.catalog.v1alpha1.EntityProtection protection = 1;
+  trogonatlas.catalog.v1alpha1.ProtectionState state = 2;
+  // Set when `state` is UNKNOWN.
+  trogonatlas.catalog.v1alpha1.EntityProtectionUnknown unknown = 3;
+}
+
+message ListEntityProtectionsRequest {
+  // Restrict to one namespace. Empty lists every namespace the caller can see.
+  string namespace = 1;
+}
+
+message ListEntityProtectionsResponse {
+  repeated trogonatlas.catalog.v1alpha1.EntityProtection protections = 1;
+  // Rows that exist but could not be read. Writes treat them as protected.
+  repeated trogonatlas.catalog.v1alpha1.EntityProtectionUnknown unknown = 2;
+  // False when the registry could not be enumerated to the end, so an
+  // identity missing from both lists may still be protected.
+  bool complete = 3;
+}
+
 // ---------- Caller identity ---------------------------------------------------
 //
 // Lets a caller learn who it is authenticated as before attempting
@@ -925,9 +1125,11 @@ message WhoAmIResponse {
 // model from a manifest reproduces its snapshot id.
 
 message GetSnapshotIdRequest {
-  // Restrict the snapshot to these namespaces. Empty means every namespace.
-  // Two snapshot ids are comparable only when computed over the same
-  // namespace scope.
+  // Restrict the snapshot to these namespaces. Empty means every namespace
+  // the caller can read. Order and repeats do not matter; an entry that is
+  // not a valid namespace name is INVALID_ARGUMENT. The normalized list is
+  // part of the id, so the same content under two different lists has two
+  // different ids.
   repeated string namespaces = 1;
   // Include the per-entity hashes in the response. Off by default: the
   // whole point of the id is that change detection needs one string. Turn
@@ -936,9 +1138,9 @@ message GetSnapshotIdRequest {
 }
 
 message GetSnapshotIdResponse {
-  // Lowercase hex SHA-256 over the whole `(key, content_hash)` set. Equal
-  // ids mean equal content under the same namespace scope; unequal ids mean
-  // something changed.
+  // Lowercase hex SHA-256 over the scope and the whole `(key, content_hash)`
+  // set. Equal ids mean equal content under the same scope; unequal ids mean
+  // the content or the scope differs.
   string snapshot_id = 1;
   uint32 entity_count = 2;
   // True when the server's view hit its entity cap, so this id names a
@@ -946,6 +1148,23 @@ message GetSnapshotIdResponse {
   bool truncated = 3;
   // Populated only when `include_entries` was set. Sorted by `key`.
   repeated trogonatlas.catalog.v1alpha1.SnapshotEntry entries = 4;
+  // The scope the id was computed over, as normalized by the server.
+  SnapshotIdScope scope = 5;
+  // Version of the identity format. Ids from different versions are never
+  // comparable, even over identical content.
+  uint32 identity_version = 6;
+}
+
+message SnapshotIdScope {
+  // The owner boundary of the reader, part of the id. Empty when the reader
+  // has no owner boundary.
+  string owner = 1;
+  // The normalized namespace list, sorted and without repeats, part of the
+  // id. Empty means every namespace the reader can see.
+  repeated string namespaces = 2;
+  // The branch read, empty for baseline. Not part of the id: a branch
+  // nobody has written to has the baseline's id.
+  string branch = 3;
 }
 
 // ---------- Branching (Phase 1: Isolation) -----------------------------------
@@ -1022,18 +1241,59 @@ message MergeBranchResponse {
     // At least one entry is a conflict class; nothing was persisted.
     // See `conflicts`.
     STATUS_CONFLICTS = 3;
-    // No conflicts, but the post-merge world fails validation with at
-    // least one Error-severity issue; nothing was persisted. See
-    // `validation`.
+    // No conflicts, but the post-merge world fails a blocking validation
+    // check with at least one Error-severity issue; nothing was persisted.
+    // See `validation`. Strategic findings never cause this status.
     STATUS_INVALID = 4;
   }
   Status status = 1;
   repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry conflicts = 2;
+  // Post-merge validation findings. Blocking errors (the store-level checks
+  // of the post-merge world) produce STATUS_INVALID and carry the findings
+  // that blocked the merge. Non-blocking store-level warnings and strategic
+  // findings about bounded contexts, domains and subdomains, including those
+  // a landed deletion leaves behind, ride along without blocking, at any
+  // severity, exactly as they do on PutEntityResponse: STATUS_VALIDATED (a
+  // dry run) and STATUS_APPLIED carry them, so a reviewer sees what the merge
+  // leaves behind without a separate validation call. The merge changeset's
+  // validation receipt counts the same findings.
   repeated ValidationIssue validation = 3;
-  // Number of non-CONVERGED entries actually landed on baseline.
+  // Number of non-CONVERGED entries actually landed on baseline, or that a
+  // dry run would land.
   uint32 applied_count = 4;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+  // The landed (or, on a dry run, landable) entries split by diff class.
+  // Together they sum to applied_count when the merge reached the landing
+  // step (STATUS_APPLIED, STATUS_VALIDATED, or a dry run's STATUS_INVALID);
+  // all zero for STATUS_CONFLICTS and for an operation_id replay.
+  uint32 added_count = 6;
+  uint32 changed_count = 7;
+  uint32 deleted_count = 8;
+  // Suites that ran for this merge/dry-run once validation was reached.
+  // Absent for STATUS_CONFLICTS and operation_id replay. Merge still does
+  // not run full `model` or write-path `scenarios`; coverage reports that
+  // honestly so empty `validation` is not read as a clean full-model gate.
+  ValidationCoverage coverage = 9;
+  // How landing the branch would move baseline's findings. Set only on
+  // `dry_run` once validation was reached; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 10;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 11;
+  // The server's advisory verdict on landing the branch. Set only on
+  // `dry_run`; a real merge never consults it.
+  ChangeAssessment change_assessment = 12;
+  // Populated only on a dry run that reached validation (STATUS_VALIDATED or
+  // STATUS_INVALID): entity versions the merge deletes, or replaces on
+  // baseline with a newer version of the same slug, that post-merge
+  // references still pin while no post-merge entity declares `supersedes` on
+  // them. Advisory: it never changes the status.
+  repeated UnbridgedRemoval unbridged_removals = 13;
+  // True when the post-merge view behind `unbridged_removals` was truncated,
+  // limited by the caller's visibility, or the report reached its referrer
+  // budget, so `unbridged_removals` may be missing entries.
+  bool unbridged_removals_incomplete = 14;
 }
 
 message UpdateBranchRequest {
@@ -1111,6 +1371,8 @@ message ResolveBranchEntryResponse {
 //     GetStoryboardProjection /
 //     GetEventModelProjection /
 //     ExtractSubgraph                    : denormalized subgraphs
+//   - ExportEventModelManifests          : a board as apply-ready manifests
+//   - ExportAttestedModel                : manifests + validation, digest-bound
 //   - DiffEntities                       : structural comparison
 //   - PutEntity / DeleteEntity /
 //     BatchMutate                        : mutation w/ etag + dry-run
@@ -1123,6 +1385,69 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc InspectHumanInteraction(InspectHumanInteractionRequest) returns (InspectHumanInteractionResponse);
+  rpc GetArtifactStorageInfo(GetArtifactStorageInfoRequest) returns (GetArtifactStorageInfoResponse);
+  rpc BeginArtifactUpload(BeginArtifactUploadRequest) returns (BeginArtifactUploadResponse);
+  rpc UploadArtifactContent(UploadArtifactContentRequest) returns (UploadArtifactContentResponse);
+  rpc CompleteArtifactUpload(CompleteArtifactUploadRequest) returns (CompleteArtifactUploadResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+  rpc GetArtifactDownload(GetArtifactDownloadRequest) returns (GetArtifactDownloadResponse);
+  rpc GetArtifactContent(GetArtifactContentRequest) returns (GetArtifactContentResponse);
+  rpc CreateSourceRegistration(CreateSourceRegistrationRequest) returns (CreateSourceRegistrationResponse);
+  rpc UpdateSourceRegistration(UpdateSourceRegistrationRequest) returns (UpdateSourceRegistrationResponse);
+  rpc GetSourceRegistration(GetSourceRegistrationRequest) returns (GetSourceRegistrationResponse);
+  rpc ListSourceRegistrations(ListSourceRegistrationsRequest) returns (ListSourceRegistrationsResponse);
+  rpc DeleteSourceRegistration(DeleteSourceRegistrationRequest) returns (DeleteSourceRegistrationResponse);
+  rpc AcceptSourceSnapshot(AcceptSourceSnapshotRequest) returns (AcceptSourceSnapshotResponse);
+  rpc GetSourceSnapshot(GetSourceSnapshotRequest) returns (GetSourceSnapshotResponse);
+  rpc ListSourceSnapshots(ListSourceSnapshotsRequest) returns (ListSourceSnapshotsResponse);
+  rpc CreateSourceMapping(CreateSourceMappingRequest) returns (CreateSourceMappingResponse);
+  rpc UpdateSourceMapping(UpdateSourceMappingRequest) returns (UpdateSourceMappingResponse);
+  rpc GetSourceMapping(GetSourceMappingRequest) returns (GetSourceMappingResponse);
+  rpc ListSourceMappings(ListSourceMappingsRequest) returns (ListSourceMappingsResponse);
+  rpc DeleteSourceMapping(DeleteSourceMappingRequest) returns (DeleteSourceMappingResponse);
+  rpc GetSourceOverlay(GetSourceOverlayRequest) returns (GetSourceOverlayResponse);
+  rpc PreviewSourceRun(PreviewSourceRunRequest) returns (PreviewSourceRunResponse);
+  rpc ApplySourceRun(ApplySourceRunRequest) returns (ApplySourceRunResponse);
+  rpc CancelSourceRun(CancelSourceRunRequest) returns (CancelSourceRunResponse);
+  rpc GetSourceRun(GetSourceRunRequest) returns (GetSourceRunResponse);
+  rpc ListSourceRuns(ListSourceRunsRequest) returns (ListSourceRunsResponse);
+  rpc RecoverSourceRun(RecoverSourceRunRequest) returns (RecoverSourceRunResponse);
+  rpc ListSourceRunResults(ListSourceRunResultsRequest) returns (ListSourceRunResultsResponse);
+  rpc ListSourceRunOperations(ListSourceRunOperationsRequest) returns (ListSourceRunOperationsResponse);
+
+  rpc ListSubjectDecisions(ListSubjectDecisionsRequest) returns (ListSubjectDecisionsResponse);
+  rpc ListSubjectDocuments(ListSubjectDocumentsRequest) returns (ListSubjectDocumentsResponse);
+  rpc ListDecisionAmendments(ListDecisionAmendmentsRequest) returns (ListDecisionAmendmentsResponse);
+  rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
+  rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
+  rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
+  rpc ListGlossaryPointers(ListGlossaryEntriesRequest) returns (ListGlossaryPointersResponse);
+  rpc GetGlossaryDefinition(GetGlossaryTermRequest) returns (GetGlossaryDefinitionResponse);
+  rpc CheckGlossaryCodeUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc ListGlossaryEntries(ListGlossaryEntriesRequest) returns (ListGlossaryEntriesResponse);
+  rpc GetGlossaryTerm(GetGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc InspectGlossarySources(InspectGlossarySourcesRequest) returns (InspectGlossarySourcesResponse);
+  rpc ReviewGlossaryTerm(ReviewGlossaryTermRequest) returns (GetGlossaryTermResponse);
+  rpc CompareGlossaries(CompareGlossariesRequest) returns (CompareGlossariesResponse);
+  rpc CheckGlossaryUsage(CheckGlossaryUsageRequest) returns (CheckGlossaryUsageResponse);
+  rpc InspectGlossaryRefresh(InspectGlossaryRefreshRequest) returns (InspectGlossaryRefreshResponse);
+  rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
+  rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+  // Evidence presence across the visible model, bound to its snapshot id.
+  rpc GetBackingReport(GetBackingReportRequest) returns (GetBackingReportResponse);
+
+  rpc GetDesignGraphDetail(GetDesignGraphDetailRequest) returns (GetDesignGraphDetailResponse);
+  rpc ListSubjectDesignGraphs(ListSubjectDesignGraphsRequest) returns (ListSubjectDesignGraphsResponse);
+  rpc TraverseDesignGraphTopology(TraverseDesignGraphTopologyRequest) returns (TraverseDesignGraphTopologyResponse);
+  rpc ListIncomingDesignGraphSubflows(ListIncomingDesignGraphSubflowsRequest) returns (ListIncomingDesignGraphSubflowsResponse);
+
+  rpc ListSubjectAssignments(ListSubjectAssignmentsRequest) returns (ListSubjectAssignmentsResponse);
+  rpc ListAssigneeResponsibilities(ListAssigneeResponsibilitiesRequest) returns (ListAssigneeResponsibilitiesResponse);
+  rpc ListTeamMembers(ListTeamMembersRequest) returns (ListTeamMembersResponse);
+  rpc ListPersonTeams(ListPersonTeamsRequest) returns (ListPersonTeamsResponse);
+  rpc GetTeamContacts(GetTeamContactsRequest) returns (GetTeamContactsResponse);
+  rpc InspectDataProduct(InspectDataProductRequest) returns (InspectDataProductResponse);
   // Bootstrap. Clients SHOULD call GetServerInfo on connect to learn
   // which optional features and limits apply (Decision #22).
   rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
@@ -1135,6 +1460,13 @@ service EventModelService {
   // an existing namespace without touching a single entity.
   rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
   rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
+  // Entity protection. Setting and lifting are admin-only and baseline-only;
+  // reading is open to any reader.
+  rpc ProtectEntity(ProtectEntityRequest) returns (ProtectEntityResponse);
+  rpc UnprotectEntity(UnprotectEntityRequest) returns (UnprotectEntityResponse);
+  rpc GetEntityProtection(GetEntityProtectionRequest) returns (GetEntityProtectionResponse);
+  rpc ListEntityProtections(ListEntityProtectionsRequest) returns (ListEntityProtectionsResponse);
   // Content-addressable identity of the current state. Branch-scoped via
   // the `x-trogon-atlas-branch` header like every other read.
   rpc GetSnapshotId(GetSnapshotIdRequest) returns (GetSnapshotIdResponse);
@@ -1156,6 +1488,9 @@ service EventModelService {
   rpc GetOutgoingReferences(GetReferencesRequest) returns (GetReferencesResponse);
   // Transitive reverse-reference closure: "what depends on this?"
   rpc GetImpact(GetImpactRequest) returns (GetImpactResponse);
+  // Classify each referrer of an exact version as BREAKING, BUMP_ONLY or
+  // UNKNOWN against an exact candidate version.
+  rpc ClassifyImpact(ClassifyImpactRequest) returns (ClassifyImpactResponse);
   // Rewrite every stored reference to `from` so it points at `to`. Used as
   // the rewire step in the promotion workflow: create v+1 with supersedes,
   // call retarget_references (dry_run first to preview), then drain any
@@ -1171,6 +1506,11 @@ service EventModelService {
   // Closure-as-new-model: extract a slice/storyboard's reachable graph
   // into a fresh, self-contained EventModel.
   rpc ExtractSubgraph(ExtractSubgraphRequest) returns (ExtractSubgraphResponse);
+  // An event model as apply-ready manifests, for sharing a board.
+  rpc ExportEventModelManifests(ExportEventModelManifestsRequest) returns (ExportEventModelManifestsResponse);
+  // Manifests, validation and state identity from one state, bound by one
+  // digest a client can verify offline.
+  rpc ExportAttestedModel(ExportAttestedModelRequest) returns (ExportAttestedModelResponse);
 
   // Structural comparison of two entities (typically two versions).
   rpc DiffEntities(DiffEntitiesRequest) returns (DiffEntitiesResponse);
@@ -1245,4 +1585,9 @@ service EventModelService {
   rpc CompileTypeLibrary(CompileTypeLibraryRequest) returns (CompileTypeLibraryResponse);
   rpc ResolveType(ResolveTypeRequest) returns (ResolveTypeResponse);
   rpc GetTypeLibraryDescriptorSet(GetTypeLibraryDescriptorSetRequest) returns (GetTypeLibraryDescriptorSetResponse);
+
+  // Inverse discovery preserves independent specification declarations,
+  // claim routes and operation-message occurrences for one exact channel.
+  // Branch context uses x-trogon-atlas-branch.
+  rpc ListChannelMessages(ListChannelMessagesRequest) returns (ListChannelMessagesResponse);
 }

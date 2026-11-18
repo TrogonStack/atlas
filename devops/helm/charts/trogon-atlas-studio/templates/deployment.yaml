@@ -44,7 +44,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
+            - name: public
               containerPort: 80
               protocol: TCP
           env:
@@ -94,33 +94,22 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           startupProbe:
-            tcpSocket:
-              port: http
+            httpGet:
+              path: /-/liveness
+              port: public
             periodSeconds: 2
             failureThreshold: 30
-          {{- if and $studio.auth.passthrough (not $studio.auth.token.value) (not $studio.auth.token.existingSecret) }}
-          # Passthrough with no bridge credential means /api/info has no
-          # caller token to forward, so an authenticated server answers the
-          # probe's bearer-less request with UNAUTHENTICATED. Fall back to a
-          # TCP check; readiness no longer tracks upstream availability.
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 10
-          {{- else }}
-          # /api/info proxies the gRPC server, so readiness tracks upstream
-          # availability while liveness stays local to avoid restart loops
-          # during a server outage.
           readinessProbe:
             httpGet:
-              path: /api/info
-              port: http
+              path: /-/readiness
+              port: public
             periodSeconds: 10
-          {{- end }}
           livenessProbe:
-            tcpSocket:
-              port: http
+            httpGet:
+              path: /-/liveness
+              port: public
             periodSeconds: 15
+            failureThreshold: 6
           {{- with $studio.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

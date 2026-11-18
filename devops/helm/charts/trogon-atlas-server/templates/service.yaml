@@ -12,17 +12,13 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - name: grpc
-      port: {{ .Values.service.grpcPort }}
-      targetPort: grpc
+    - name: private
+      port: {{ .Values.service.port }}
+      targetPort: private
       protocol: TCP
-      appProtocol: grpc
-    {{- if .Values.metrics.enabled }}
-    - name: metrics
-      port: {{ .Values.metrics.port }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
+      {{- if not .Values.tls.existingSecret }}
+      appProtocol: kubernetes.io/h2c
+      {{- end }}
   selector:
     {{- include "trogon-atlas-server.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: server

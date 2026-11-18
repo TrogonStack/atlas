@@ -1,16 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  api,
-  type CompileTypeLibraryResult,
-  type ProtoSourceFile,
-  type TypeLibraryDiagnostic,
-  type TypeLibraryMessage,
-} from '@/lib/api';
+import { api, type CompileTypeLibraryResult, type ProtoSourceFile, type TypeLibraryDiagnostic } from '@/lib/api';
 import { readBranchFromUrl } from '@/lib/branch';
 import type { Entity, EntityId } from '@/lib/model';
-
-const TYPE_URL_PREFIX = 'type.googleapis.com/';
 
 function sourceFilesOf(entity: Entity): ProtoSourceFile[] {
   const files = entity.raw.files;
@@ -152,65 +144,5 @@ function CompileOutcome({ state }: { state: CompileState }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function payloadTypeOf(entity: Entity): string | undefined {
-  const schema = entity.raw.schema;
-  if (!schema || typeof schema !== 'object') return undefined;
-  const s = schema as Record<string, unknown>;
-  const url = s['@type'] ?? s.typeUrl;
-  return typeof url === 'string' ? url.split('/').pop() : undefined;
-}
-
-/**
- * Lists the messages the entity's namespace declares, so a payload type can
- * be chosen by name instead of typed by hand.
- */
-export function PayloadTypePicker({ entity }: { entity: Entity }) {
-  const [messages, setMessages] = useState<TypeLibraryMessage[] | undefined>();
-  const [chosen, setChosen] = useState(payloadTypeOf(entity) ?? '');
-  const namespace = entity.id.namespace;
-
-  useEffect(() => {
-    setChosen(payloadTypeOf(entity) ?? '');
-  }, [entity]);
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api
-      .typeMessages(namespace, { signal: ctrl.signal, branch: readBranchFromUrl() })
-      .then((res) => setMessages(res.messages ?? []))
-      .catch(() => {
-        if (!ctrl.signal.aborted) setMessages([]);
-      });
-    return () => ctrl.abort();
-  }, [namespace]);
-
-  if (!messages || (messages.length === 0 && !chosen)) return null;
-  const names = messages.map((m) => m.fullName);
-  return (
-    <section>
-      <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Payload type</h3>
-      <div className="flex flex-col gap-1">
-        <select
-          aria-label="Payload type"
-          className="rounded border border-border bg-card px-2 py-1 font-mono text-xs"
-          value={chosen}
-          onChange={(e) => setChosen(e.target.value)}
-        >
-          {chosen && !names.includes(chosen) ? <option value={chosen}>{chosen}</option> : null}
-          {chosen ? null : <option value="">Field list (built-in Schema)</option>}
-          {names.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-        {chosen ? (
-          <code className="break-all text-[11px] text-muted-foreground">{TYPE_URL_PREFIX + chosen}</code>
-        ) : null}
-      </div>
-    </section>
   );
 }

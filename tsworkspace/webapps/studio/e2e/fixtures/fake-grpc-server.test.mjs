@@ -106,6 +106,17 @@ describe('fake-grpc happy-path smoke RPCs', () => {
     const res = await call('getEntity', { kind: 12, id: ORDER_MODEL_ID });
     expect(res.entity?.eventModel?.title).toBe('Order Service');
   });
+
+  // The bridge reads this for both the namespace picker and the registry
+  // page; the unregistered row must arrive with no `id` so the bridge can
+  // flag it rather than invent one.
+  it('ListNamespaces returns the registered model namespace and one unregistered row', async () => {
+    const res = await call('listNamespaces', {});
+    expect(res.namespaces?.map((n) => [n.name, n.id ?? '', n.entityCount])).toEqual([
+      ['shop', 'shop', 2],
+      ['legacy', '', 1],
+    ]);
+  });
 });
 
 describe('fake-grpc type library RPCs', () => {
@@ -127,5 +138,27 @@ describe('fake-grpc type library RPCs', () => {
   it('GetTypeLibraryDescriptorSet lists message names under `messages`', async () => {
     const res = await call('getTypeLibraryDescriptorSet', { namespace: 'shop' });
     expect(res.messages?.map((m) => m.fullName)).toEqual(['shop.orders.v1.OrderPlaced']);
+  });
+});
+
+describe('fake-grpc subject inspection RPCs', () => {
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'shop', slug: 'order.placed', version: '1' } } };
+
+  it('ListSubjectDecisions and ListSubjectDocuments resolve the subject with nothing declared', async () => {
+    for (const method of ['listSubjectDecisions', 'listSubjectDocuments']) {
+      const res = await call(method, { subject });
+      expect(res.declarations ?? []).toEqual([]);
+      expect(res.incomplete ?? false).toBe(false);
+      expect(res.subjectState).toBe('CATALOG_RESOLUTION_STATE_RESOLVED');
+      expect(res.scope?.visitedSubjects?.[0]?.entity?.id?.slug).toBe('order.placed');
+    }
+  });
+
+  it('ListSubjectAssignments resolves the subject with no assignments', async () => {
+    const res = await call('listSubjectAssignments', { subject });
+    expect(res.assignments ?? []).toEqual([]);
+    expect(res.incomplete ?? false).toBe(false);
+    expect(res.subjectState).toBe('RESPONSIBILITY_RESOLUTION_STATE_RESOLVED');
+    expect(res.scope?.visitedSubjects?.[0]?.entity?.id?.slug).toBe('order.placed');
   });
 });

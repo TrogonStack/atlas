@@ -19,6 +19,7 @@ use trogon_atlas_server::{
     jev::{JevAnalyzer, JevConfig},
     llm::LlmClient,
     llm_analysis::LlmAnalyzer,
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 use wiremock::{
@@ -66,11 +67,11 @@ async fn service_with_config(
     fallback: Option<Arc<FallbackClient>>,
 ) -> EventModelServiceImpl {
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let mut svc = EventModelServiceImpl::try_new(Arc::new(store))
+    let mut svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
         .unwrap()
         .with_jev_analyzer(Arc::new(JevAnalyzer::new(config).unwrap()));
     if let Some(client) = fallback {
-        svc = svc.with_llm_analyzer(Arc::new(LlmAnalyzer::new(client)));
+        svc = svc.with_llm_analyzer(Arc::new(LlmAnalyzer::new(client, ServerMetrics::default())));
     }
     svc
 }

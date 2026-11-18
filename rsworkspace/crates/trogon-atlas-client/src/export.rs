@@ -7,14 +7,18 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use prost::Message as _;
+use prost_reflect::{Kind as FieldKind, MessageDescriptor};
 use serde_json::{Map, Value};
-use trogon_atlas_core::{refs::outbound_refs, transcode::TranscodePool};
+use trogon_atlas_core::{
+    id_component::is_safe_id_component,
+    refs::{self, outbound_refs},
+    transcode::TranscodePool,
+};
 use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::API_VERSION,
+    manifest::{is_ref_like, shorthand_ref_field, API_VERSION, ID_MESSAGE},
     tenant_types::{self, TypeScope},
 };
 
@@ -34,7 +38,7 @@ pub(crate) fn manifest_kind(kind: pb::EntityKind) -> String {
 }
 
 /// Render one entity as a manifest document (JSON value; YAML comes from
-/// serde_yaml at write time). Strips `id` (moves to metadata) and the
+/// serde_norway at write time). Strips `id` (moves to metadata) and the
 /// server-owned `system` block. Shared with `fmt`, which re-manifests
 /// entities freshly parsed from disk rather than fetched from the store.
 pub(crate) fn entity_to_manifest(
@@ -65,6 +69,17 @@ pub(crate) fn entity_to_manifest(
         .remove("id")
         .ok_or_else(|| anyhow!("entity body has no id"))?;
     let id = id_from_json(&id_value)?;
+    let body_desc = types
+        .entity_descriptor()
+        .ok()
+        .and_then(|entity| entity.fields().find(|f| f.json_name() == body_key))
+        .and_then(|field| match field.kind() {
+            FieldKind::Message(md) => Some(md),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("Entity has no message field {body_key:?}"))?;
+    let mut spec = Value::Object(body);
+    compact_message(&mut spec, &body_desc, &id.namespace);
 
     let mut metadata = Map::new();
     metadata.insert("namespace".into(), Value::String(id.namespace.clone()));
@@ -77,8 +92,93 @@ pub(crate) fn entity_to_manifest(
     doc.insert("apiVersion".into(), Value::String(API_VERSION.into()));
     doc.insert("kind".into(), Value::String(manifest_kind(kind)));
     doc.insert("metadata".into(), Value::Object(metadata));
-    doc.insert("spec".into(), Value::Object(body));
+    doc.insert("spec".into(), spec);
     Ok((kind, id, Value::Object(doc)))
+}
+
+/// Undo `manifest::normalize_message`: write each Id, Ref, Edge and Example
+/// wrapper as the shortest string the parser expands back to the same value.
+/// A wrapper with any other key, or an Id the string grammar can't carry
+/// exactly, stays an object.
+fn compact_message(value: &mut Value, desc: &MessageDescriptor, default_ns: &str) {
+    if desc.full_name() == ID_MESSAGE {
+        if let Some(short) = short_id(value, default_ns) {
+            *value = Value::String(short);
+        }
+        return;
+    }
+    // Any-packed annotations are opaque to the parser's schema walk too.
+    if desc.full_name().starts_with("google.protobuf.") {
+        return;
+    }
+    let Value::Object(map) = value else {
+        return;
+    };
+    for (key, val) in map.iter_mut() {
+        let Some(field) = desc
+            .fields()
+            .find(|f| f.json_name() == key || f.name() == key)
+        else {
+            continue;
+        };
+        let FieldKind::Message(md) = field.kind() else {
+            continue;
+        };
+        if field.is_map() {
+            continue;
+        }
+        match val {
+            Value::Array(items) if field.is_list() => {
+                for item in items {
+                    compact_message(item, &md, default_ns);
+                }
+            }
+            _ if field.is_list() => {}
+            _ => compact_message(val, &md, default_ns),
+        }
+    }
+    // Mirror the parser's order: a Ref-like message takes a string as its
+    // `id`, and only a non-Ref message routes a string to its shorthand field.
+    let wrapped = if is_ref_like(desc) {
+        "id".to_string()
+    } else if let Some(field) = shorthand_ref_field(desc) {
+        field.json_name().to_string()
+    } else {
+        return;
+    };
+    if map.len() == 1 {
+        if let Some(Value::String(short)) = map.get(&wrapped) {
+            *value = Value::String(short.clone());
+        }
+    }
+}
+
+/// `slug`, `ns/slug` or `ns/slug@v`, or None when `expand_id_string` would
+/// not read the string back as exactly this Id.
+fn short_id(value: &Value, default_ns: &str) -> Option<String> {
+    let map = value.as_object()?;
+    if map.len() != 3 {
+        return None;
+    }
+    let namespace = map.get("namespace")?.as_str()?;
+    let slug = map.get("slug")?.as_str()?;
+    let version = match map.get("version")? {
+        Value::String(s) => s.parse::<u64>().ok()?,
+        Value::Number(n) => n.as_u64()?,
+        _ => return None,
+    };
+    if version == 0 || !is_safe_id_component(namespace) || !is_safe_id_component(slug) {
+        return None;
+    }
+    let qualified = if namespace == default_ns {
+        slug.to_string()
+    } else {
+        format!("{namespace}/{slug}")
+    };
+    Some(match version {
+        1 => qualified,
+        v => format!("{qualified}@{v}"),
+    })
 }
 
 // Proto3 JSON renders uint64 as a string; extract the triple by hand
@@ -137,6 +237,16 @@ pub(crate) fn entity_label(entity: &pb::Entity) -> String {
         K::AlertPolicy(x) => x.id.as_ref(),
         K::AlertNotificationTarget(x) => x.id.as_ref(),
         K::TypeLibrary(x) => x.id.as_ref(),
+        K::Channel(x) => x.id.as_ref(),
+        K::DataStore(x) => x.id.as_ref(),
+        K::DataProduct(x) => x.id.as_ref(),
+        K::Specification(x) => x.id.as_ref(),
+        K::Team(x) => x.id.as_ref(),
+        K::Person(x) => x.id.as_ref(),
+        K::Decision(x) => x.id.as_ref(),
+        K::Document(x) => x.id.as_ref(),
+        K::DesignGraph(x) => x.id.as_ref(),
+        K::SystemGroup(x) => x.id.as_ref(),
     };
     match id {
         Some(id) => pb::canonical::id_string(entity_kind_of(kind), id),
@@ -179,6 +289,16 @@ fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
         K::AlertPolicy(_) => pb::EntityKind::AlertPolicy,
         K::AlertNotificationTarget(_) => pb::EntityKind::AlertNotificationTarget,
         K::TypeLibrary(_) => pb::EntityKind::TypeLibrary,
+        K::Channel(_) => pb::EntityKind::Channel,
+        K::DataStore(_) => pb::EntityKind::DataStore,
+        K::DataProduct(_) => pb::EntityKind::DataProduct,
+        K::Specification(_) => pb::EntityKind::Specification,
+        K::Team(_) => pb::EntityKind::Team,
+        K::Person(_) => pb::EntityKind::Person,
+        K::Decision(_) => pb::EntityKind::Decision,
+        K::Document(_) => pb::EntityKind::Document,
+        K::DesignGraph(_) => pb::EntityKind::DesignGraph,
+        K::SystemGroup(_) => pb::EntityKind::SystemGroup,
     }
 }
 
@@ -198,13 +318,16 @@ pub enum ExportLayout {
     Slices,
 }
 
-async fn namespace_types(client: &mut Client, namespace: &str) -> Result<TranscodePool> {
+pub(crate) async fn namespace_types(client: &mut Client, namespace: &str) -> Result<TranscodePool> {
     let mut scope = TypeScope::default();
     scope.add_namespace(namespace);
     tenant_types::transcode_pool(client, &scope).await
 }
 
-async fn fetch_namespace_entities(client: &mut Client, namespace: &str) -> Result<Vec<pb::Entity>> {
+pub async fn fetch_namespace_entities(
+    client: &mut Client,
+    namespace: &str,
+) -> Result<Vec<pb::Entity>> {
     let mut entities: Vec<pb::Entity> = Vec::new();
     let mut page_token = String::new();
     loop {
@@ -221,6 +344,11 @@ async fn fetch_namespace_entities(client: &mut Client, namespace: &str) -> Resul
             .await
             .context("ListEntities failed")?
             .into_inner();
+        if resp.snapshot_truncated {
+            crate::invalid_input!(
+                "namespace {namespace:?} cannot be read completely: the server snapshot exceeds its entity cap"
+            );
+        }
         entities.extend(resp.entities);
         if resp.next_page_token.is_empty() {
             break;
@@ -262,13 +390,13 @@ pub async fn namespace_manifest_docs(
     Ok(entities_to_docs(&entities, &types))
 }
 
-fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {
+pub(crate) fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {
     let mut out = String::new();
     for (i, doc) in docs.into_iter().enumerate() {
         if i > 0 {
             out.push_str("---\n");
         }
-        out.push_str(&serde_yaml::to_string(doc).context("rendering YAML")?);
+        out.push_str(&serde_norway::to_string(doc).context("rendering YAML")?);
     }
     Ok(out)
 }
@@ -303,6 +431,71 @@ pub async fn export_namespace(client: &mut Client, namespace: &str) -> Result<Ex
     Ok(ExportOutcome { files, skipped })
 }
 
+/// A board rendered as manifests: its own entities, and the entities in
+/// other namespaces it references directly.
+#[derive(Debug)]
+pub struct BoardManifests {
+    pub manifests: String,
+    pub external_manifests: String,
+    pub skipped: Vec<pb::SkippedEntity>,
+}
+
+/// Render a board's entities as multi-document YAML, each set sorted by
+/// (kind, namespace, slug, version) so the output is stable across exports.
+pub fn render_board(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: &TranscodePool,
+) -> Result<BoardManifests> {
+    render_board_scoped(own, external, |_| Some(types))
+}
+
+/// Render each entity with its namespace's types, so independent namespaces
+/// can reuse protobuf file and message names.
+pub fn render_board_scoped<'a>(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: impl Fn(&str) -> Option<&'a TranscodePool>,
+) -> Result<BoardManifests> {
+    let mut skipped = Vec::new();
+    let manifests = render_sorted(own, &types, &mut skipped)?;
+    let external_manifests = render_sorted(external, &types, &mut skipped)?;
+    Ok(BoardManifests {
+        manifests,
+        external_manifests,
+        skipped,
+    })
+}
+
+fn render_sorted<'a>(
+    entities: &[pb::Entity],
+    types: &impl Fn(&str) -> Option<&'a TranscodePool>,
+    skipped: &mut Vec<pb::SkippedEntity>,
+) -> Result<String> {
+    let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
+    for entity in entities {
+        let rendered = refs::entity_id(entity)
+            .ok_or_else(|| anyhow!("stored entity has no id"))
+            .and_then(|id| {
+                types(&id.namespace)
+                    .ok_or_else(|| anyhow!("no type pool for namespace {:?}", id.namespace))
+            })
+            .and_then(|types| entity_to_manifest(entity, types));
+        match rendered {
+            Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
+            Err(err) => skipped.push(pb::SkippedEntity {
+                entity: Some(pb::EntityRef {
+                    kind: refs::entity_kind(entity).map_or(0, |k| k as i32),
+                    id: refs::entity_id(entity).cloned(),
+                }),
+                reason: format!("{err:#}"),
+            }),
+        }
+    }
+    docs.sort_by(|a, b| sort_key(&a.0).cmp(&sort_key(&b.0)));
+    render_docs(docs.iter().map(|(_, doc)| doc))
+}
+
 fn is_slice_kind(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -311,17 +504,6 @@ fn is_slice_kind(kind: pb::EntityKind) -> bool {
             | pb::EntityKind::AutomationSlice
             | pb::EntityKind::UiSlice
     )
-}
-
-/// `outbound_refs` walks the FieldSpec refs inside a Decision #33 schema but
-/// not the schema's own identity, so a slice closure would miss the `Schema`.
-fn declared_schema_ref(entity: &pb::Entity) -> Option<pb::Id> {
-    let any = trogon_atlas_core::schema::entity_schema(entity)?;
-    if !trogon_atlas_core::schema::is_schema(any) {
-        return None;
-    }
-    let schema = pb::Schema::decode(any.value.as_slice()).ok()?;
-    schema.id
 }
 
 fn closure_refs(
@@ -341,7 +523,7 @@ fn closure_refs(
             .into_iter()
             .filter_map(|r| r.to_kind.map(|k| pb::EntityKey::new(k, &r.to_id)))
             .collect();
-        if let Some(id) = declared_schema_ref(entity) {
+        if let Some(id) = trogon_atlas_core::schema::declared_schema_id(entity) {
             targets.push(pb::EntityKey::new(pb::EntityKind::Schema, &id));
         }
         for target in targets {
@@ -436,4 +618,67 @@ pub async fn export_namespace_slices(
     }
 
     Ok(ExportOutcome { files, skipped })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn exported_spec(yaml: &str) -> Value {
+        let loaded = crate::manifest::parse_str(yaml, "test.yaml").unwrap();
+        let types = TranscodePool::builtin().unwrap();
+        let (_, _, doc) = entity_to_manifest(&loaded[0].entity, &types).unwrap();
+        doc["spec"].clone()
+    }
+
+    #[test]
+    fn exports_refs_in_short_form() {
+        let spec = exported_spec(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata: { namespace: acme-storefront, name: add-item-to-cart-slice }
+spec:
+  title: Add item to cart
+  command: add-item-to-cart
+  emittedEvents:
+    - cart.item-added
+    - acme-billing/invoice.raised@2
+    - { event: cart.item-noted, doc: Kept as a mapping because it has a doc. }
+",
+        );
+        assert_eq!(spec["command"], json!("add-item-to-cart"));
+        assert_eq!(
+            spec["emittedEvents"],
+            json!([
+                "cart.item-added",
+                "acme-billing/invoice.raised@2",
+                { "event": "cart.item-noted", "doc": "Kept as a mapping because it has a doc." },
+            ])
+        );
+    }
+
+    #[test]
+    fn keeps_long_form_when_short_form_would_parse_differently() {
+        let desc = crate::manifest::entity_descriptor()
+            .unwrap()
+            .get_field_by_name("command_slice")
+            .map(|f| match f.kind() {
+                prost_reflect::Kind::Message(md) => md,
+                _ => unreachable!(),
+            })
+            .unwrap();
+        // "cart@2" as a string would read back as slug "cart", version 2.
+        let long = json!({
+            "command": { "command": { "id": {
+                "namespace": "acme-storefront", "slug": "cart@2", "version": "1",
+            } } },
+        });
+        let mut value = long.clone();
+        compact_message(&mut value, &desc, "acme-storefront");
+        assert_eq!(value, long);
+    }
 }

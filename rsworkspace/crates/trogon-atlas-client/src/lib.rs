@@ -9,12 +9,22 @@
 //! spec IS the proto3-JSON body of the entity message, so the schema stays
 //! derived from the proto, never hand-maintained.
 pub mod apply;
+pub mod artifacts;
+pub mod attested;
+pub mod backing;
 pub mod branch;
+pub mod channel_messages;
 pub mod client;
 pub mod compat;
+pub mod data_product;
+pub mod decision_document;
+pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;
+pub mod glossary;
+pub mod human_interaction;
+pub mod impact;
 pub mod manifest;
 pub mod manifest_schema;
 pub mod openslo;
@@ -22,5 +32,15 @@ pub mod openslo_bindings;
 pub mod operation;
 pub mod outcome;
 pub mod precondition;
+pub mod protection;
+pub mod responsibility;
+mod source_codec;
+pub mod source_input;
+pub mod source_integration;
+mod source_request;
 pub mod tenant_types;
+pub mod validate;
+pub mod view;
 pub mod walk;
+
+pub mod term_domains;

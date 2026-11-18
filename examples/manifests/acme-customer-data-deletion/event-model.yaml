@@ -7,12 +7,12 @@ spec:
   doc: Request-to-completion lifecycle of a customer data deletion across every downstream vendor.
   members:
   - id:
-      namespace: acme-customer-data-deletion
-      slug: customer-privacy
+      namespace: acme
+      slug: acme
       version: '1'
     kind: ENTITY_KIND_DOMAIN
   - id:
-      namespace: acme-customer-data-deletion
+      namespace: acme
       slug: data-deletion
       version: '1'
     kind: ENTITY_KIND_SUBDOMAIN

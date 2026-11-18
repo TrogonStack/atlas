@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="CI entrypoint for the otel/registry semantic convention check"
+set -euo pipefail
+
+exec mise run otel:check

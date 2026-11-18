@@ -1,15 +1,10 @@
 [[IgnoredVulns]]
-id = "RUSTSEC-2026-0253"
-reason = "fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2024-0449"
-reason = "unsafe-libyaml is unmaintained and has no fixed release; reached through serde_yaml, the manifest YAML parser."
-
-[[IgnoredVulns]]
 id = "RUSTSEC-2026-0440"
-reason = "astral-tokio-tar is unmaintained and has no fixed release; dev-only, reached through testcontainers in the test support crate."
+reason = "testsupport's testcontainers 0.27 depends on astral-tokio-tar, which is unmaintained with no patched release; nothing outside tests reaches it."
 
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0543"
-reason = "chrono is unmaintained and has no fixed release; used for timestamps across the workspace."
+[[PackageOverrides]]
+name = "webpki-roots"
+version = "0.26.11"
+ecosystem = "crates.io"
+vulnerability.ignore = true
+reason = "Compatibility shim only reexports webpki-roots 1.x; the locked 1.0.10 certificate data is scanned separately."

@@ -1,0 +1,2211 @@
+use std::collections::{hash_map::Entry, HashMap, HashSet};
+
+use tonic::Code;
+use trogon_atlas_store::store::BranchLandOp;
+
+use super::{
+    entity_id, entity_kind, pb, store_err, validation, EventModelServiceImpl, Lens, OpMetaLike,
+    Status, StoredEntity, Visibility,
+};
+
+pub(super) struct ArchitectureProposal<'a> {
+    pub(super) overlay: HashMap<pb::EntityKey, Option<&'a pb::Entity>>,
+    pub(super) landing: Option<&'a [BranchLandOp]>,
+}
+
+struct CatalogGraphTraversal<'a> {
+    loaded: &'a mut HashSet<pb::EntityKey>,
+    world: &'a mut HashMap<pb::EntityKey, StoredEntity>,
+    budget: &'a mut crate::decision_document_resources::CatalogBudget,
+}
+
+#[derive(Clone, Copy)]
+enum ArchitectureTargetAccess<'a> {
+    Required(&'a Visibility),
+    Curation(&'a Visibility),
+    Diagnostic(&'a Lens),
+    ExactRequired(&'a Visibility),
+    ExactDiagnostic(&'a Lens),
+}
+
+#[derive(Default)]
+struct ResponsibilityEndpoints {
+    required: Vec<(pb::EntityKind, pb::Id)>,
+    claims: Vec<(pb::EntityKind, pb::Id)>,
+}
+
+fn admission_references(
+    entity: &pb::Entity,
+) -> Result<Vec<trogon_atlas_core::refs::OutboundRef>, Status> {
+    let architectural = matches!(
+        entity.kind,
+        Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+    );
+    Ok(crate::graph::checked_refs(entity)?
+        .into_iter()
+        .filter(|reference| {
+            if matches!(entity.kind, Some(pb::entity::Kind::Domain(_))) {
+                return reference.from_field.starts_with("members[");
+            }
+            if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
+                return reference.from_field == "owning_domain";
+            }
+            !reference.from_field.starts_with("message_claims.")
+                && (!architectural
+                    || reference.from_field.starts_with("relationships[")
+                    || reference.from_field.starts_with("communications[")
+                    || reference.from_field.starts_with("storage_claims[")
+                    || reference.from_field.starts_with("ui_hostings["))
+        })
+        .collect())
+}
+
+fn catalog_reference_targets(
+    resources: &[&pb::Entity],
+) -> Result<Vec<(pb::EntityKind, pb::Id)>, Status> {
+    let mut targets = Vec::new();
+    for entity in resources.iter().filter(|entity| is_catalog(entity)) {
+        targets.extend(
+            crate::graph::checked_refs(entity)?
+                .into_iter()
+                .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+        );
+    }
+    Ok(targets)
+}
+
+fn overlay_of(metas: &[OpMetaLike]) -> HashMap<pb::EntityKey, Option<&pb::Entity>> {
+    metas
+        .iter()
+        .map(|meta| {
+            (
+                pb::EntityKey::new(meta.kind, &meta.id),
+                meta.entity.as_ref().filter(|_| meta.is_put),
+            )
+        })
+        .collect()
+}
+
+fn claim_access_error(status: Status) -> Status {
+    if matches!(status.code(), Code::PermissionDenied | Code::NotFound) {
+        crate::message_claims_resources::unavailable()
+    } else {
+        status
+    }
+}
+fn charge_claim_selections(
+    owner: &pb::Entity,
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+    budget: &mut crate::decision_document_resources::CatalogBudget,
+) -> Result<(), Status> {
+    let Some(v) = trogon_atlas_core::message_claims::declarations(owner) else {
+        return Ok(());
+    };
+    for m in v
+        .claims
+        .iter()
+        .filter_map(|v| v.message.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.message.as_ref()))
+    {
+        if let Some(spec) = m
+            .specification
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .and_then(|id| world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id)))
+        {
+            budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(m.clone())),
+                },
+                &spec.entity,
+            )?;
+        }
+    }
+    for s in &v.field_selections {
+        if let Some(b) = &s.binding {
+            if let Some(spec) =
+                b.owner.as_ref().and_then(|o| o.id.as_ref()).and_then(|id| {
+                    world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id))
+                })
+            {
+                budget.selection(
+                    &pb::CatalogSubject {
+                        selection: Some(pb::catalog_subject::Selection::Connection(b.clone())),
+                    },
+                    &spec.entity,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(PartialEq)]
+enum Occurrence {
+    Link(pb::ChannelLink),
+    Claim(pb::StorageAccessClaim),
+    Hosting(pb::UiHosting),
+}
+
+fn occurrences(entity: &pb::Entity) -> Vec<(String, Option<String>, Occurrence)> {
+    let id =
+        |id: Option<&pb::ConnectionId>| id.map(|id| id.value.clone()).filter(|id| !id.is_empty());
+    let claims = |claims: &[pb::StorageAccessClaim]| {
+        claims
+            .iter()
+            .enumerate()
+            .map(|(index, claim)| {
+                (
+                    format!("storage_claims[{index}]"),
+                    id(claim.connection_id.as_ref()),
+                    Occurrence::Claim(claim.clone()),
+                )
+            })
+            .collect()
+    };
+    match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Channel(value)) => value
+            .links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                (
+                    format!("links[{index}]"),
+                    id(link.connection_id.as_ref()),
+                    Occurrence::Link(link.clone()),
+                )
+            })
+            .collect(),
+        Some(pb::entity::Kind::Component(value)) => {
+            let mut values: Vec<_> = claims(&value.storage_claims);
+            values.extend(
+                value
+                    .ui_hostings
+                    .iter()
+                    .enumerate()
+                    .map(|(index, hosting)| {
+                        (
+                            format!("ui_hostings[{index}]"),
+                            id(hosting.connection_id.as_ref()),
+                            Occurrence::Hosting(hosting.clone()),
+                        )
+                    }),
+            );
+            values
+        }
+        Some(pb::entity::Kind::ExternalSystem(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::DataProduct(value)) => claims(&value.storage_claims),
+        _ => Vec::new(),
+    }
+}
+
+fn unchanged_occurrences(entity: &pb::Entity, baselines: &[&pb::Entity]) -> Vec<String> {
+    let before: Vec<_> = baselines
+        .iter()
+        .flat_map(|baseline| occurrences(baseline))
+        .filter_map(|(_, id, value)| id.map(|id| (id, value)))
+        .collect();
+    occurrences(entity)
+        .into_iter()
+        .filter(|(_, id, value)| {
+            id.as_ref()
+                .is_some_and(|id| before.iter().any(|(b, v)| b == id && v == value))
+        })
+        .map(|(path, _, _)| path)
+        .collect()
+}
+
+fn is_unchanged_field(unchanged: &[String], field: &str) -> bool {
+    unchanged.iter().any(|path| {
+        field
+            .strip_prefix(path.as_str())
+            .is_some_and(|rest| rest.starts_with('.'))
+    })
+}
+
+fn is_catalog(entity: &pb::Entity) -> bool {
+    matches!(
+        entity.kind,
+        Some(
+            pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Document(_)
+                | pb::entity::Kind::DesignGraph(_)
+        )
+    )
+}
+
+impl EventModelServiceImpl {
+    pub(super) async fn validate_claim_resolution(
+        &self,
+        branch: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        take_theirs: bool,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        if !matches!(
+            kind,
+            pb::EntityKind::Component | pb::EntityKind::ExternalSystem | pb::EntityKind::Domain
+        ) {
+            return Ok(());
+        }
+        let delta = self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|d| d.kind == kind && &d.id == id)
+            .ok_or_else(|| Status::not_found("branch entry not found"))?;
+        let baseline = match self.store.get(kind, id, None).await {
+            Ok(row) => Some(row.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let (selected, discarded) = if take_theirs {
+            (baseline.as_ref(), delta.ours.as_ref())
+        } else {
+            (delta.ours.as_ref(), baseline.as_ref())
+        };
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        let has_hostings = matches!(&selected.kind, Some(pb::entity::Kind::Component(value)) if !value.ui_hostings.is_empty());
+        if trogon_atlas_core::message_claims::declarations(selected).is_none() && !has_hostings {
+            return Ok(());
+        }
+        let restored = trogon_atlas_core::connection_persistence::prepare_resolution(
+            delta.base.as_ref(),
+            discarded,
+            selected,
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        self.validate_architecture_selection(
+            &restored,
+            delta.ours.as_ref().unwrap_or(selected),
+            branch,
+            vis,
+        )
+        .await
+    }
+
+    pub(super) async fn validate_architecture_selection(
+        &self,
+        entity: &pb::Entity,
+        base: &pb::Entity,
+        branch: &str,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        let kind = entity_kind(entity)?;
+        let id = entity_id(entity)?.clone();
+        let ops = [BranchLandOp::Put {
+            kind,
+            ours: Box::new(entity.clone()),
+            base: Some(Box::new(base.clone())),
+            expected_baseline_etag: None,
+        }];
+        self.validate_architecture_proposal(
+            &[OpMetaLike {
+                kind,
+                id,
+                is_put: true,
+                entity: Some(entity.clone()),
+            }],
+            Some(branch),
+            vis,
+            Some(&ops),
+        )
+        .await
+    }
+
+    pub(super) async fn validate_architecture_writes(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        self.validate_architecture_proposal(metas, branch, vis, None)
+            .await
+    }
+
+    pub(super) async fn validate_architecture_landing(
+        &self,
+        metas: &[OpMetaLike],
+        ops: &[BranchLandOp],
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        self.validate_architecture_proposal(metas, None, vis, Some(ops))
+            .await
+    }
+
+    async fn validate_native_group_targets(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+        landing: Option<&[BranchLandOp]>,
+    ) -> Result<(), Status> {
+        let mut targets = Vec::new();
+        for entity in metas
+            .iter()
+            .filter(|meta| meta.is_put)
+            .filter_map(|meta| meta.entity.as_ref())
+        {
+            let refs = trogon_atlas_core::agent_metadata::group_refs(entity)
+                .map_err(|_| Status::invalid_argument("native metadata is invalid"))?;
+            targets.extend(
+                refs.into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        if targets.is_empty() {
+            return Ok(());
+        }
+        for (_, id) in &targets {
+            self.require_visible(vis, &id.namespace).await?;
+        }
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
+        let mut loaded = HashSet::new();
+        let mut world = HashMap::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            targets.clone(),
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        if targets
+            .iter()
+            .any(|(kind, id)| !world.contains_key(&pb::EntityKey::new(*kind, id)))
+        {
+            return Err(Status::invalid_argument(
+                "resource group target is absent or unavailable",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn validate_architecture_proposal(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+        landing: Option<&[BranchLandOp]>,
+    ) -> Result<(), Status> {
+        self.validate_glossary_writes(metas, branch, vis, landing)
+            .await?;
+        self.validate_native_group_targets(metas, branch, vis, landing)
+            .await?;
+        let resources: Vec<_> = metas
+            .iter()
+            .filter(|meta| meta.is_put && is_architecture_kind(meta.kind))
+            .filter_map(|meta| meta.entity.as_ref())
+            .collect();
+        if resources.is_empty() {
+            return Ok(());
+        }
+        let mut catalog_budget = crate::decision_document_resources::CatalogBudget::default();
+        let hosting_writes = resources.iter().any(|entity| {
+            matches!(&entity.kind, Some(pb::entity::Kind::Component(value)) if !value.ui_hostings.is_empty())
+        });
+        if hosting_writes
+            || resources.iter().any(|entity| {
+                is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
+            })
+        {
+            for entity in &resources {
+                catalog_budget.owner(entity)?;
+            }
+        }
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
+        let mut world = HashMap::new();
+        let mut required = Vec::new();
+        let mut anchors = Vec::new();
+        let mut curation = Vec::new();
+        for entity in &resources {
+            if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
+                continue;
+            }
+            let unchanged = self
+                .unchanged_occurrences_of(&proposal, branch, entity)
+                .await?;
+            for reference in admission_references(entity)?
+                .into_iter()
+                .filter(|reference| !is_unchanged_field(&unchanged, &reference.from_field))
+            {
+                let Some(kind) = reference.to_kind else {
+                    continue;
+                };
+                let is_anchor = match entity.kind.as_ref() {
+                    Some(pb::entity::Kind::Channel(_)) => {
+                        reference.from_field.starts_with("bindings[")
+                    }
+                    Some(pb::entity::Kind::DataStore(_)) => {
+                        reference.from_field.starts_with("attachments[")
+                    }
+                    Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+                        reference.from_field.starts_with("relationships[")
+                            || reference.from_field.starts_with("communications[")
+                    }
+                    _ => false,
+                };
+                if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
+                    self.require_visible(vis, &reference.to_id.namespace)
+                        .await?;
+                }
+                let target = (kind, reference.to_id);
+                if is_anchor {
+                    anchors.push(target.clone());
+                }
+                if matches!(
+                    entity.kind,
+                    Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+                ) {
+                    curation.push(target);
+                } else {
+                    required.push(target);
+                }
+            }
+        }
+        let mut loaded = HashSet::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Curation(vis),
+            curation,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            anchors,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Required(vis),
+            required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut term_targets = Vec::new();
+        for entity in resources
+            .iter()
+            .filter(|entity| matches!(entity.kind, Some(pb::entity::Kind::Term(_))))
+        {
+            term_targets.extend(
+                admission_references(entity)?
+                    .into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        let term_lens = self.lens(vis).await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactDiagnostic(&term_lens),
+            term_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let catalog_targets = catalog_reference_targets(&resources)?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            catalog_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let observations = observation_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            observations,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut endpoints = crate::data_product_resources::selected_endpoints(&resources, &world);
+        let responsibility = responsibility_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            responsibility.required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        endpoints.extend(responsibility.claims);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Required(vis),
+            endpoints,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let catalog_targets = catalog_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            catalog_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                catalog_budget.owner(resource)?;
+            }
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(selected) = world.get(&key).and_then(|owner| {
+                crate::message_claims_resources::selected(&subject, &owner.entity)
+            }) else {
+                continue;
+            };
+            let targets = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&selected, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+        }
+        self.validate_catalog_replacements(
+            &proposal,
+            branch,
+            vis,
+            &mut loaded,
+            &mut world,
+            &mut catalog_budget,
+        )
+        .await?;
+        let mut claim_prepared = HashMap::new();
+        for resource in &resources {
+            if trogon_atlas_core::message_claims::declarations(resource).is_none() {
+                continue;
+            }
+            let kind = entity_kind(resource)?;
+            let id = entity_id(resource)?;
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(row) => Some(row.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared =
+                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+            catalog_budget.owner(&prepared)?;
+            let changed = crate::message_claims_resources::changed(previous.as_ref(), &prepared);
+            let targets = trogon_atlas_core::outbound_refs(&changed)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            let targets = crate::message_claims_resources::native_targets(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&changed, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            claim_prepared.insert(pb::EntityKey::new(kind, id), prepared);
+        }
+        if hosting_writes {
+            let mut rows = HashSet::new();
+            for entity in resources
+                .iter()
+                .copied()
+                .chain(world.values().map(|row| &row.entity))
+            {
+                rows.insert(pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?));
+                if rows.len() > 5_000 {
+                    return Err(Status::resource_exhausted(
+                        "hosting resource budget exceeded",
+                    ));
+                }
+            }
+        }
+        let context: Vec<_> = world.into_values().collect();
+        let event_products: Vec<_> = resources
+            .iter()
+            .filter_map(|entity| match &entity.kind {
+                Some(pb::entity::Kind::DataProduct(product))
+                    if super::data_product_events::inputs(product).next().is_some() =>
+                {
+                    Some(product)
+                }
+                _ => None,
+            })
+            .collect();
+        let mut confirmations = super::data_product_events::EventConfirmation::default();
+        if !event_products.is_empty() {
+            let (rows, complete) = self
+                .data_product_emission_rows(branch, vis, &proposal)
+                .await?;
+            for product in event_products {
+                for (_, id) in super::data_product_events::inputs(product) {
+                    if confirmations.confirm(id, &rows, complete)?.is_empty() {
+                        return Err(Status::invalid_argument(
+                            "Data product Event input has no authorized local emission",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut compiled = HashSet::new();
+        for resource in resources {
+            let kind = entity_kind(resource)?;
+            let id = entity_id(resource)?;
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(stored) => Some(stored.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared =
+                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                    prepared
+                } else {
+                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+                };
+            super::validate_entity_content(&prepared)?;
+            if hosting_writes {
+                catalog_budget.owner(&prepared)?;
+            }
+            let unchanged = unchanged_occurrences(
+                &prepared,
+                &baselines(&proposal, kind, id, previous.as_ref()),
+            );
+            let issues: Vec<_> =
+                validation::architecture_resources::validate_admission_with_previous(
+                    &prepared,
+                    &context,
+                    previous.as_ref(),
+                )
+                .into_iter()
+                .filter(|issue| {
+                    !(issue.code.ends_with("_REFERENCE_UNRESOLVED")
+                        && is_unchanged_field(&unchanged, &issue.subject_field))
+                })
+                .collect();
+            if !issues.is_empty() {
+                return Err(Status::invalid_argument(super::format_scenario_issues(
+                    &issues,
+                )));
+            }
+            for selection in crate::specification_resources::library_types(&prepared) {
+                if let (Some(id), Some(message)) = (
+                    selection.library.as_ref().and_then(|v| v.id.as_ref()),
+                    selection.message.as_ref(),
+                ) {
+                    if compiled.insert((
+                        pb::EntityKey::new(pb::EntityKind::TypeLibrary, id),
+                        message.value.clone(),
+                    )) {
+                        self.type_libraries
+                            .check_contract_type(id, &message.value, &context)
+                            .await.map_err(|status| {
+                                if matches!(prepared.kind, Some(pb::entity::Kind::DataProduct(_)))
+                                    && matches!(status.code(), Code::InvalidArgument | Code::FailedPrecondition)
+                                {
+                                    Status::invalid_argument("Selected data product protobuf type is unresolved or invalid")
+                                } else { status }
+                            })?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn unchanged_occurrences_of(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        resource: &pb::Entity,
+    ) -> Result<Vec<String>, Status> {
+        if occurrences(resource).is_empty() {
+            return Ok(Vec::new());
+        }
+        let kind = entity_kind(resource)?;
+        let id = entity_id(resource)?;
+        let previous = match self.store.get(kind, id, branch).await {
+            Ok(stored) => Some(stored.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let prepared = prepare_proposal_entity(proposal, kind, id, previous.as_ref(), resource)?;
+        Ok(unchanged_occurrences(
+            &prepared,
+            &baselines(proposal, kind, id, previous.as_ref()),
+        ))
+    }
+
+    pub(super) async fn architecture_validation_context(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<StoredEntity>, Status> {
+        let resources: Vec<_> = snapshot
+            .iter()
+            .map(|stored| &stored.entity)
+            .filter(|entity| {
+                matches!(
+                    entity.kind,
+                    Some(
+                        pb::entity::Kind::SystemGroup(_)
+                            | pb::entity::Kind::Component(_)
+                            | pb::entity::Kind::Domain(_)
+                            | pb::entity::Kind::ExternalSystem(_)
+                            | pb::entity::Kind::Channel(_)
+                            | pb::entity::Kind::DataStore(_)
+                            | pb::entity::Kind::Specification(_)
+                            | pb::entity::Kind::DataProduct(_)
+                            | pb::entity::Kind::Team(_)
+                            | pb::entity::Kind::Person(_)
+                            | pb::entity::Kind::Decision(_)
+                            | pb::entity::Kind::Term(_)
+                            | pb::entity::Kind::Document(_)
+                            | pb::entity::Kind::DesignGraph(_)
+                    )
+                )
+            })
+            .collect();
+        if resources.is_empty() {
+            return Ok(Vec::new());
+        }
+        let proposal = ArchitectureProposal {
+            overlay: HashMap::new(),
+            landing: None,
+        };
+        let lens = self.lens(vis).await?;
+        let access = ArchitectureTargetAccess::Diagnostic(&lens);
+        let mut required = Vec::new();
+        for entity in resources.iter().filter(|entity| !is_catalog(entity)) {
+            required.extend(
+                admission_references(entity)?
+                    .into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        let mut loaded = HashSet::new();
+        let mut world = HashMap::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            access,
+            required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let catalog_targets = catalog_reference_targets(&resources)?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactDiagnostic(&lens),
+            catalog_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut endpoints = observation_endpoints(&resources, &world);
+        endpoints.extend(crate::data_product_resources::selected_endpoints(
+            &resources, &world,
+        ));
+        let responsibility = responsibility_endpoints(&resources, &world);
+        endpoints.extend(responsibility.required);
+        endpoints.extend(responsibility.claims);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            access,
+            endpoints,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let catalog_targets = catalog_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactDiagnostic(&lens),
+            catalog_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                claim_budget.owner(resource)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(owner) = world.get(&key) else {
+                continue;
+            };
+            claim_budget.owner(&owner.entity)?;
+            let Some(selected) = crate::message_claims_resources::selected(&subject, &owner.entity)
+            else {
+                continue;
+            };
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(&selected, &world, &mut claim_budget)?;
+        }
+        let mut budget = crate::decision_document_resources::CatalogBudget::default();
+        for entity in &resources {
+            let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+                continue;
+            };
+            let mut next = decision
+                .replaced_by
+                .as_ref()
+                .and_then(|replacement| replacement.decision.as_ref())
+                .and_then(|reference| reference.id.clone());
+            let mut visited = HashSet::new();
+            visited.insert(entity_id(entity)?.clone());
+            while let Some(id) = next.take() {
+                budget.examine(1)?;
+                if !visited.insert(id.clone()) {
+                    break;
+                }
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    vec![(pb::EntityKind::Decision, id.clone())],
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+                let Some(row) = world.get(&pb::EntityKey::new(pb::EntityKind::Decision, &id))
+                else {
+                    break;
+                };
+                budget.owner(&row.entity)?;
+                let Some(pb::entity::Kind::Decision(target)) = &row.entity.kind else {
+                    break;
+                };
+                if target.status != pb::DecisionStatus::Superseded as i32 {
+                    break;
+                }
+                next = target
+                    .replaced_by
+                    .as_ref()
+                    .and_then(|replacement| replacement.decision.as_ref())
+                    .and_then(|reference| reference.id.clone());
+            }
+        }
+        for resource in &resources {
+            if !trogon_atlas_core::message_claims::has_content(resource) {
+                continue;
+            }
+            claim_budget.owner(resource)?;
+            let references = trogon_atlas_core::outbound_refs(resource)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                access,
+                references,
+                &mut loaded,
+                &mut world,
+            )
+            .await?;
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                resource,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    access,
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(resource, &world, &mut claim_budget)?;
+        }
+        for row in world.values() {
+            claim_budget.row(&row.entity)?;
+        }
+        Ok(world.into_values().collect())
+    }
+
+    pub(super) async fn specification_type_diagnostics(
+        &self,
+        snapshot: &[StoredEntity],
+        context: &[StoredEntity],
+    ) -> Result<Vec<pb::ValidationIssue>, Status> {
+        let mut issues = Vec::new();
+        let mut checked = HashMap::new();
+        for stored in snapshot {
+            for selection in crate::specification_resources::library_types(&stored.entity) {
+                let (Some(id), Some(message)) = (
+                    selection.library.as_ref().and_then(|v| v.id.as_ref()),
+                    selection.message.as_ref(),
+                ) else {
+                    continue;
+                };
+                let key = (
+                    pb::EntityKey::new(pb::EntityKind::TypeLibrary, id),
+                    message.value.clone(),
+                );
+                let result = match checked.entry(key) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(
+                        self.type_libraries
+                            .check_contract_type(id, &message.value, context)
+                            .await,
+                    ),
+                };
+                if let Err(status) = result {
+                    if !matches!(
+                        status.code(),
+                        Code::InvalidArgument | Code::FailedPrecondition
+                    ) {
+                        return Err(status.clone());
+                    }
+                    issues.push(validation::issue_error(
+                        if matches!(stored.entity.kind, Some(pb::entity::Kind::DataProduct(_))) { "DATA_PRODUCT_REFERENCE_UNRESOLVED" } else { "SPECIFICATION_REFERENCE_UNRESOLVED" },
+                        "Selected protobuf message is absent, unreadable or does not compile in its exact library".into(),
+                        crate::conv::entity_to_ref(&stored.entity).ok(),
+                        if matches!(stored.entity.kind, Some(pb::entity::Kind::DataProduct(_))) { "outputs.contract.library_type" } else { "messages.schemas.library_type" },
+                    ));
+                }
+            }
+        }
+        Ok(issues)
+    }
+
+    pub(super) async fn architecture_reference_snapshot(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<StoredEntity>, Status> {
+        let lens = self.lens(vis).await?;
+        let namespaces: Vec<String> = match &lens {
+            super::Lens::Everything => Vec::new(),
+            super::Lens::Only(namespaces) if namespaces.is_empty() => return Ok(snapshot.to_vec()),
+            super::Lens::Only(namespaces) => {
+                namespaces.iter().map(|id| id.as_str().to_owned()).collect()
+            }
+        };
+        let resources = self
+            .store
+            .list(
+                super::ListFilter {
+                    kinds: &[
+                        pb::EntityKind::SystemGroup,
+                        pb::EntityKind::Component,
+                        pb::EntityKind::Domain,
+                        pb::EntityKind::ExternalSystem,
+                        pb::EntityKind::Channel,
+                        pb::EntityKind::DataStore,
+                        pb::EntityKind::Specification,
+                        pb::EntityKind::DataProduct,
+                        pb::EntityKind::Team,
+                        pb::EntityKind::Person,
+                        pb::EntityKind::Decision,
+                        pb::EntityKind::Document,
+                        pb::EntityKind::Term,
+                        pb::EntityKind::DesignGraph,
+                    ],
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(super::MAX_PROJECTION_ENTITIES + 1),
+                branch,
+            )
+            .await
+            .map_err(store_err)?;
+        if resources.len() > super::MAX_PROJECTION_ENTITIES {
+            return Err(Status::resource_exhausted(
+                "architecture reference scan exceeds its entity budget",
+            ));
+        }
+        let mut complete: HashMap<_, _> = snapshot
+            .iter()
+            .filter_map(|stored| {
+                Some((
+                    pb::EntityKey::new(
+                        entity_kind(&stored.entity).ok()?,
+                        entity_id(&stored.entity).ok()?,
+                    ),
+                    stored.clone(),
+                ))
+            })
+            .collect();
+        for stored in resources {
+            let id = entity_id(&stored.entity)?;
+            if lens.admits(&id.namespace) {
+                complete.insert(pb::EntityKey::new(entity_kind(&stored.entity)?, id), stored);
+            }
+        }
+        let mut complete: Vec<_> = complete.into_iter().collect();
+        complete.sort_by(|(a, _), (b, _)| {
+            (a.kind as i32, &a.namespace, &a.slug, a.version).cmp(&(
+                b.kind as i32,
+                &b.namespace,
+                &b.slug,
+                b.version,
+            ))
+        });
+        Ok(complete.into_iter().map(|(_, stored)| stored).collect())
+    }
+
+    async fn load_architecture_targets(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        access: ArchitectureTargetAccess<'_>,
+        targets: Vec<(pb::EntityKind, pb::Id)>,
+        loaded: &mut HashSet<pb::EntityKey>,
+        world: &mut HashMap<pb::EntityKey, StoredEntity>,
+    ) -> Result<(), Status> {
+        let mut pending = targets;
+        while let Some((kind, id)) = pending.pop() {
+            match access {
+                ArchitectureTargetAccess::ExactRequired(vis) => {
+                    self.require_visible(vis, &id.namespace).await?;
+                }
+                ArchitectureTargetAccess::Required(vis)
+                | ArchitectureTargetAccess::Curation(vis) => {
+                    match self.require_visible(vis, &id.namespace).await {
+                        Ok(()) => {}
+                        Err(status) if status.code() == Code::NotFound => continue,
+                        Err(status) => return Err(status),
+                    }
+                }
+                ArchitectureTargetAccess::Diagnostic(lens)
+                | ArchitectureTargetAccess::ExactDiagnostic(lens) => {
+                    if !lens.admits(&id.namespace)
+                        || id.version == 0
+                        || super::require_id(Some(&id), "target").is_err()
+                    {
+                        continue;
+                    }
+                }
+            }
+            let key = pb::EntityKey::new(kind, &id);
+            if !loaded.insert(key.clone()) {
+                continue;
+            }
+            if loaded.len() > 5_000 {
+                return Err(Status::resource_exhausted(
+                    "architecture row budget exceeded",
+                ));
+            }
+            let stored = match self.store.get(kind, &id, branch).await {
+                Ok(stored) => Some(stored),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let next = match proposal.overlay.get(&key) {
+                Some(Some(entity)) => Some(StoredEntity {
+                    entity: prepare_proposal_entity(
+                        proposal,
+                        kind,
+                        &id,
+                        stored.as_ref().map(|stored| &stored.entity),
+                        entity,
+                    )?,
+                    etag: String::new(),
+                }),
+                Some(None) => None,
+                None => stored,
+            };
+            if let Some(stored) = next {
+                if let Some(pb::entity::Kind::TypeLibrary(library)) = &stored.entity.kind {
+                    if matches!(
+                        access,
+                        ArchitectureTargetAccess::ExactRequired(_)
+                            | ArchitectureTargetAccess::ExactDiagnostic(_)
+                    ) {
+                        world.insert(key, stored);
+                        continue;
+                    }
+                    for dependency in &library.dependencies {
+                        if let Some(target) = &dependency.id {
+                            if target.namespace != id.namespace {
+                                continue;
+                            }
+                            pending.push((pb::EntityKind::TypeLibrary, target.clone()));
+                        }
+                    }
+                }
+                world.insert(key, stored);
+            }
+        }
+        Ok(())
+    }
+
+    async fn validate_catalog_replacements(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        vis: &Visibility,
+        loaded: &mut HashSet<pb::EntityKey>,
+        world: &mut HashMap<pb::EntityKey, StoredEntity>,
+        budget: &mut crate::decision_document_resources::CatalogBudget,
+    ) -> Result<(), Status> {
+        let resources: Vec<_> = proposal
+            .overlay
+            .values()
+            .filter_map(|entity| *entity)
+            .filter(|entity| is_catalog(entity))
+            .collect();
+        if resources.is_empty() {
+            return Ok(());
+        }
+        for row in world.values() {
+            budget.owner(&row.entity)?;
+        }
+        for entity in &resources {
+            for subject in crate::decision_document_resources::catalog_subjects(entity) {
+                if let Ok(reference) = trogon_atlas_core::decision_document::subject_owner(subject)
+                {
+                    if let (Ok(kind), Some(id)) = (
+                        pb::EntityKind::try_from(reference.kind),
+                        reference.id.as_ref(),
+                    ) {
+                        if let Some(owner) = world.get(&pb::EntityKey::new(kind, id)) {
+                            budget.selection(subject, &owner.entity)?;
+                        }
+                    }
+                }
+            }
+            let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+                continue;
+            };
+            self.validate_decision_amendments(
+                proposal,
+                branch,
+                vis,
+                entity,
+                CatalogGraphTraversal {
+                    loaded: &mut *loaded,
+                    world: &mut *world,
+                    budget: &mut *budget,
+                },
+            )
+            .await?;
+            let Some(replacement) = &decision.replaced_by else {
+                continue;
+            };
+            let mut next = replacement
+                .decision
+                .as_ref()
+                .and_then(|reference| reference.id.clone());
+            let mut visited = HashSet::new();
+            visited.insert(pb::EntityKey::new(
+                pb::EntityKind::Decision,
+                entity_id(entity)?,
+            ));
+            loop {
+                budget.examine(1)?;
+                let id = next.take().ok_or_else(|| {
+                    Status::invalid_argument("Replacement chain is absent, stale or unavailable")
+                })?;
+                let key = pb::EntityKey::new(pb::EntityKind::Decision, &id);
+                if !visited.insert(key.clone()) {
+                    return Err(Status::invalid_argument("Decision replacement cycle"));
+                }
+                self.load_architecture_targets(
+                    proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactRequired(vis),
+                    vec![(pb::EntityKind::Decision, id)],
+                    loaded,
+                    world,
+                )
+                .await?;
+                let Some(row) = world.get(&key) else {
+                    return Err(Status::invalid_argument(
+                        "Replacement chain is absent, stale or unavailable",
+                    ));
+                };
+                budget.owner(&row.entity)?;
+                let Some(pb::entity::Kind::Decision(target)) = &row.entity.kind else {
+                    return Err(Status::invalid_argument(
+                        "Replacement target must be a Decision",
+                    ));
+                };
+                if visited.len() == 2
+                    && target.amends.iter().any(|amendment| {
+                        amendment.decision.as_ref().and_then(|r| r.id.as_ref())
+                            == decision.id.as_ref()
+                    })
+                {
+                    return Err(Status::invalid_argument(
+                        "Decision cannot amend and replace the same target",
+                    ));
+                }
+                match pb::DecisionStatus::try_from(target.status) {
+                    Ok(pb::DecisionStatus::Accepted) => break,
+                    Ok(pb::DecisionStatus::Superseded) => {
+                        next = target
+                            .replaced_by
+                            .as_ref()
+                            .and_then(|value| value.decision.as_ref())
+                            .and_then(|reference| reference.id.clone());
+                    }
+                    _ => {
+                        return Err(Status::invalid_argument(
+                            "Replacement chain must terminate at an ACCEPTED decision",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn validate_decision_amendments(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        vis: &Visibility,
+        entity: &pb::Entity,
+        traversal: CatalogGraphTraversal<'_>,
+    ) -> Result<(), Status> {
+        let CatalogGraphTraversal {
+            loaded,
+            world,
+            budget,
+        } = traversal;
+        let root = entity_id(entity)?.clone();
+        let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+            return Ok(());
+        };
+        let lens = self.lens(vis).await?;
+        let mut active = HashSet::new();
+        let mut done = HashSet::new();
+        active.insert(pb::EntityKey::new(pb::EntityKind::Decision, &root));
+        let mut stack = vec![(root.clone(), decision.amends.clone(), 0usize)];
+        while let Some((owner, edges, index)) = stack.last_mut() {
+            if *index == edges.len() {
+                let key = pb::EntityKey::new(pb::EntityKind::Decision, owner);
+                active.remove(&key);
+                done.insert(key);
+                stack.pop();
+                continue;
+            }
+            let target = edges[*index]
+                .decision
+                .as_ref()
+                .and_then(|r| r.id.clone())
+                .ok_or_else(|| Status::invalid_argument("amended decision required"))?;
+            *index += 1;
+            budget.examine(1)?;
+            super::require_id(Some(&target), "amends.decision")?;
+            if target.version == 0 {
+                return Err(Status::invalid_argument(
+                    "amended decision requires an exact positive version",
+                ));
+            }
+            let strict = owner == &root
+                || proposal
+                    .overlay
+                    .get(&pb::EntityKey::new(pb::EntityKind::Decision, owner))
+                    .is_some_and(Option::is_some);
+            if !strict && !lens.admits(&target.namespace) {
+                continue;
+            }
+            let key = pb::EntityKey::new(pb::EntityKind::Decision, &target);
+            if active.contains(&key) {
+                return Err(Status::invalid_argument("Decision amendment cycle"));
+            }
+            self.load_architecture_targets(
+                proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                vec![(pb::EntityKind::Decision, target.clone())],
+                loaded,
+                world,
+            )
+            .await?;
+            let Some(row) = world.get(&key) else {
+                if strict {
+                    return Err(Status::invalid_argument(
+                        "Amended decision is absent, stale or unavailable",
+                    ));
+                }
+                continue;
+            };
+            budget.owner(&row.entity)?;
+            let Some(pb::entity::Kind::Decision(value)) = &row.entity.kind else {
+                return Err(Status::invalid_argument(
+                    "amended target must be a Decision",
+                ));
+            };
+            if value
+                .replaced_by
+                .as_ref()
+                .and_then(|r| r.decision.as_ref())
+                .and_then(|r| r.id.as_ref())
+                == Some(owner)
+            {
+                return Err(Status::invalid_argument(
+                    "Decision cannot amend and replace the same target",
+                ));
+            }
+            if done.contains(&key) {
+                continue;
+            }
+            active.insert(key);
+            stack.push((target, value.amends.clone(), 0));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn data_product_emission_rows(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+        proposal: &ArchitectureProposal<'_>,
+    ) -> Result<(Vec<StoredEntity>, bool), Status> {
+        let lens = self.lens(vis).await?;
+        let namespaces: Vec<_> = match &lens {
+            Lens::Everything => Vec::new(),
+            Lens::Only(namespaces) if namespaces.is_empty() => return Ok((Vec::new(), true)),
+            Lens::Only(namespaces) => namespaces.iter().map(|id| id.as_str().to_owned()).collect(),
+        };
+        let limit = 5_001 + proposal.overlay.len();
+        let rows = self
+            .store
+            .list(
+                super::ListFilter {
+                    kinds: &[pb::EntityKind::CommandSlice],
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(limit),
+                branch,
+            )
+            .await
+            .map_err(store_err)?;
+        let complete = rows.len() < limit;
+        let mut overlay = Vec::new();
+        for (key, entity) in &proposal.overlay {
+            if key.kind != pb::EntityKind::CommandSlice {
+                continue;
+            }
+            let next = if let Some(entity) = entity {
+                let previous = match self.store.get(key.kind, &key.id(), branch).await {
+                    Ok(stored) => Some(stored.entity),
+                    Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                    Err(error) => return Err(store_err(error)),
+                };
+                Some(StoredEntity {
+                    entity: prepare_proposal_entity(
+                        proposal,
+                        key.kind,
+                        &key.id(),
+                        previous.as_ref(),
+                        entity,
+                    )?,
+                    etag: String::new(),
+                })
+            } else {
+                None
+            };
+            overlay.push((key.clone(), next));
+        }
+        let rows = super::data_product_events::merge_rows(rows, overlay)
+            .into_iter()
+            .filter(|stored| {
+                super::entity_id(&stored.entity).is_ok_and(|id| lens.admits(&id.namespace))
+            })
+            .collect();
+        Ok((rows, complete))
+    }
+
+    pub(super) async fn data_product_event_diagnostics(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<pb::ValidationIssue>, Status> {
+        if !snapshot.iter().any(|stored| matches!(&stored.entity.kind, Some(pb::entity::Kind::DataProduct(product)) if super::data_product_events::inputs(product).next().is_some())) { return Ok(Vec::new()) }
+        let proposal = ArchitectureProposal {
+            overlay: HashMap::new(),
+            landing: None,
+        };
+        let (rows, complete) = self
+            .data_product_emission_rows(branch, vis, &proposal)
+            .await?;
+        let mut budget = super::data_product_events::EventConfirmation::default();
+        let mut issues = Vec::new();
+        for stored in snapshot {
+            let Some(pb::entity::Kind::DataProduct(product)) = &stored.entity.kind else {
+                continue;
+            };
+            for (index, id) in super::data_product_events::inputs(product) {
+                let code = match budget.confirm(id, &rows, complete) {
+                    Ok(witnesses) if !witnesses.is_empty() => continue,
+                    Ok(_) => "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                    Err(status) if status.code() == Code::ResourceExhausted => {
+                        "DATA_PRODUCT_CONFIRMATION_INCOMPLETE"
+                    }
+                    Err(status) => return Err(status),
+                };
+                issues.push(validation::issue_error(
+                    code,
+                    "Authorized local Event confirmation is absent or incomplete".into(),
+                    crate::conv::entity_to_ref(&stored.entity).ok(),
+                    &format!("inputs[{index}].data"),
+                ));
+            }
+        }
+        Ok(issues)
+    }
+
+    pub(super) async fn validate_architecture_write(
+        &self,
+        entity: &pb::Entity,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        let kind = entity_kind(entity)?;
+        if !is_architecture_kind(kind) {
+            let meta = OpMetaLike {
+                kind: entity_kind(entity)?,
+                id: entity_id(entity)?.clone(),
+                is_put: true,
+                entity: Some(entity.clone()),
+            };
+            return self
+                .validate_native_group_targets(&[meta], branch, vis, None)
+                .await;
+        }
+        self.validate_architecture_writes(
+            &[OpMetaLike {
+                kind,
+                id: entity_id(entity)?.clone(),
+                is_put: true,
+                entity: Some(entity.clone()),
+            }],
+            branch,
+            vis,
+        )
+        .await
+    }
+}
+
+fn landing_put<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a BranchLandOp> {
+    proposal.landing.and_then(|ops| {
+        ops.iter().find(|op| match op {
+            BranchLandOp::Put {
+                kind: op_kind,
+                ours,
+                ..
+            } => *op_kind == kind && entity_id(ours).ok() == Some(id),
+            BranchLandOp::Delete { .. } => false,
+        })
+    })
+}
+
+fn landing_base<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a pb::Entity> {
+    match landing_put(proposal, kind, id)? {
+        BranchLandOp::Put { base, .. } => base.as_deref(),
+        BranchLandOp::Delete { .. } => None,
+    }
+}
+
+fn baselines<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    previous: Option<&'a pb::Entity>,
+) -> Vec<&'a pb::Entity> {
+    previous
+        .into_iter()
+        .chain(landing_base(proposal, kind, id))
+        .collect()
+}
+
+pub(super) fn is_architecture_kind(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::SystemGroup
+            | pb::EntityKind::Domain
+            | pb::EntityKind::Term
+            | pb::EntityKind::DesignGraph
+            | pb::EntityKind::Component
+            | pb::EntityKind::ExternalSystem
+            | pb::EntityKind::Channel
+            | pb::EntityKind::DataStore
+            | pb::EntityKind::Specification
+            | pb::EntityKind::DataProduct
+            | pb::EntityKind::Team
+            | pb::EntityKind::Person
+            | pb::EntityKind::Decision
+            | pb::EntityKind::Document
+    )
+}
+
+fn prepare_proposal_entity(
+    proposal: &ArchitectureProposal<'_>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    previous: Option<&pb::Entity>,
+    entity: &pb::Entity,
+) -> Result<pb::Entity, Status> {
+    match landing_put(proposal, kind, id) {
+        Some(_) => trogon_atlas_core::connection_persistence::prepare_landing(
+            landing_base(proposal, kind, id),
+            previous,
+            entity,
+        ),
+        None => trogon_atlas_core::connection_persistence::prepare_entity(previous, entity),
+    }
+    .map_err(|error| Status::invalid_argument(error.to_string()))
+}
+
+fn observation_endpoints(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKind, pb::Id)> {
+    let mut endpoints = Vec::new();
+    for resource in resources {
+        let Some(pb::entity::Kind::Channel(channel)) = resource.kind.as_ref() else {
+            continue;
+        };
+        for binding in &channel.bindings {
+            let Some(observation) = &binding.observation else {
+                continue;
+            };
+            let Some(owner) = &observation.owner else {
+                continue;
+            };
+            let Some(id) = &owner.id else {
+                continue;
+            };
+            if owner.kind != pb::EntityKind::AutomationSlice as i32 {
+                continue;
+            }
+            let Some(stored) = world.get(&pb::EntityKey::new(pb::EntityKind::AutomationSlice, id))
+            else {
+                continue;
+            };
+            let Some(pb::entity::Kind::AutomationSlice(slice)) = stored.entity.kind.as_ref() else {
+                continue;
+            };
+            if let Some(id) = slice
+                .source_read_models
+                .iter()
+                .find(|edge| edge.connection_id.is_some() && edge.connection_id == observation.id)
+                .and_then(|edge| edge.read_model.as_ref())
+                .and_then(|reference| reference.id.as_ref())
+            {
+                endpoints.push((pb::EntityKind::ReadModel, id.clone()));
+            }
+            if let Some(id) = slice
+                .processor
+                .as_ref()
+                .and_then(|edge| edge.processor.as_ref())
+                .and_then(|reference| reference.id.as_ref())
+            {
+                endpoints.push((pb::EntityKind::Processor, id.clone()));
+            }
+        }
+    }
+    endpoints
+}
+
+fn selected_claim_subjects(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKey, pb::ResponsibilitySubject)> {
+    let mut seen = HashSet::new();
+    resources
+        .iter()
+        .flat_map(|entity| {
+            crate::responsibility_resources::assignments(entity)
+                .iter()
+                .filter_map(|assignment| assignment.subject.clone())
+                .chain(
+                    crate::decision_document_resources::subjects(entity)
+                        .iter()
+                        .filter_map(|association| association.subject.as_ref())
+                        .map(crate::decision_document_resources::responsibility_subject),
+                )
+        })
+        .filter_map(|subject| {
+            let Some(pb::responsibility_subject::Selection::Connection(reference)) =
+                &subject.selection
+            else {
+                return None;
+            };
+            let owner = reference.owner.as_ref()?;
+            let key = pb::EntityKey::new(
+                pb::EntityKind::try_from(owner.kind).ok()?,
+                owner.id.as_ref()?,
+            );
+            let row = world.get(&key)?;
+            if trogon_atlas_core::message_claims::declarations(&row.entity).is_none()
+                || !seen.insert((
+                    key.clone(),
+                    reference.owner_uid.clone(),
+                    reference.id.clone(),
+                ))
+            {
+                return None;
+            }
+            Some((key, subject))
+        })
+        .collect()
+}
+
+fn responsibility_endpoints(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> ResponsibilityEndpoints {
+    let mut targets = ResponsibilityEndpoints::default();
+    for subject in resources
+        .iter()
+        .flat_map(|entity| crate::responsibility_resources::assignments(entity))
+        .filter_map(|assignment| assignment.subject.as_ref())
+    {
+        let Some(stored) = crate::responsibility_resources::subject_owner(subject)
+            .and_then(|reference| {
+                Some(pb::EntityKey::new(
+                    pb::EntityKind::try_from(reference.kind).ok()?,
+                    reference.id.as_ref()?,
+                ))
+            })
+            .and_then(|key| world.get(&key))
+        else {
+            continue;
+        };
+        let endpoints =
+            crate::responsibility_resources::selected_endpoints(subject, &stored.entity);
+        if crate::message_claims_resources::selected(subject, &stored.entity).is_some() {
+            targets.claims.extend(endpoints);
+        } else {
+            targets.required.extend(endpoints);
+        }
+    }
+    targets
+}
+
+fn catalog_endpoints(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKind, pb::Id)> {
+    resources
+        .iter()
+        .flat_map(|entity| crate::decision_document_resources::catalog_subjects(entity))
+        .flat_map(|subject| {
+            let converted = crate::decision_document_resources::responsibility_subject(subject);
+            crate::responsibility_resources::subject_owner(&converted)
+                .and_then(|reference| {
+                    Some(pb::EntityKey::new(
+                        pb::EntityKind::try_from(reference.kind).ok()?,
+                        reference.id.as_ref()?,
+                    ))
+                })
+                .and_then(|key| world.get(&key))
+                .map(|stored| {
+                    crate::responsibility_resources::selected_endpoints(&converted, &stored.entity)
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod specification_validation_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use tonic::{Code, Request};
+    use tonic_types::StatusExt;
+    use trogon_atlas_proto::event_model_service_server::EventModelService;
+    use trogon_atlas_store::WriteContext;
+    use trogon_atlas_types::CompileRunner;
+
+    use super::*;
+    use crate::{metrics::ServerMetrics, type_libraries::TypeLibraryGate};
+
+    fn library_id(namespace: &str, version: u64) -> pb::Id {
+        pb::Id {
+            namespace: namespace.into(),
+            slug: "orders".into(),
+            version,
+        }
+    }
+
+    async fn fixture() -> EventModelServiceImpl {
+        let nats = trogon_atlas_testsupport::shared().await;
+        EventModelServiceImpl::try_new(Arc::new(nats.store().await), ServerMetrics::default())
+            .unwrap()
+    }
+
+    async fn library(
+        service: &EventModelServiceImpl,
+        id: pb::Id,
+        source: &str,
+        dependencies: Vec<pb::TypeLibraryRef>,
+    ) {
+        service
+            .store
+            .put(
+                pb::EntityKind::TypeLibrary,
+                &pb::Entity {
+                    kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                        id: Some(id),
+                        title: "Orders".into(),
+                        files: vec![pb::ProtoSourceFile {
+                            path: "orders.proto".into(),
+                            content: source.into(),
+                        }],
+                        dependencies,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                false,
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+
+    const VALID: &str = "syntax = \"proto3\"; package orders.v1; message Order {}";
+
+    async fn selection(service: &EventModelServiceImpl, slug: &str, id: pb::Id, message: &str) {
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    kind: Some(pb::entity::Kind::Specification(pb::Specification {
+                        id: Some(pb::Id {
+                            namespace: "contracts".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        messages: vec![pb::ContractMessage {
+                            name: Some(pb::MemberName {
+                                value: "Payload".into(),
+                            }),
+                            schemas: vec![pb::SchemaBinding {
+                                role: pb::schema_binding::Role::Payload as i32,
+                                r#type: Some(pb::schema_binding::Type::LibraryType(
+                                    pb::TypeLibraryTypeRef {
+                                        library: Some(pb::TypeLibraryRef { id: Some(id) }),
+                                        message: Some(pb::QualifiedProtoName {
+                                            value: message.into(),
+                                        }),
+                                    },
+                                )),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+    }
+
+    async fn validate(
+        service: &EventModelServiceImpl,
+    ) -> Result<tonic::Response<pb::ValidateProjectResponse>, Status> {
+        service
+            .validate_project(Request::new(pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(
+                    "contracts".into(),
+                )),
+            }))
+            .await
+    }
+
+    fn issues(report: &pb::ValidateProjectResponse) -> Vec<&pb::ValidationIssue> {
+        report
+            .reports
+            .iter()
+            .flat_map(|r| &r.issues)
+            .filter(|i| {
+                i.code == "SPECIFICATION_REFERENCE_UNRESOLVED"
+                    && i.subject_field == "messages.schemas.library_type"
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn validate_project_propagates_compile_timeout() {
+        let mut service = fixture().await;
+        library(&service, library_id("types", 1), VALID, vec![]).await;
+        selection(&service, "typed", library_id("types", 1), "orders.v1.Order").await;
+        service.type_libraries =
+            TypeLibraryGate::with_compile_runner(CompileRunner::new(0, Duration::from_millis(1)));
+        let error = validate(&service)
+            .await
+            .expect_err("compiler timeout must fail the RPC, not diagnose the model");
+        assert_eq!(error.code(), Code::DeadlineExceeded);
+        assert_eq!(
+            error.get_error_details().error_info().unwrap().reason,
+            crate::conv::reason::UNAVAILABLE
+        );
+        for private in ["types", "orders", "Order", "orders.proto"] {
+            assert!(!format!("{error:?}").contains(private));
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_project_memoizes_exact_selections_only_within_each_call() {
+        let service = fixture().await;
+        for (namespace, version) in [("types", 1), ("types", 2), ("other-types", 1)] {
+            library(&service, library_id(namespace, version), VALID, vec![]).await;
+        }
+        for (slug, namespace, version) in [
+            ("first", "types", 1),
+            ("duplicate", "types", 1),
+            ("version", "types", 2),
+            ("namespace", "other-types", 1),
+        ] {
+            selection(
+                &service,
+                slug,
+                library_id(namespace, version),
+                "orders.v1.Order",
+            )
+            .await;
+        }
+        let before = service.type_libraries.contract_compile_calls();
+        let report = validate(&service).await.unwrap().into_inner();
+        assert!(issues(&report).is_empty(), "{report:?}");
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 3);
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Replacement {}",
+            vec![],
+        )
+        .await;
+        let report = validate(&service).await.unwrap().into_inner();
+        let failures = issues(&report);
+        assert_eq!(failures.len(), 2, "{report:?}");
+        for slug in ["first", "duplicate"] {
+            assert!(
+                failures.iter().any(|i| i
+                    .subject
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .is_some_and(|id| id.slug == slug)),
+                "{report:?}"
+            );
+        }
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 6);
+    }
+
+    #[tokio::test]
+    async fn validate_project_distinguishes_message_selections_and_redacts_model_errors() {
+        let service = fixture().await;
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Order {} message Replacement {}",
+            vec![],
+        )
+        .await;
+        selection(
+            &service,
+            "valid",
+            library_id("types", 1),
+            "orders.v1.Replacement",
+        )
+        .await;
+        selection(
+            &service,
+            "removed",
+            library_id("types", 1),
+            "orders.v1.Order",
+        )
+        .await;
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Replacement {}",
+            vec![],
+        )
+        .await;
+        let report = validate(&service).await.unwrap().into_inner();
+        assert_eq!(issues(&report).len(), 1, "{report:?}");
+        assert_eq!(
+            issues(&report)[0]
+                .subject
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .slug,
+            "removed"
+        );
+        for (source, dependencies) in [
+            ("syntax = \"proto3\"; private compiler source", vec![]),
+            (
+                VALID,
+                vec![pb::TypeLibraryRef {
+                    id: Some(pb::Id {
+                        namespace: "types".into(),
+                        slug: "secret-dependency".into(),
+                        version: 1,
+                    }),
+                }],
+            ),
+        ] {
+            library(&service, library_id("types", 1), source, dependencies).await;
+            let report = validate(&service).await.unwrap().into_inner();
+            assert_eq!(issues(&report).len(), 2, "{report:?}");
+            for issue in issues(&report) {
+                for private in [
+                    "orders.proto",
+                    "secret-dependency",
+                    "private compiler source",
+                    "orders.v1",
+                ] {
+                    assert!(!format!("{issue:?}").contains(private), "{issue:?}");
+                }
+            }
+        }
+    }
+    #[tokio::test]
+    async fn data_product_compilation_memo_and_operational_errors_are_request_scoped() {
+        let mut service = fixture().await;
+        library(&service, library_id("types", 1), VALID, vec![]).await;
+        let selection = pb::TypeLibraryTypeRef {
+            library: Some(pb::TypeLibraryRef {
+                id: Some(library_id("types", 1)),
+            }),
+            message: Some(pb::QualifiedProtoName {
+                value: "orders.v1.Order".into(),
+            }),
+        };
+        let product = pb::Entity {
+            kind: Some(pb::entity::Kind::DataProduct(pb::DataProduct {
+                id: Some(pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "product".into(),
+                    version: 1,
+                }),
+                title: "Product".into(),
+                outputs: ["First", "Second"]
+                    .into_iter()
+                    .map(|name| pb::DataOutputPort {
+                        name: Some(pb::PortName { value: name.into() }),
+                        contract: Some(pb::OutputContract {
+                            r#type: Some(pb::output_contract::Type::LibraryType(selection.clone())),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let specification = pb::Entity {
+            kind: Some(pb::entity::Kind::Specification(pb::Specification {
+                id: Some(pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "specification".into(),
+                    version: 1,
+                }),
+                title: "Specification".into(),
+                messages: vec![pb::ContractMessage {
+                    name: Some(pb::MemberName {
+                        value: "Payload".into(),
+                    }),
+                    schemas: vec![pb::SchemaBinding {
+                        role: pb::schema_binding::Role::Payload as i32,
+                        r#type: Some(pb::schema_binding::Type::LibraryType(selection)),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let before = service.type_libraries.contract_compile_calls();
+        service
+            .batch_mutate(Request::new(pb::BatchMutateRequest {
+                ops: [product, specification]
+                    .into_iter()
+                    .map(|entity| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(entity),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 1);
+        let request = || {
+            Request::new(pb::InspectDataProductRequest {
+                product: Some(pb::DataProductRef {
+                    id: Some(pb::Id {
+                        namespace: "contracts".into(),
+                        slug: "product".into(),
+                        version: 1,
+                    }),
+                }),
+            })
+        };
+        service.inspect_data_product(request()).await.unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 2);
+        service.inspect_data_product(request()).await.unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 3);
+        service.type_libraries =
+            TypeLibraryGate::with_compile_runner(CompileRunner::new(0, Duration::from_millis(1)));
+        let error = service.inspect_data_product(request()).await.unwrap_err();
+        assert_eq!(error.code(), Code::DeadlineExceeded);
+        for private in ["orders.proto", "orders.v1", "Order"] {
+            assert!(!format!("{error:?}").contains(private));
+        }
+        service.type_libraries = TypeLibraryGate::default();
+        library(
+            &service,
+            library_id("types", 1),
+            "private compiler source",
+            vec![],
+        )
+        .await;
+        let mut edited = service
+            .store
+            .get(
+                pb::EntityKind::DataProduct,
+                &pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "product".into(),
+                    version: 1,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .entity;
+        let Some(pb::entity::Kind::DataProduct(product)) = &mut edited.kind else {
+            panic!("DataProduct")
+        };
+        product.title = "Changed".into();
+        let error = service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(edited),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        for private in ["orders.proto", "private compiler source", "orders.v1"] {
+            assert!(!format!("{error:?}").contains(private));
+        }
+    }
+}

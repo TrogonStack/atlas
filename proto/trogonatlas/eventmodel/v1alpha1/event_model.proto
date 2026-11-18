@@ -78,6 +78,13 @@ import "trogonatlas/eventmodel/v1alpha1/fields.proto";   // for Schema in the En
 import "trogonatlas/type/v1alpha1/system_meta.proto";    // for SystemMeta
 import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
+import "trogonatlas/eventmodel/v1alpha1/architecture.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+import "trogonatlas/eventmodel/v1alpha1/responsibility.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/eventmodel/v1alpha1/design_topology.proto";
+import "trogonatlas/eventmodel/v1alpha1/system_group.proto";
 
 // =============================================================================
 // Event Modeling schema.
@@ -445,20 +452,16 @@ import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
 //     the same namespace. The inline `repeated FieldSpec fields`
 //     these entities once carried is reserved.
 //
-// 34. ONE RM CAN HAVE MANY CONSUMERS WHEN DECLARED. The
-//     at-most-one-automation-per-RM heuristic is right by default:
-//     different automations usually want differently-shaped data,
-//     and per-consumer RMs keep the coupling visible. But when
-//     several consumers genuinely share the same data -- the
-//     captured-payment row read by the ledger recorder, the refund
-//     processor, and the treasury UI -- splitting into clones makes
-//     the board lie. Declare the multi-consumer case with
-//     SharedConsumersAnnotation (Any in the RM's metadata,
-//     non-empty doc) and the validator downgrades
-//     READ_MODEL_MULTIPLE_AUTOMATIONS from Error to Info. Without
-//     the annotation the heuristic still fires; with it, the board
-//     renders one RM sticky with labeled outgoing edges per
-//     consumer.
+// 34. READ MODELS SPLIT BY SHAPE, NOT BY CONSUMER. Consumers that
+//     read the same data -- the captured-payment row read by the
+//     ledger recorder, the refund processor, and the treasury UI --
+//     share one RM; splitting into clones makes the board lie, and
+//     READ_MODEL_DUPLICATE_SHAPE warns when two RMs in a namespace
+//     have the same key, fields and source events. Split only when a
+//     consumer needs a different shape. Name the consumers with
+//     SharedConsumersAnnotation (Any in the RM's metadata, non-empty
+//     doc); the board renders one RM sticky with labeled outgoing
+//     edges per consumer.
 //
 // 35. SCREENS ARE COMPOSITION, NOT MOMENTS.
 //     Some user surfaces -- a checkout page, a changeset review view -- are
@@ -598,6 +601,16 @@ message Entity {
     AlertPolicy alert_policy = 27;
     AlertNotificationTarget alert_notification_target = 28;
     TypeLibrary type_library = 30;
+    Channel channel = 31;
+    DataStore data_store = 32;
+    Specification specification = 33;
+    DataProduct data_product = 34;
+    Team team = 35;
+    Person person = 36;
+    Decision decision = 37;
+    Document document = 38;
+    DesignGraph design_graph = 39;
+    SystemGroup system_group = 40;
   }
   trogonatlas.type.v1alpha1.SystemMeta system = 29;
 }

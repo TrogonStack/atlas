@@ -5,16 +5,28 @@ vi.mock('@/lib/api', () => ({
   api: {
     overview: vi.fn(),
     search: vi.fn(),
+    namespaceRegistry: vi.fn(),
+    validateProject: vi.fn(),
   },
 }));
 
-vi.mock('@/components/canvas/DomainChartBoard', () => ({
-  DomainChartBoard: ({ onSelect }: { onSelect: (key: string) => void }) => (
-    <button type="button" data-testid="domain-chart-board" onClick={() => onSelect('domain:market/trading@1')}>
-      chart
-    </button>
-  ),
-}));
+vi.mock('@/components/canvas/DomainChartBoard', async () => {
+  const { useIssues } = await import('@/components/IssuesProvider');
+  return {
+    DomainChartBoard: ({ onSelect }: { onSelect: (key: string) => void }) => (
+      <button
+        type="button"
+        data-testid="domain-chart-board"
+        data-findings={useIssues()
+          .all.map((i) => i.code)
+          .join(',')}
+        onClick={() => onSelect('domain:market/trading@1')}
+      >
+        chart
+      </button>
+    ),
+  };
+});
 vi.mock('@/components/canvas/ContextMapBoard', () => ({
   ContextMapBoard: () => <div data-testid="context-map-board" />,
 }));
@@ -71,6 +83,8 @@ describe('OverviewPage', () => {
     window.history.replaceState(null, '', '/');
     (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_OVERVIEW);
     (api.search as ReturnType<typeof vi.fn>).mockResolvedValue({ results: [] });
+    (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [] });
+    (api.validateProject as ReturnType<typeof vi.fn>).mockResolvedValue({ reports: [] });
   });
 
   afterEach(() => {
@@ -78,6 +92,14 @@ describe('OverviewPage', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     cleanup();
+  });
+
+  it('links to glossary review while preserving the branch context', async () => {
+    window.history.replaceState(null, '', '/?branch=review');
+    render(<OverviewPage />);
+    expect((await screen.findByRole('link', { name: 'Glossary' })).getAttribute('href')).toBe(
+      '/glossary?branch=review',
+    );
   });
 
   describe('search debounce', () => {
@@ -172,6 +194,29 @@ describe('OverviewPage', () => {
 
       expect(screen.queryByText(/Search Results/)).toBeNull();
     });
+
+    it('drops a failed search error as soon as the query moves on', async () => {
+      (api.search as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('search backend down'));
+      render(<OverviewPage />);
+      const input = screen.getByPlaceholderText('Search models and entities');
+
+      fireEvent.change(input, { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByRole('alert').textContent).toBe('search backend down');
+
+      fireEvent.change(input, { target: { value: 'o' } });
+      fireEvent.change(input, { target: { value: 'orders' } });
+      expect(screen.getByText(/Search Results/)).toBeDefined();
+      expect(screen.queryByRole('alert')).toBeNull();
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(api.search).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   describe('domain filter behavior', () => {
@@ -233,9 +278,142 @@ describe('OverviewPage', () => {
     });
   });
 
-  // BUG: Overview copy says "click a domain or context to read its charter",
-  // but DomainChartBoard is wired with onSelect={() => {}}. Selecting a
-  // domain therefore never surfaces charter details.
+  describe('one view at a time', () => {
+    async function renderOverview() {
+      render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    it('lands on the model list, with no board above it', async () => {
+      await renderOverview();
+      expect(screen.getByRole('tab', { name: 'Models', selected: true })).toBeDefined();
+      expect(screen.getByText(/Event Models/)).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+      expect(screen.queryByTestId('context-map-board')).toBeNull();
+    });
+
+    it('is where the namespace registry is reached from', async () => {
+      await renderOverview();
+      const link = screen.getByRole('link', { name: 'Namespaces' });
+      expect((link as HTMLAnchorElement).getAttribute('href')).toBe('/namespaces');
+    });
+
+    it('swaps the list for the chosen board instead of stacking them', async () => {
+      await renderOverview();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      expect(screen.getByTestId('domain-chart-board')).toBeDefined();
+      expect(screen.queryByText(/Event Models/)).toBeNull();
+      expect(window.location.search).toBe('?mode=chart');
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
+      expect(screen.getByTestId('context-map-board')).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+      expect(screen.queryByText(/Event Models/)).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+      expect(screen.getByText(/Event Models/)).toBeDefined();
+      expect(screen.queryByTestId('context-map-board')).toBeNull();
+      expect(window.location.search).toBe('');
+    });
+
+    it('says the store has no event models only once the overview has loaded', async () => {
+      let resolveOverview: (value: { entities: unknown[] }) => void = () => {};
+      (api.overview as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise((resolve) => {
+          resolveOverview = resolve;
+        }),
+      );
+      render(<OverviewPage />);
+      expect(screen.queryByText('No event models yet')).toBeNull();
+
+      await act(async () => {
+        resolveOverview(EMPTY_OVERVIEW);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(screen.getByText('No event models yet')).toBeDefined();
+    });
+
+    it('names the query when a search finds nothing', async () => {
+      vi.useFakeTimers();
+      render(<OverviewPage />);
+      fireEvent.change(screen.getByPlaceholderText('Search models and entities'), { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText('No matches for “order”')).toBeDefined();
+      expect(screen.getByText(/get back to the models view/)).toBeDefined();
+    });
+
+    it('shows search results in place of a board, and picking a view clears the search', async () => {
+      vi.useFakeTimers();
+      render(<OverviewPage />);
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      const input = screen.getByPlaceholderText('Search models and entities');
+
+      fireEvent.change(input, { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText(/Search Results/)).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
+      expect(screen.queryByText(/Search Results/)).toBeNull();
+      expect((input as HTMLInputElement).value).toBe('');
+      expect(screen.getByTestId('context-map-board')).toBeDefined();
+    });
+  });
+
+  describe('models grouped by owner', () => {
+    const em = (namespace: string, slug: string) => ({
+      eventModel: { id: { namespace, slug, version: 1 }, title: slug },
+    });
+    const reg = (name: string, parent: string) => ({ id: name, name, parent, entityCount: 1, registered: true });
+
+    beforeEach(() => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue({
+        entities: [em('acme-orders', 'checkout'), em('acme-probe', 'probe'), em('other-ns', 'misc')],
+      });
+    });
+
+    it('puts namespaces that share a registry parent under one owner section', async () => {
+      (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        namespaces: [reg('acme-orders', 'acme'), reg('acme-probe', 'acme'), reg('other-ns', '')],
+      });
+      const { container } = render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      const sections = [...container.querySelectorAll('details')];
+      expect(sections.map((d) => d.querySelector('summary')?.firstChild?.textContent)).toEqual(['acme', 'default']);
+      expect([...sections[0].querySelectorAll('h3')].map((h) => h.firstChild?.textContent)).toEqual([
+        'acme-orders',
+        'acme-probe',
+      ]);
+      expect(sections[1].textContent).toContain('other-ns');
+    });
+
+    it('still lists every namespace when the registry cannot be read', async () => {
+      (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('forbidden'));
+      const { container } = render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(container.querySelectorAll('details')).toHaveLength(0);
+      expect([...container.querySelectorAll('h3')].map((h) => h.firstChild?.textContent)).toEqual([
+        'acme-orders',
+        'acme-probe',
+        'other-ns',
+      ]);
+    });
+  });
+
   it('surfaces a domain charter when a domain chart node is selected', async () => {
     (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue({
       entities: [
@@ -255,7 +433,78 @@ describe('OverviewPage', () => {
     await act(async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
+    fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
     fireEvent.click(screen.getByTestId('domain-chart-board'));
     expect(screen.getByText('The trading charter.')).toBeDefined();
+  });
+
+  describe('domain chart findings', () => {
+    const PROJECT_OVERVIEW = {
+      entities: [
+        {
+          domain: {
+            id: { namespace: 'market', slug: 'trading', version: 1 },
+            title: 'Trading',
+            project: { id: { namespace: 'acme', slug: 'acme', version: 1 } },
+          },
+        },
+        { domain: { id: { namespace: 'market', slug: 'risk', version: 1 }, title: 'Risk' } },
+      ],
+    };
+    const STRATEGIC_REPORT = {
+      reports: [
+        {
+          issues: [
+            {
+              severity: 'SEVERITY_WARNING',
+              code: 'DOMAIN_IN_CONTEXT_NAMESPACE',
+              message: 'misplaced',
+              subject: { kind: 'ENTITY_KIND_DOMAIN', id: { namespace: 'market', slug: 'trading', version: '1' } },
+            },
+          ],
+        },
+      ],
+    };
+
+    async function openChart() {
+      render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    it('validates each project once, each domain without a project by itself and by namespace, on the current branch', async () => {
+      window.history.replaceState(null, '', '/?branch=feature-x');
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      await openChart();
+
+      const calls = (api.validateProject as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.map(([scope]) => scope)).toEqual([
+        { projectNamespace: 'acme', projectSlug: 'acme', projectVersion: '1' },
+        { domainNamespace: 'market', domainSlug: 'risk', domainVersion: '1' },
+        { namespace: 'market' },
+      ]);
+      for (const [, opts] of calls) expect(opts).toEqual(expect.objectContaining({ branch: 'feature-x' }));
+    });
+
+    it('hands the server findings to the chart', async () => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      (api.validateProject as ReturnType<typeof vi.fn>).mockResolvedValue(STRATEGIC_REPORT);
+      await openChart();
+      expect(screen.getByTestId('domain-chart-board').getAttribute('data-findings')).toBe(
+        'DOMAIN_IN_CONTEXT_NAMESPACE',
+      );
+    });
+
+    it('renders the chart without findings when validation fails', async () => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      (api.validateProject as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('unavailable'));
+      await openChart();
+      expect(screen.getByTestId('domain-chart-board').getAttribute('data-findings')).toBe('');
+    });
   });
 });

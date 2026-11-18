@@ -169,3 +169,14 @@ fn apply_missing_manifest_errors_without_connecting() {
         "must not attempt gRPC connect before local path validation; got: {stderr}"
     );
 }
+
+#[test]
+fn validate_malformed_model_address_errors_without_connecting() {
+    let out = trogon_atlas(&["validate", "no-slash"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{stderr}");
+    assert!(
+        !stderr.contains("connecting to"),
+        "must not attempt gRPC connect before parsing the address; got: {stderr}"
+    );
+}

@@ -1,13 +1,22 @@
+#[path = "architecture_resources.rs"]
+pub mod architecture_resources;
+#[path = "finding_evidence.rs"]
+pub mod finding_evidence;
+
 use std::{
+    cell::OnceCell,
     collections::{BTreeSet, HashMap, HashSet},
     fmt,
 };
 
+use finding_evidence::{Evidence, Occurrence, Role};
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    refs::{entity_id, entity_kind, outbound_refs},
+    refs::{entity_id, entity_kind, try_outbound_refs},
     StoredEntity,
 };
+
+use crate::{invariants::key_of, ownership::Lens};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct IssuerId {
@@ -64,8 +73,7 @@ const DRAFT_LIFECYCLE_STATUSES: &[&str] = &["draft", "proposed"];
 // matches what `validate_model` / `validate_scenarios` push into
 // `ValidationIssue.code`; `default_severity` is the canonical severity
 // at the rule's primary emission site (rules whose severity is
-// conditional (e.g. READ_MODEL_SHARED_CONSUMERS downgrades to Info
-// when SharedConsumersAnnotation is present), record the base case.
+// conditional, record the base case.
 //
 // A unit test below diffs the catalog against the literal codes
 // referenced in this file so the two cannot drift.
@@ -106,7 +114,7 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
         k(Command, "ENTITY_KIND_COMMAND", "command", "Command", "Commands",
           "An imperative intent issued by a persona or processor. Wrapped by a CommandSlice that lists the events it emits."),
         k(ReadModel, "ENTITY_KIND_READ_MODEL", "readModel", "Read Model", "Read Models",
-          "A projection of one or more events shaped for a single consumer (UI, automation, search). Decision #34: one read model per consumer."),
+          "A projection of one or more events shaped for how it is read (UI, automation, search). Consumers that read the same data share one read model; add another only for a different shape. Declare a SharedConsumersAnnotation when several automations observe one read model."),
         k(Processor, "ENTITY_KIND_PROCESSOR", "processor", "Processor", "Processors",
           "An automated actor. Reads a read model, issues exactly one command. Each branching outcome is its own processor."),
         k(Ui, "ENTITY_KIND_UI", "ui", "UI", "UIs",
@@ -134,13 +142,13 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
         k(Tracker, "ENTITY_KIND_TRACKER", "tracker", "Tracker", "Trackers",
           "An open question, decision, or follow-up attached to a subject. Doesn't render on the board."),
         k(BoundedContext, "ENTITY_KIND_BOUNDED_CONTEXT", "boundedContext", "Bounded Context", "Bounded Contexts",
-          "A context boundary: owns its events/commands/RMs. Decision #27: slug == namespace."),
+          "A context boundary: owns its events/commands/RMs. Its slug must equal its namespace, so each namespace has exactly one bounded context."),
         k(Domain, "ENTITY_KIND_DOMAIN", "domain", "Domain", "Domains",
           "The container word for the business / problem space. Usually exactly one per project."),
         k(Subdomain, "ENTITY_KIND_SUBDOMAIN", "subdomain", "Subdomain", "Subdomains",
           "One problem the business must be good at. Classified CORE / SUPPORTING / GENERIC."),
         k(Schema, "ENTITY_KIND_SCHEMA", "schema", "Schema", "Schemas",
-          "A named field shape that field-bearing entities (events/commands/RMs) reference. Decision #33."),
+          "A named field shape that field-bearing entities (events/commands/RMs) reference. Two entities that hold the same schema are the same type, because shape is declared, not inferred."),
         k(Project, "ENTITY_KIND_PROJECT", "project", "Project", "Projects",
           "The codebase / repository / customer the model was mapped from. The outermost grouping in a multi-project store."),
         k(Screen, "ENTITY_KIND_SCREEN", "screen", "Screen", "Screens",
@@ -157,6 +165,26 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Conditions that page, ticket, or inform, and the notification targets they route to. Retuning a condition never rewrites a design slice."),
         k(AlertNotificationTarget, "ENTITY_KIND_ALERT_NOTIFICATION_TARGET", "alertNotificationTarget", "Alert Notification Target", "Alert Notification Targets",
           "Where an alert routes (on-call rotation, channel, webhook). Rotating the target never rewrites the policy that points at it."),
+        k(pb::EntityKind::Channel, "ENTITY_KIND_CHANNEL", "channel", "Channel", "Channels",
+          "Declared transport for exact AutomationSlice observations."),
+        k(pb::EntityKind::DataStore, "ENTITY_KIND_DATA_STORE", "dataStore", "Data Store", "Data Stores",
+          "Declared storage attached to exact ReadModels."),
+        k(pb::EntityKind::Specification, "ENTITY_KIND_SPECIFICATION", "specification", "Specification", "Specifications",
+          "Retained interface and schema declarations with exact message, operation, provider and usage selections."),
+        k(pb::EntityKind::DataProduct, "ENTITY_KIND_DATA_PRODUCT", "dataProduct", "Data Product", "Data Products",
+          "A discoverable offering of exact data through explicit input and output ports."),
+        k(pb::EntityKind::Team, "ENTITY_KIND_TEAM", "team", "Team", "Teams",
+          "A retained team profile with explicit membership and catalog responsibility."),
+        k(pb::EntityKind::Person, "ENTITY_KIND_PERSON", "person", "Person", "People",
+          "A retained directory profile with explicit catalog responsibility."),
+        k(pb::EntityKind::Decision, "ENTITY_KIND_DECISION", "decision", "Decision", "Decisions",
+          "A catalog choice and its rationale against exact model subjects."),
+        k(pb::EntityKind::Document, "ENTITY_KIND_DOCUMENT", "document", "Document", "Documents",
+          "Retained authored text or an unverified external link with exact model associations."),
+        k(pb::EntityKind::DesignGraph, "ENTITY_KIND_DESIGN_GRAPH", "designGraph", "Design Graph", "Design Graphs",
+          "A native flow or diagram of steps and labeled transitions over exact catalog targets."),
+        k(pb::EntityKind::SystemGroup, "ENTITY_KIND_SYSTEM_GROUP", "systemGroup", "System Group", "System Groups",
+          "An abstract curation of exact Components, External Systems, Data Stores, Schemas, Design Graphs and other groups, with optional group relationships and human or software actors. Membership grants no ownership, deployment or runtime meaning."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -207,8 +235,54 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         subject_kind: subject_kind as i32,
         subject_field: subject_field.into(),
         category: category.into(),
+        evidence_roles: Vec::new(),
     };
-    vec![
+    let mut rules = vec![
+        r("CATALOG_REFERENCE_UNRESOLVED", Error, "Catalog declaration does not resolve",
+          "Decision and Document declarations require valid native values and exact readable subject, relationship, ancestry and local selections. Repair the visible declaration using current returned identities and content pins.",
+          Unspecified, "", "architecture"),
+        r("RESPONSIBILITY_VALUE_INVALID", Error, "Invalid responsibility declaration",
+          "Profiles and assignments must satisfy the native responsibility contract.",
+          pb::EntityKind::Team, "", "architecture"),
+        r("RESPONSIBILITY_REFERENCE_UNRESOLVED", Error, "Responsibility selection does not resolve",
+          "An exact responsibility or membership selection is absent, stale or inaccessible.",
+          pb::EntityKind::Team, "", "architecture"),
+        r("DATA_PRODUCT_VALUE_INVALID", Error, "Invalid data product declaration",
+          "Port values and local identities must satisfy the native data product contract.",
+          pb::EntityKind::DataProduct, "", "architecture"),
+        r("DATA_PRODUCT_REFERENCE_UNRESOLVED", Error, "Data product selection does not resolve",
+          "A selected data, type or access occurrence is absent, stale or inaccessible.",
+          pb::EntityKind::DataProduct, "", "architecture"),
+        r("DATA_PRODUCT_CONFIRMATION_INCOMPLETE", Error, "Event confirmation is incomplete",
+          "The bounded authorized emission search could not finish.",
+          pb::EntityKind::DataProduct, "inputs.data", "architecture"),
+        r("SPECIFICATION_VALUE_INVALID", Error, "Invalid Specification declaration",
+          "Contract values and local selections must satisfy the native Specification contract.",
+          pb::EntityKind::Specification, "", "architecture"),
+        r("SPECIFICATION_REFERENCE_UNRESOLVED", Error, "Specification selection does not resolve",
+          "Contract declarations select exact readable targets, owner incarnations and retained schema pins.",
+          pb::EntityKind::Specification, "", "architecture"),
+        r("ARCHITECTURE_VALUE_INVALID", Error, "Invalid architecture declaration",
+          "Transport and storage declarations must satisfy their native typed field contracts.",
+          Unspecified, "", "architecture"),
+        r("ARCHITECTURE_REFERENCE_UNRESOLVED", Error, "Architecture target does not resolve",
+          "Architecture resources require exact readable targets in the current graph.",
+          Unspecified, "", "architecture"),
+        r("SYSTEM_GROUP_MEMBERSHIP_CYCLE", Info, "System group membership cycle",
+          "Membership cycles are allowed curation; each cycle is reported once with its exact connection path.",
+          pb::EntityKind::SystemGroup, "members", "architecture"),
+        r("DOMAIN_MEMBERSHIP_CYCLE", Info, "Domain membership cycle",
+          "Membership cycles are allowed curation; each cycle is reported once with its exact connection path.",
+          pb::EntityKind::Domain, "members", "architecture"),
+        r("SYSTEM_GROUP_MEMBERSHIP_REPEAT", Info, "Repeated system group member",
+          "Equal members remain distinct authored connections; repeats are reported by exact target.",
+          pb::EntityKind::SystemGroup, "members", "architecture"),
+        r("DOMAIN_MEMBERSHIP_REPEAT", Info, "Repeated domain member",
+          "Equal members remain distinct authored connections; repeats are reported by exact target.",
+          pb::EntityKind::Domain, "members", "architecture"),
+        r("CHANNEL_OBSERVATION_UNRESOLVED", Error, "Channel observation does not resolve",
+          "A binding selects an exact AutomationSlice source ReadModel occurrence and its paired Processor.",
+          pb::EntityKind::Channel, "bindings.observation", "architecture"),
         // ----- model invariants (validate_model) ---------------------------------
         r("MISSING_ID", Error, "Member missing id",
           "A member EntityRef has no id; every member of an EventModel must point at a concrete entity.",
@@ -219,6 +293,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("MEMBER_NOT_FOUND", Error, "Member not found in store",
           "A member's (kind, id) does not resolve in the store; either the entity was deleted or the model is pointing at nothing.",
           Unspecified, "", "model"),
+        r("OPEN_QUESTION_DUE_INVALID", Warning, "Open question due date is not a calendar date",
+          "An OpenQuestionAnnotation carries a due date that is not a Gregorian YYYY-MM-DD date. The validator never compares the date to the clock, so it only checks the format.",
+          Unspecified, "metadata", "model"),
         r("OPEN_QUESTION_PRESENT", Info, "Entity carries an open question",
           "An entity or scenario carries an OpenQuestionAnnotation: an unanswered design question pinned to it. Informational; humans answer by editing the annotation or removing it once resolved.",
           Unspecified, "metadata", "model"),
@@ -228,18 +305,24 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("PROCESSOR_MULTIPLE_COMMANDS", Error, "Processor issues more than one command",
           "A processor issues exactly one command. Branching outcomes (approve vs reject) are different scenarios: model each as its own automation slice with its own processor.",
           Processor, "emitted_command", "model"),
-        r("READ_MODEL_MULTIPLE_AUTOMATIONS", Error, "Read model consumed by multiple automations",
-          "A read model is observed by more than one automation slice; different consumers need different data, so each automation should observe its own consumer-shaped view. Opt in with SharedConsumersAnnotation when the fan-out is intentional.",
+        r("READ_MODEL_MULTIPLE_AUTOMATIONS", Info, "Read model consumed by multiple automations",
+          "A read model is observed by more than one automation slice. Consumers that read the same data share one read model; split it only when a consumer needs different fields, key or source events. Declare a SharedConsumersAnnotation to name the consumers.",
           ReadModel, "source_read_models", "model"),
         r("READ_MODEL_SHARED_CONSUMERS", Info, "Read model shared across consumers (declared)",
           "A read model serves multiple automation slices and a SharedConsumersAnnotation declares the arrangement is intentional. Informational; surfaces because the multi-consumer pattern is load-bearing.",
           ReadModel, "source_read_models", "model"),
         r("READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY", Error, "SharedConsumersAnnotation has no doc",
-          "A read model carries SharedConsumersAnnotation but its doc is empty; name the consumers and why they share the same data.",
+          "A read model carries SharedConsumersAnnotation but its doc is empty or only whitespace; name the consumers and why they share the same data.",
           ReadModel, "metadata", "model"),
+        r("READ_MODEL_DUPLICATE_SHAPE", Warning, "Read models with the same shape",
+          "Two or more read models in one namespace have the same key, fields and source events. They are one view drawn several times: merge them into one read model that every consumer observes.",
+          ReadModel, "schema", "model"),
         r("EVENT_MULTIPLE_EMITTERS", Error, "Event emitted by more than one command",
           "An event is emitted by more than one distinct command; the board cannot say which decision caused the fact. There is NO annotation escape: when a design fans in, fix it structurally (origin split merged by a read model, or a projection + detector automation firing one dedicated completion command); when an AS-IS mapping fans in, the error is the finding: it reports the mapped system's own causal ambiguity, and the fix belongs in that system's code, not in the model.",
           Event, "", "model"),
+        r("ENTITY_UNBACKED", Info, "Entity has no recorded backing",
+          "Reported only by GetBackingReport when the caller opts in. The entity has no accepted Decision, Document or complete code reference naming it exactly, and the view was complete enough to rule out hidden evidence. Presence is all it checks: a backed entity is not thereby correct.",
+          Unspecified, "", "backing"),
         r("CODE_REF_INCOMPLETE", Error, "CodeRefAnnotation missing repo or path",
           "A CodeRefAnnotation must carry a logical `repo` name and a repo-relative `path`; without both the reference cannot be resolved, verified for drift, or queried. Fill both (symbol recommended, line numbers never) or remove the annotation.",
           Unspecified, "metadata", "model"),
@@ -274,16 +357,16 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "When an AutomationSlice's processor fires a command, every field on that command must be sourceable from one of the source_read_models the processor observes (the RM is the data carrier), or carry a `DerivedFieldAnnotation` marking it system-generated. A field that lives nowhere upstream is information-incomplete: the model says the automation produces this command but never says where the value comes from.",
           AutomationSlice, "emitted_command", "model"),
         r("READ_MODEL_FIELD_UNSOURCED", Error, "Read model field has no source event",
-          "A ReadModel's `fields` list every value the model claims to project. Every field name must be supplied by at least one of the RM's `source_events` (the event has a FieldSpec with that name) OR by the swimlane state of one of those source events' lanes (`Swimlane.state`). Otherwise the RM is lying: the projection cannot populate the field, and any AutomationSlice that consumes the RM is reading a value that doesn't exist. Add the field to a source event, switch source events, declare the field on the source event's lane via swimlane state, or drop it from the RM.",
+          "A ReadModel's `fields` list every value the model claims to project. Every field name must be supplied by at least one of the RM's `source_events` (the event has a FieldSpec with that name) OR by the swimlane state of one of those source events' lanes (`Swimlane.state`). A ReadModel with an `external_source` system is exempt: the external payload supplies its fields. Otherwise the RM is lying: the projection cannot populate the field, and any AutomationSlice that consumes the RM is reading a value that doesn't exist. Add the field to a source event, switch source events, declare the field on the source event's lane via swimlane state, or drop it from the RM.",
           ReadModel, "fields", "model"),
         r("COMMAND_FIELD_NEVER_RECORDED", Warning, "Command field never appears in an emitted event",
           "Every field a command carries is data the runtime accepts. If that field does not appear on any of the slice's emitted_events AND does not appear in the command's swimlane.state, the model is silent about what happened to the value: the command took it in, the events do not record it, and the aggregate does not claim it as state. Either add the field to one of the emitted events, declare it on the lane's swimlane.state, or drop it from the command.",
           CommandSlice, "command", "model"),
         r("SLICE_STALE_REF", Warning, "Slice ref pins an older version than the latest loaded",
-          "A slice points at a specific (namespace, slug, version) of a command, ui, persona, processor, event, or read model, but a newer version of that entity exists in the loaded model. Mid-flight migration signal (Decision #24): the slice is still wired to the previous incarnation. Bump the ref to the latest version, or attach a PinnedRefAnnotation with a non-empty doc to the slice to justify staying pinned.",
+          "A slice points at a specific (namespace, slug, version) of a command, ui, persona, processor, event, or read model, but a newer version of that entity exists in the loaded model. Mid-flight migration signal: the slice is still wired to the previous incarnation. Bump the ref to the latest version, or attach a PinnedRefAnnotation with a doc that is not blank to the slice to justify staying pinned.",
           Unspecified, "", "model"),
         r("UI_USED_AS_INPUT_AND_OUTPUT", Warning, "UI used as both trigger and render target",
-          "A UI appears as both the trigger for a CommandSlice AND the render target for a UiSlice. One surface in both roles is usually a modeling mistake: split the form from the display, or attach a MixedSurfaceAnnotation explaining why.",
+          "A UI appears as both the trigger for a CommandSlice AND the render target for a UiSlice. One surface in both roles is usually a modeling mistake: split the form from the display, or attach a MixedSurfaceAnnotation whose doc explains why; a blank doc suppresses nothing.",
           Ui, "", "model"),
         r("TRANSITION_FOREIGN_EVENT", Error, "Swimlane transition references a foreign event",
           "A swimlane's lifecycle transitions reference an event that is not assigned to this lane. A lifecycle only contains its own stream's events.",
@@ -306,6 +389,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("DANGLING_REF", Error, "Model carries a dangling reference",
           "An entity reached transitively from this model references something that does not exist in the store.",
           Unspecified, "", "model"),
+        r("REF_OUTSIDE_VISIBLE_SCOPE", Info, "Reference target lies outside the caller's visibility",
+          "A reference or member points into a namespace this caller cannot read, so whether the target exists was not checked. Validate with a caller that can read that namespace to resolve it.",
+          Unspecified, "", "model"),
         r("CROSS_MODEL_BOUNDARY_VIOLATION", Error, "Member belongs to another model",
           "A member of this event model is owned by another event model and no seam is declared between them. Members must respect model ownership.",
           Unspecified, "", "model"),
@@ -325,7 +411,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "An entity is loaded with the model but is referenced by no slice or storyboard and is not marked as deliberately standalone.",
           Unspecified, "", "model"),
         r("ORPHAN_DOC_EMPTY", Error, "Orphan-flagged entity has no doc",
-          "An entity carries an orphan-acknowledgement marker but no explanation. Document why this entity exists outside the slice graph.",
+          "An entity carries an orphan-acknowledgement marker but no explanation, or only whitespace. Document why this entity exists outside the slice graph.",
           Unspecified, "", "model"),
         r("ORPHAN_FLAG_OBSOLETE", Info, "Orphan flag no longer applies",
           "An entity is marked as an orphan but is now referenced by a slice or storyboard; the flag can be removed.",
@@ -358,12 +444,15 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("PROJECTION_NOT_ADJACENT", Error, "Projection separated from its emitter by an action slice",
           "A read model slice projects an event, but one or more command/automation slices run between the emitter and the projection. Project each event into its read models before the next command or automation acts.",
           ReadModelSlice, "source_events", "storyboard"),
+        r("PROJECTION_MERGES_BRANCHES", Warning, "Read model slice merges divergent branches",
+          "A read model slice projects two or more events that are alternative successors in one lane transition (for example review.approved and review.rejected). Divergent branches are separate slices: split into one projection slice per branch, or use one event with an outcome field, which drops the fork from the lane transitions.",
+          ReadModelSlice, "source_events", "storyboard"),
         r("RM_SLICE_EVENT_NOT_DECLARED", Error, "Read model slice consumes event not declared on the read model",
           "A ReadModelSlice cites an event in source_events that the ReadModel itself does not declare it consumes.",
           ReadModelSlice, "source_events", "storyboard"),
         // ----- strategic (Domain / Subdomain / BoundedContext) -------------------
         r("CONTEXT_SLUG_MISMATCH", Error, "Bounded context slug differs from namespace",
-          "Decision #27: a BoundedContext's slug must equal its namespace; this guarantees context ids are globally unique by namespace alone.",
+          "A BoundedContext's slug must equal its namespace; this guarantees context ids are globally unique by namespace alone.",
           BoundedContext, "id", "strategic"),
         r("DOMAIN_SLUG_MISMATCH", Error, "Domain slug differs from namespace",
           "A Domain's slug must equal its namespace: the namespace IS the domain identity.",
@@ -371,14 +460,20 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("DOMAIN_HAS_NO_CORE", Info, "Domain has no CORE subdomain",
           "A domain without any CORE subdomain is unusual; CORE is what differentiates the system. Audit whether something here should be classified CORE.",
           Domain, "", "strategic"),
+        r("DOMAIN_IN_CONTEXT_NAMESPACE", Warning, "Domain declared in a bounded context namespace",
+          "The domain is the business, not one context's property. Give it its own problem-space namespace and let contexts realize its subdomains across namespaces.",
+          Domain, "id.namespace", "strategic"),
         r("REALIZES_MISSING_REF", Error, "Bounded context `realizes` entry missing id",
           "Every BoundedContext.realizes entry must point at a Subdomain.",
           BoundedContext, "realizes", "strategic"),
         r("REALIZES_DANGLING", Error, "Bounded context realizes a Subdomain that does not exist",
           "The subdomain referenced by BoundedContext.realizes is not in the store.",
           BoundedContext, "realizes", "strategic"),
+        r("REALIZES_MIXED_CLASSIFICATIONS", Warning, "Bounded context realizes subdomains of different classifications",
+          "One boundary carries two investment levels, so one of them is funded at the wrong level. Split the context along the classification line.",
+          BoundedContext, "realizes", "strategic"),
         r("REALIZES_MULTIPLE", Info, "Bounded context realizes multiple subdomains",
-          "A BoundedContext realizing more than one subdomain is allowed but unusual; surfaced for awareness.",
+          "A BoundedContext realizing several subdomains of one classification is allowed but unusual; surfaced for awareness.",
           BoundedContext, "realizes", "strategic"),
         r("SUBDOMAIN_MISSING_DOMAIN", Warning, "Subdomain has no parent domain",
           "Every Subdomain should declare which Domain it belongs to.",
@@ -414,7 +509,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "A relationship is declared but no subscription read model between the two contexts backs it. Declare the seam (an RM in the downstream context whose source_events live in the upstream).",
           BoundedContext, "relationships", "strategic"),
         r("SEAM_WITHOUT_RELATIONSHIP", Warning, "Structural seam present without relationship intent",
-          "A downstream context subscribes to an upstream event but no ContextRelationship records the strategic intent. Declare one (Decision #30).",
+          "A downstream context subscribes to an upstream event but no ContextRelationship records the strategic intent. Declare one on the downstream context so the relationship intent and the seam data agree.",
           BoundedContext, "seams", "strategic"),
         // ----- project (multi-project hygiene) -----------------------------------
         r("PROJECT_SLUG_MISMATCH", Error, "Project slug differs from namespace",
@@ -475,9 +570,12 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCHEMA_TYPE_URL_EMPTY", Error, "Schema Any has no type_url",
           "An Any-wrapped Schema must carry its type_url so consumers can deserialize it.",
           Unspecified, "schema", "schema"),
+        r("UNKNOWN_ANNOTATION_TYPE", Warning, "Annotation type is not known",
+          "A metadata annotation's type_url names no built-in annotation and no message the namespace's live type libraries declare, so no reader can decode it and any rule keyed on it never sees it. Usually a misspelled name or a missing type library. Reported when the entity is written; the write still succeeds.",
+          Unspecified, "metadata", "schema"),
         // ----- personal data (PersonalDataAnnotation) -----------------------------
         r("PII_DOC_MISSING", Error, "PersonalDataAnnotation has no doc, or is malformed",
-          "A PersonalDataAnnotation's `doc` is empty, or the Any payload cannot be decoded as a PersonalDataAnnotation at all. Either way the annotation says nothing: explain what personal data this is and whose.",
+          "A PersonalDataAnnotation's `doc` is empty or only whitespace, or the Any payload cannot be decoded as a PersonalDataAnnotation at all. Either way the annotation says nothing: explain what personal data this is and whose.",
           Unspecified, "schema.fields", "schema"),
         r("PII_EVENT_ERASURE_UNSPECIFIED", Warning, "Personal-data event field has no erasure strategy",
           "A PersonalDataAnnotation on an Event field leaves `erasure` at ERASURE_UNSPECIFIED. Events are immutable, so a personal-data field needs a declared way to make the value unrecoverable when the person asks to be forgotten. Commands are not persisted to an event store, so this rule is Event-only.",
@@ -523,6 +621,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCENARIO_MISSING_REF", Error, "Scenario step missing entity reference",
           "Each Given/When/Then step must point at a concrete entity (event / command / read model).",
           Unspecified, "", "scenarios"),
+        r("SLICE_NO_SCENARIOS", Info, "Slice has no given/when/then scenario",
+          "A command, read model or automation slice the model includes declares no scenarios, so nothing specifies its behavior. Informational: filter validate_project findings on this code to list the slices still to specify.",
+          Unspecified, "scenarios", "scenarios"),
         r("SCENARIO_DANGLING_REF", Error, "Scenario step references missing entity",
           "A Given/When/Then step points at an entity that is not in the store.",
           Unspecified, "", "scenarios"),
@@ -536,7 +637,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "A ReadModelScenario's Then step must reference the same read model the scenario is attached to.",
           ReadModel, "then", "scenarios"),
         r("SCENARIO_MISSING_THEN", Error, "Scenario has no Then clause",
-          "Every scenario must declare its outcome (events for command scenarios, projected state for read-model scenarios).",
+          "Every scenario must declare its outcome: emitted events or a rejection for command scenarios, projected state for read-model scenarios, and the command issued or noCommand for automation scenarios.",
           Unspecified, "then", "scenarios"),
         r("SCENARIO_REJECT_NO_REASON", Error, "Rejected scenario has no reason",
           "A scenario whose outcome is `reject` must record the rejection reason.",
@@ -544,7 +645,32 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCENARIO_TRANSITION_VIOLATION", Warning, "Scenario Then events break the swimlane lifecycle",
           "The events a scenario's Then claims will result do not match the swimlane's declared lifecycle transitions from the Given state.",
           Unspecified, "then", "scenarios"),
-    ]
+    ];
+    for rule in &mut rules {
+        rule.evidence_roles = evidence_roles(&rule.code)
+            .iter()
+            .map(|role| *role as i32)
+            .collect();
+    }
+    rules
+}
+
+/// Evidence roles each rule's findings carry. A rule absent here explains
+/// its causes only in the finding message.
+fn evidence_roles(code: &str) -> &'static [Role] {
+    match code {
+        "COMMAND_MULTIPLE_ISSUERS" => &[Role::Issuer],
+        "EVENT_MULTIPLE_EMITTERS" => &[Role::Emitter],
+        "SLICE_STALE_REF" => &[Role::StalePin, Role::LatestVersion],
+        "PROJECTION_BEFORE_EMITTER" => &[Role::Consumer, Role::LaterEmitter],
+        "PROJECTION_MERGES_BRANCHES" => &[Role::Consumer],
+        "PROJECTION_NOT_ADJACENT" => &[
+            Role::Consumer,
+            Role::EarlierEmitter,
+            Role::InterveningAction,
+        ],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -553,10 +679,25 @@ mod catalog_drift_tests {
 
     use super::*;
 
-    // Lifted from a `grep -oE` of this file. If you add an emission code
+    // Lifted from the validation emission sites across the validation modules. If you add an emission code
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "CATALOG_REFERENCE_UNRESOLVED",
+        "RESPONSIBILITY_VALUE_INVALID",
+        "RESPONSIBILITY_REFERENCE_UNRESOLVED",
+        "DATA_PRODUCT_VALUE_INVALID",
+        "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+        "DATA_PRODUCT_CONFIRMATION_INCOMPLETE",
+        "SPECIFICATION_VALUE_INVALID",
+        "SPECIFICATION_REFERENCE_UNRESOLVED",
+        "ARCHITECTURE_VALUE_INVALID",
+        "ARCHITECTURE_REFERENCE_UNRESOLVED",
+        "CHANNEL_OBSERVATION_UNRESOLVED",
+        "SYSTEM_GROUP_MEMBERSHIP_CYCLE",
+        "DOMAIN_MEMBERSHIP_CYCLE",
+        "SYSTEM_GROUP_MEMBERSHIP_REPEAT",
+        "DOMAIN_MEMBERSHIP_REPEAT",
         "AMBIGUITY_DANGLING_TERM",
         "AMBIGUITY_TOO_FEW_TERMS",
         "AMBIGUITY_UNSPECIFIED_KIND",
@@ -566,6 +707,7 @@ mod catalog_drift_tests {
         "BC_PROJECT_COLLISION",
         "BC_REALIZES_NOTHING",
         "CODE_REF_INCOMPLETE",
+        "ENTITY_UNBACKED",
         "COMMAND_FIELD_NEVER_RECORDED",
         "COMMAND_HAS_NO_TRIGGER",
         "COMMAND_MULTIPLE_ISSUERS",
@@ -576,6 +718,7 @@ mod catalog_drift_tests {
         "CROSS_MODEL_REF",
         "DANGLING_REF",
         "DOMAIN_HAS_NO_CORE",
+        "DOMAIN_IN_CONTEXT_NAMESPACE",
         "DOMAIN_MISSING_PROJECT",
         "DOMAIN_SLUG_MISMATCH",
         "EVENT_FIELD_UNSOURCED",
@@ -586,6 +729,7 @@ mod catalog_drift_tests {
         "INVALID_KIND",
         "MEMBER_NOT_FOUND",
         "MISSING_ID",
+        "OPEN_QUESTION_DUE_INVALID",
         "OPEN_QUESTION_PRESENT",
         "ORPHAN_DOC_EMPTY",
         "ORPHAN_FLAG_OBSOLETE",
@@ -598,13 +742,17 @@ mod catalog_drift_tests {
         "PROCESSOR_MULTIPLE_COMMANDS",
         "PROJECT_SLUG_MISMATCH",
         "PROJECTION_BEFORE_EMITTER",
+        "PROJECTION_MERGES_BRANCHES",
         "PROJECTION_NOT_ADJACENT",
         "READ_MODEL_FIELD_UNSOURCED",
         "READ_MODEL_MULTIPLE_AUTOMATIONS",
         "READ_MODEL_SHARED_CONSUMERS",
         "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY",
+        "READ_MODEL_DUPLICATE_SHAPE",
         "REALIZES_DANGLING",
+        "REF_OUTSIDE_VISIBLE_SCOPE",
         "REALIZES_MISSING_REF",
+        "REALIZES_MIXED_CLASSIFICATIONS",
         "REALIZES_MULTIPLE",
         "RELATIONSHIP_CONTRADICTS_SEAM",
         "RELATIONSHIP_DANGLING",
@@ -628,10 +776,12 @@ mod catalog_drift_tests {
         "SCENARIO_REJECT_NO_REASON",
         "SCENARIO_TRANSITION_VIOLATION",
         "SCHEMA_TYPE_URL_EMPTY",
+        "UNKNOWN_ANNOTATION_TYPE",
         "SCREEN_MANY_CONTRIBUTORS",
         "SCREEN_NAMESPACE_IS_CONTEXT",
         "SEAM_WITHOUT_RELATIONSHIP",
         "SLICE_NOT_IN_STORYBOARD",
+        "SLICE_NO_SCENARIOS",
         "SLICE_STALE_REF",
         "SLI_CONNECTION_UNRESOLVED",
         "SLI_CORRELATION_UNSOURCED",
@@ -700,6 +850,16 @@ mod catalog_drift_tests {
             pb::EntityKind::AlertPolicy,
             pb::EntityKind::AlertNotificationTarget,
             pb::EntityKind::TypeLibrary,
+            pb::EntityKind::Channel,
+            pb::EntityKind::DataStore,
+            pb::EntityKind::Specification,
+            pb::EntityKind::DataProduct,
+            pb::EntityKind::Team,
+            pb::EntityKind::Person,
+            pb::EntityKind::Decision,
+            pb::EntityKind::Document,
+            pb::EntityKind::DesignGraph,
+            pb::EntityKind::SystemGroup,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -732,9 +892,31 @@ mod catalog_drift_tests {
             "validation rule catalog contains codes not emitted anywhere: {extra_in_catalog:?}"
         );
     }
+
+    #[test]
+    fn catalog_lists_the_evidence_roles_of_structured_rules() {
+        let roles = |code: &str| -> Vec<i32> {
+            rule_catalog()
+                .into_iter()
+                .find(|r| r.code == code)
+                .map(|r| r.evidence_roles)
+                .unwrap_or_default()
+        };
+        for code in [
+            "COMMAND_MULTIPLE_ISSUERS",
+            "EVENT_MULTIPLE_EMITTERS",
+            "SLICE_STALE_REF",
+            "PROJECTION_BEFORE_EMITTER",
+            "PROJECTION_MERGES_BRANCHES",
+            "PROJECTION_NOT_ADJACENT",
+        ] {
+            assert!(!roles(code).is_empty(), "{code} carries evidence");
+        }
+        assert!(roles("DANGLING_REF").is_empty(), "prose-only rule");
+    }
 }
 
-fn issue_error(
+pub(crate) fn issue_error(
     code: &str,
     message: String,
     subject: Option<pb::EntityRef>,
@@ -765,6 +947,7 @@ fn check_ref(
     field: &str,
     subject: Option<pb::EntityRef>,
     known: &HashSet<pb::EntityKey>,
+    lens: &Lens,
     issues: &mut Vec<pb::ValidationIssue>,
 ) {
     let Some(id) = id_opt else {
@@ -777,7 +960,9 @@ fn check_ref(
         return;
     };
     let key = pb::EntityKey::new(kind, id);
-    if !known.contains(&key) {
+    // A target the lens hides is absent whether or not it exists; the model
+    // suite reports it as REF_OUTSIDE_VISIBLE_SCOPE, so it is not dangling.
+    if !known.contains(&key) && lens.admits(&id.namespace) {
         issues.push(issue_error(
             "SCENARIO_DANGLING_REF",
             format!(
@@ -830,8 +1015,8 @@ fn check_unique_titles<I, S>(
 // `metadata` as an Info finding. Both are purely informational by design:
 // an open question names something nobody has answered yet, an assumption
 // names something nobody has confirmed yet, and either is a prompt for a
-// human to look, never a blocker. Shared by the entity-level walk in
-// validate_model and the per-scenario walk in validate_scenarios, since
+// human to look, never a blocker. Called for entity metadata and, through
+// push_scenario_annotation_findings, for scenario metadata, since
 // CommandScenario/ReadModelScenario/AutomationScenario carry their own
 // metadata independent of the entity that owns them.
 fn push_annotation_findings(
@@ -842,29 +1027,52 @@ fn push_annotation_findings(
     issues: &mut Vec<pb::ValidationIssue>,
 ) {
     for any in metadata {
-        if any
-            .type_url
-            .ends_with("trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation")
-        {
+        if crate::annotation_type::BuiltinAnnotation::OPEN_QUESTION.matches(any) {
             if let Ok(a) =
                 <pb::OpenQuestionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
+                // Pure on purpose: no overdue check, so a bundle validates the
+                // same whenever it is checked.
+                let due = a
+                    .due
+                    .as_ref()
+                    .map(|d| d.value.as_str())
+                    .filter(|d| !d.is_empty());
+                let mut message = format!(
+                    "{label} has an open question ({}): {}",
+                    a.author, a.question
+                );
+                if !a.owner.is_empty() {
+                    message = format!("{message} [owner: {}]", a.owner);
+                }
+                if let Some(due) = due {
+                    message = format!("{message} [due: {due}]");
+                    if due
+                        .parse::<trogon_atlas_core::authored_date::AuthoredDate>()
+                        .is_err()
+                    {
+                        issues.push(pb::ValidationIssue {
+                            severity: pb::validation_issue::Severity::Warning as i32,
+                            code: "OPEN_QUESTION_DUE_INVALID".into(),
+                            message: format!(
+                                "{label} has an open question with due {due:?}: expected a Gregorian calendar date in YYYY-MM-DD format"
+                            ),
+                            subject: subject.cloned(),
+                            subject_field: subject_field.into(),
+                            ..Default::default()
+                        });
+                    }
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Info as i32,
                     code: "OPEN_QUESTION_PRESENT".into(),
-                    message: format!(
-                        "{label} has an open question ({}): {}",
-                        a.author, a.question
-                    ),
+                    message,
                     subject: subject.cloned(),
                     subject_field: subject_field.into(),
                     ..Default::default()
                 });
             }
-        } else if any
-            .type_url
-            .ends_with("trogonatlas.annotation.v1alpha1.AssumptionAnnotation")
-        {
+        } else if crate::annotation_type::BuiltinAnnotation::ASSUMPTION.matches(any) {
             if let Ok(a) =
                 <pb::AssumptionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
@@ -884,22 +1092,64 @@ fn push_annotation_findings(
     }
 }
 
-fn is_derived_field(field: &pb::FieldSpec) -> bool {
+// Shared by apply (validate_scenarios) and validate_model so both surfaces
+// describe a scenario's annotation with the same finding.
+fn push_scenario_annotation_findings(
+    entity: &pb::Entity,
+    subject: Option<&pb::EntityRef>,
+    issues: &mut Vec<pb::ValidationIssue>,
+) {
+    let scenarios: Vec<(&str, &String, &[prost_types::Any])> = match entity.kind.as_ref() {
+        Some(pb::entity::Kind::CommandSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("command", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        Some(pb::entity::Kind::ReadModelSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("read-model", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        Some(pb::entity::Kind::AutomationSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("automation", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        _ => return,
+    };
+    for (kind, title, metadata) in scenarios {
+        push_annotation_findings(
+            metadata,
+            subject,
+            "scenarios[].metadata",
+            &format!("{kind} scenario {title:?}"),
+            issues,
+        );
+    }
+}
+
+/// A required annotation doc counts only when it says something; blank
+/// text is the silence the annotation replaces.
+fn is_stated_reason(doc: &str) -> bool {
+    !doc.trim().is_empty()
+}
+
+#[cfg(test)]
+const BLANK_DOCS: &[&str] = &["", " ", "\t", "\n", " \t\r\n ", "\u{00a0}", "\u{2003}"];
+
+pub(crate) fn is_derived_field(field: &pb::FieldSpec) -> bool {
     // Doc is mandatory on DerivedFieldAnnotation (same contract as
     // PinnedRefAnnotation / SharedConsumersAnnotation). Presence-only
     // matching would let an empty-doc annotation silently suppress
     // EVENT_FIELD_UNSOURCED / AUTOMATION_COMMAND_FIELD_UNSOURCED.
     for any in &field.metadata {
-        if !any
-            .type_url
-            .ends_with("trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation")
-        {
+        if !crate::annotation_type::BuiltinAnnotation::DERIVED_FIELD.matches(any) {
             continue;
         }
         if let Ok(ann) =
             <pb::DerivedFieldAnnotation as prost::Message>::decode(any.value.as_slice())
         {
-            if !ann.doc.is_empty() {
+            if is_stated_reason(&ann.doc) {
                 return true;
             }
         }
@@ -977,6 +1227,73 @@ fn walk_personal_data_fields<'a>(
     }
 }
 
+/// `UNKNOWN_ANNOTATION_TYPE` for each annotation on `subject` whose type the
+/// namespace cannot resolve.
+#[must_use]
+pub fn unknown_annotation_type_issues(
+    subject: &pb::EntityRef,
+    found: &crate::type_libraries::UnknownAnnotationTypes,
+) -> Vec<pb::ValidationIssue> {
+    let cause = match found.libraries {
+        crate::type_libraries::LibraryConsultation::Checked => {
+            "neither a built-in annotation nor any live type library in the namespace declares it"
+        }
+        crate::type_libraries::LibraryConsultation::DidNotCompile => {
+            "no built-in annotation declares it, and the namespace's type libraries do not compile together so tenant types could not be checked"
+        }
+        crate::type_libraries::LibraryConsultation::CompilerUnavailable => {
+            "no built-in annotation declares it, and the type compiler was unavailable so tenant types could not be checked"
+        }
+    };
+    let mut issues: Vec<pb::ValidationIssue> = found
+        .annotations
+        .iter()
+        .map(|annotation| pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "UNKNOWN_ANNOTATION_TYPE".into(),
+            message: format!(
+                "annotation type {:?} is unknown: {cause}",
+                annotation.type_url
+            ),
+            subject: Some(subject.clone()),
+            subject_field: annotation.path.clone(),
+            ..Default::default()
+        })
+        .collect();
+    enrich_issues_with_catalog(&mut issues);
+    issues
+}
+
+#[cfg(test)]
+mod unknown_annotation_messages {
+    use super::{pb, unknown_annotation_type_issues};
+    use crate::type_libraries::{LibraryConsultation, UnknownAnnotation, UnknownAnnotationTypes};
+
+    fn found(libraries: LibraryConsultation) -> UnknownAnnotationTypes {
+        UnknownAnnotationTypes {
+            annotations: vec![UnknownAnnotation {
+                type_url: "type.googleapis.com/acme.notes.v1.ReviewNote".into(),
+                path: "metadata[0]".into(),
+            }],
+            libraries,
+        }
+    }
+
+    #[test]
+    fn a_compiler_outage_is_not_described_as_a_compile_failure() {
+        let subject = pb::EntityRef::default();
+        let outage = unknown_annotation_type_issues(
+            &subject,
+            &found(LibraryConsultation::CompilerUnavailable),
+        );
+        let broken =
+            unknown_annotation_type_issues(&subject, &found(LibraryConsultation::DidNotCompile));
+        assert!(outage[0].message.contains("type compiler was unavailable"));
+        assert!(!outage[0].message.contains("do not compile together"));
+        assert!(broken[0].message.contains("do not compile together"));
+    }
+}
+
 /// Decodes a `metadata` entry as PersonalDataAnnotation. Returns `None`
 /// when the entry is not a PersonalDataAnnotation at all (not our
 /// concern), `Some(Err(()))` when the type_url matches but the payload
@@ -985,10 +1302,7 @@ fn walk_personal_data_fields<'a>(
 fn decode_personal_data_annotation(
     any: &prost_types::Any,
 ) -> Option<Result<pb::PersonalDataAnnotation, ()>> {
-    if !any
-        .type_url
-        .ends_with("trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation")
-    {
+    if !crate::annotation_type::BuiltinAnnotation::PERSONAL_DATA.matches(any) {
         return None;
     }
     Some(
@@ -999,7 +1313,7 @@ fn decode_personal_data_annotation(
 
 /// Metadata bag on every top-level entity kind. Exhaustive so a new kind
 /// that forgets metadata cannot silently skip CODE_REF / annotation walks.
-fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
+pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::Event(x)) => &x.metadata,
         Some(pb::entity::Kind::Command(x)) => &x.metadata,
@@ -1030,18 +1344,191 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::AlertPolicy(x)) => &x.metadata,
         Some(pb::entity::Kind::AlertNotificationTarget(x)) => &x.metadata,
         Some(pb::entity::Kind::TypeLibrary(x)) => &x.metadata,
+        Some(pb::entity::Kind::Channel(x)) => &x.metadata,
+        Some(pb::entity::Kind::DataStore(x)) => &x.metadata,
+        Some(pb::entity::Kind::Specification(x)) => &x.metadata,
+        Some(pb::entity::Kind::DataProduct(x)) => &x.metadata,
+        Some(pb::entity::Kind::Team(x)) => &x.metadata,
+        Some(pb::entity::Kind::Person(x)) => &x.metadata,
+        Some(pb::entity::Kind::Decision(x)) => &x.metadata,
+        Some(pb::entity::Kind::Document(x)) => &x.metadata,
+        Some(pb::entity::Kind::DesignGraph(x)) => &x.metadata,
+        Some(pb::entity::Kind::SystemGroup(x)) => &x.metadata,
         None => &[],
     }
 }
 
+/// Mutable twin of [`entity_metadata`], exhaustive for the same reason.
+pub(crate) fn entity_metadata_mut(entity: &mut pb::Entity) -> Option<&mut Vec<prost_types::Any>> {
+    match entity.kind.as_mut() {
+        Some(pb::entity::Kind::Event(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Command(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ReadModel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Processor(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Ui(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Persona(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Swimlane(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::CommandSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ReadModelSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AutomationSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::UiSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Storyboard(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::EventModel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Component(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ExternalSystem(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Tracker(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::BoundedContext(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Domain(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Subdomain(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Schema(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Project(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Screen(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Term(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Ambiguity(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ServiceLevelIndicator(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ServiceLevelObjective(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AlertPolicy(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AlertNotificationTarget(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::TypeLibrary(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Channel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::DataStore(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Specification(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::DataProduct(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Team(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Person(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Decision(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Document(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::DesignGraph(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::SystemGroup(x)) => Some(&mut x.metadata),
+        None => None,
+    }
+}
+
+/// `CONTEXT_SLUG_MISMATCH`: the context's root document names its boundary,
+/// so its slug must equal its namespace (Decision #27). That keeps one
+/// context per namespace.
+pub(crate) fn context_slug_mismatch(bc: &pb::BoundedContext) -> Option<pb::ValidationIssue> {
+    let id = bc.id.as_ref()?;
+    if id.slug == id.namespace {
+        return None;
+    }
+    Some(pb::ValidationIssue {
+        severity: pb::validation_issue::Severity::Error as i32,
+        code: "CONTEXT_SLUG_MISMATCH".into(),
+        message: format!(
+            "bounded context slug {:?} must equal its namespace {:?}; the context IS the namespace, and slug == namespace keeps it one per context",
+            id.slug, id.namespace,
+        ),
+        subject: Some(pb::EntityRef {
+            kind: pb::EntityKind::BoundedContext as i32,
+            id: Some(id.clone()),
+        }),
+        subject_field: "id.slug".into(),
+        ..Default::default()
+    })
+}
+
 // Store-level hygiene that doesn't fit inside a single EventModel scope:
-// project identity (namespace == slug), Domains declaring their project,
+// project and context identity (namespace == slug), Domains declaring their project,
 // and cross-project collisions on BoundedContext ids. Called from
 // ValidateProject. Per-model ValidateEventModel skips this because the
 // concern is global; otherwise the same finding would be emitted once
 // per model.
 pub fn validate_store(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_store_with_architecture_context(all, &[])
+}
+
+pub fn validate_store_with_architecture_context(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_architecture_resources(all, architecture_context);
+    issues.extend(validate_store_hygiene(all));
+    issues
+}
+
+/// Architecture resource rules and membership advisories for every resource in
+/// `all`, resolved against `all` plus `architecture_context`.
+pub(crate) fn validate_architecture_resources(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
+    let mut resources = all
+        .iter()
+        .filter(|stored| architecture_resources::is_resource(&stored.entity))
+        .peekable();
+    if resources.peek().is_some() {
+        let resource_context = architecture_resources::ArchitectureContext::new(
+            all.iter().chain(architecture_context),
+        );
+        for stored in resources {
+            issues.extend(architecture_resources::validate_in_context(
+                &stored.entity,
+                &resource_context,
+            ));
+        }
+    }
+    issues.extend(membership_advisories(all, architecture_context));
+    issues
+}
+
+fn membership_advisories(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    let owners: Vec<pb::Entity> = all
+        .iter()
+        .chain(architecture_context)
+        .filter(|stored| {
+            matches!(
+                stored.entity.kind,
+                Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+            )
+        })
+        .filter(
+            |stored| match (entity_kind(&stored.entity), entity_id(&stored.entity)) {
+                (Some(kind), Some(id)) => seen.insert(pb::EntityKey::new(kind, id)),
+                _ => true,
+            },
+        )
+        .map(|stored| stored.entity.clone())
+        .collect();
+    trogon_atlas_core::system_group::advisories(&owners)
+        .into_iter()
+        .map(|advisory| {
+            let path = advisory
+                .path
+                .iter()
+                .map(|hop| {
+                    let owner = hop.owner.id.as_ref().map_or_else(String::new, |id| {
+                        format!("{}/{}@{}", id.namespace, id.slug, id.version)
+                    });
+                    let target = hop.target.id.as_ref().map_or_else(String::new, |id| {
+                        format!("{}/{}@{}", id.namespace, id.slug, id.version)
+                    });
+                    format!("{owner} -[{}]-> {target}", hop.connection_id)
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Info as i32,
+                code: advisory.rule.into(),
+                message: path,
+                subject: advisory.path.first().map(|hop| hop.owner.clone()),
+                subject_field: advisory
+                    .path
+                    .first()
+                    .map_or_else(String::new, |hop| hop.connection_id.to_string()),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    let mut issues = Vec::new();
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {
@@ -1072,6 +1559,12 @@ pub fn validate_store(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
                 subject_field: "id".into(),
                 ..pb::ValidationIssue::default()
             });
+        }
+    }
+
+    for se in all {
+        if let Some(pb::entity::Kind::BoundedContext(bc)) = se.entity.kind.as_ref() {
+            issues.extend(context_slug_mismatch(bc));
         }
     }
 
@@ -1483,17 +1976,72 @@ pub fn validate_store(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
     issues
 }
 
-#[must_use]
-pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
-    let mut issues: Vec<pb::ValidationIssue> = Vec::new();
-    let known: HashSet<pb::EntityKey> = all
+type LaneTransitions<'a> = HashMap<pb::IdKey, &'a Vec<pb::swimlane::Transition>>;
+
+/// Event-to-lane and lane-to-transitions maps shared by the rules that read
+/// swimlane lifecycles. Lanes without transitions are left out of the second map.
+fn lane_maps(all: &[StoredEntity]) -> (HashMap<pb::IdKey, pb::Id>, LaneTransitions<'_>) {
+    let event_lane = all
         .iter()
-        .filter_map(|se| {
-            let k = entity_kind(&se.entity)?;
-            let i = entity_id(&se.entity)?;
-            Some(pb::EntityKey::new(k, i))
+        .filter_map(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Event(e)) => {
+                let id = e.id.as_ref()?;
+                let lane = e.swimlane.as_ref()?.id.as_ref()?;
+                Some((pb::IdKey::new(id), lane.clone()))
+            }
+            _ => None,
         })
         .collect();
+    let lane_transitions = all
+        .iter()
+        .filter_map(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Swimlane(l)) if !l.transitions.is_empty() => {
+                let id = l.id.as_ref()?;
+                Some((pb::IdKey::new(id), &l.transitions))
+            }
+            _ => None,
+        })
+        .collect();
+    (event_lane, lane_transitions)
+}
+
+#[must_use]
+pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_scenarios_indexed(entity, &ScenarioIndex::new(all), &Lens::Everything)
+}
+
+/// Snapshot indexes the scenarios check reads. Build one per snapshot and
+/// share it across a loop over many slices, so each slice does not rebuild it.
+pub(crate) struct ScenarioIndex<'a> {
+    all: &'a [StoredEntity],
+    by_key: HashMap<pb::EntityKey, &'a StoredEntity>,
+    known: HashSet<pb::EntityKey>,
+    lanes: OnceCell<(HashMap<pb::IdKey, pb::Id>, LaneTransitions<'a>)>,
+}
+
+impl<'a> ScenarioIndex<'a> {
+    pub(crate) fn new(all: &'a [StoredEntity]) -> Self {
+        let by_key: HashMap<pb::EntityKey, &StoredEntity> = all
+            .iter()
+            .filter_map(|se| Some((key_of(se)?, se)))
+            .collect();
+        let known = by_key.keys().cloned().collect();
+        Self {
+            all,
+            by_key,
+            known,
+            lanes: OnceCell::new(),
+        }
+    }
+}
+
+pub(crate) fn validate_scenarios_indexed(
+    entity: &pb::Entity,
+    index: &ScenarioIndex<'_>,
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues: Vec<pb::ValidationIssue> = Vec::new();
+    let (all, known) = (index.all, &index.known);
     let subject = slice_ref(entity);
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::CommandSlice(s)) => {
@@ -1515,7 +2063,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         ev.event.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].given[].event",
                         subject.clone(),
-                        &known,
+                        known,
+                        lens,
                         &mut issues,
                     );
                 }
@@ -1531,7 +2080,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     cmd_id,
                     "scenarios[].when.command",
                     subject.clone(),
-                    &known,
+                    known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_command_id, cmd_id) {
@@ -1556,7 +2106,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                                 ev.event.as_ref().and_then(|r| r.id.as_ref()),
                                 "scenarios[].then.emit.events[].event",
                                 subject.clone(),
-                                &known,
+                                known,
+                                lens,
                                 &mut issues,
                             );
                         }
@@ -1588,27 +2139,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
             // scenario may only emit a legal successor of the last given
             // event on that stream. The swimlane decides the fork; GWTs
             // must not invent roads the aggregate would refuse.
-            let event_lane: HashMap<pb::IdKey, pb::Id> = all
-                .iter()
-                .filter_map(|se| match se.entity.kind.as_ref() {
-                    Some(pb::entity::Kind::Event(e)) => {
-                        let id = e.id.as_ref()?;
-                        let lane = e.swimlane.as_ref()?.id.as_ref()?;
-                        Some((pb::IdKey::new(id), lane.clone()))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let lane_transitions: HashMap<pb::IdKey, &Vec<pb::swimlane::Transition>> = all
-                .iter()
-                .filter_map(|se| match se.entity.kind.as_ref() {
-                    Some(pb::entity::Kind::Swimlane(l)) if !l.transitions.is_empty() => {
-                        let id = l.id.as_ref()?;
-                        Some((pb::IdKey::new(id), &l.transitions))
-                    }
-                    _ => None,
-                })
-                .collect();
+            let (event_lane, lane_transitions) = index.lanes.get_or_init(|| lane_maps(all));
             let key = |i: &pb::Id| pb::IdKey::new(i);
             for sc in &s.scenarios {
                 let mut last_on: HashMap<pb::IdKey, pb::Id> = HashMap::new();
@@ -1710,15 +2241,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("command scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         Some(pb::entity::Kind::ReadModelSlice(s)) => {
             check_unique_titles(
@@ -1739,7 +2262,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         ev.event.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].when[].event",
                         subject.clone(),
-                        &known,
+                        known,
+                        lens,
                         &mut issues,
                     );
                 }
@@ -1761,7 +2285,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     rm_id,
                     "scenarios[].then.read_model",
                     subject.clone(),
-                    &known,
+                    known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_rm_id, rm_id) {
@@ -1779,15 +2304,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("read-model scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         Some(pb::entity::Kind::AutomationSlice(s)) => {
             check_unique_titles(
@@ -1808,22 +2325,28 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         rm.read_model.as_ref().and_then(|r| r.id.as_ref()),
                         "scenarios[].given[].read_model",
                         subject.clone(),
-                        &known,
+                        known,
+                        lens,
                         &mut issues,
                     );
                 }
-                let Some(then) = &sc.then else {
-                    // Parity with CommandScenario / ReadModelScenario:
-                    // an automation scenario with no Then is meaningless
-                    // (the test has no observable side effect to assert)
-                    // and was silently accepted by the previous branch.
-                    issues.push(issue_error(
-                        "SCENARIO_MISSING_THEN",
-                        format!("automation scenario {:?} must set then.command", sc.title),
-                        subject.clone(),
-                        "scenarios[].then",
-                    ));
-                    continue;
+                // The outcome must be stated: the command issued, or
+                // no_command when the automation deliberately does not fire.
+                let then = match &sc.outcome {
+                    Some(pb::automation_scenario::Outcome::Then(then)) => then,
+                    Some(pb::automation_scenario::Outcome::NoCommand(_)) => continue,
+                    None => {
+                        issues.push(issue_error(
+                            "SCENARIO_MISSING_THEN",
+                            format!(
+                                "automation scenario {:?} must set then.command or noCommand",
+                                sc.title
+                            ),
+                            subject.clone(),
+                            "scenarios[].then",
+                        ));
+                        continue;
+                    }
                 };
                 let cmd_id = then.command.as_ref().and_then(|r| r.id.as_ref());
                 check_ref(
@@ -1831,7 +2354,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     cmd_id,
                     "scenarios[].then.command",
                     subject.clone(),
-                    &known,
+                    known,
+                    lens,
                     &mut issues,
                 );
                 if let (Some(slice_id), Some(scenario_id)) = (slice_command_id, cmd_id) {
@@ -1849,34 +2373,12 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("automation scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         // The context's root document names its boundary: slug == namespace
         // (Decision #27), which also makes it naturally unique per context.
         Some(pb::entity::Kind::BoundedContext(bc)) => {
-            if let Some(id) = bc.id.as_ref() {
-                if id.slug != id.namespace {
-                    issues.push(pb::ValidationIssue {
-                        severity: pb::validation_issue::Severity::Error as i32,
-                        code: "CONTEXT_SLUG_MISMATCH".into(),
-                        message: format!(
-                            "bounded context slug {:?} must equal its namespace {:?}; the context IS the namespace, and slug == namespace keeps it one per context",
-                            id.slug, id.namespace,
-                        ),
-                        subject: subject.clone(),
-                        subject_field: "id.slug".into(),
-                        ..Default::default()
-                    });
-                }
-            }
+            issues.extend(context_slug_mismatch(bc));
             for (i, r) in bc.realizes.iter().enumerate() {
                 let Some(sid) = r.id.as_ref() else {
                     issues.push(issue_error(
@@ -1887,7 +2389,13 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     ));
                     continue;
                 };
-                if !known.contains(&pb::EntityKey::new(pb::EntityKind::Subdomain, sid)) {
+                if !lens.admits(&sid.namespace) {
+                    issues.push(outside_visible_scope(
+                        subject.clone(),
+                        format!("realizes[{i}]"),
+                        &format!("subdomain {}/{}@{}", sid.namespace, sid.slug, sid.version),
+                    ));
+                } else if !known.contains(&pb::EntityKey::new(pb::EntityKind::Subdomain, sid)) {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "REALIZES_DANGLING".into(),
@@ -1939,6 +2447,17 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         format!("relationships[{i}] points at this context itself; a context needs no agreement with itself"),
                         subject.clone(),
                         &format!("relationships[{i}].upstream"),
+                    ));
+                    continue;
+                }
+                if !lens.admits(&uid.namespace) {
+                    issues.push(outside_visible_scope(
+                        subject.clone(),
+                        format!("relationships[{i}].upstream"),
+                        &format!(
+                            "bounded_context:{}/{}@{}",
+                            uid.namespace, uid.slug, uid.version
+                        ),
                     ));
                     continue;
                 }
@@ -2020,7 +2539,29 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     });
                 }
             }
-            if bc.realizes.len() > 1 {
+            let classifications = realized_classifications(bc, all);
+            if classifications.len() > 1 {
+                let names: Vec<String> = classifications
+                    .iter()
+                    .map(|c| {
+                        c.as_str_name()
+                            .trim_start_matches("CLASSIFICATION_")
+                            .to_lowercase()
+                    })
+                    .collect();
+                issues.push(pb::ValidationIssue {
+                    severity: pb::validation_issue::Severity::Warning as i32,
+                    code: "REALIZES_MIXED_CLASSIFICATIONS".into(),
+                    message: format!(
+                        "context realizes subdomains classified {}; one boundary carries {} investment levels, so one of them is funded at the wrong level: split the context along the classification line",
+                        names.join(" and "),
+                        names.len(),
+                    ),
+                    subject: subject.clone(),
+                    subject_field: "realizes".into(),
+                    ..Default::default()
+                });
+            } else if bc.realizes.len() > 1 {
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Info as i32,
                     code: "REALIZES_MULTIPLE".into(),
@@ -2051,6 +2592,26 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         ),
                         subject: subject.clone(),
                         subject_field: "id.slug".into(),
+                        ..Default::default()
+                    });
+                }
+                let hosts_context = all.iter().any(|se| {
+                    matches!(
+                        se.entity.kind.as_ref(),
+                        Some(pb::entity::Kind::BoundedContext(bc))
+                            if bc.id.as_ref().is_some_and(|b| b.namespace == id.namespace)
+                    )
+                });
+                if hosts_context {
+                    issues.push(pb::ValidationIssue {
+                        severity: pb::validation_issue::Severity::Warning as i32,
+                        code: "DOMAIN_IN_CONTEXT_NAMESPACE".into(),
+                        message: format!(
+                            "domain lives in namespace {:?} alongside a bounded context; the domain is the business, not one context's property: give it its own problem-space namespace and let contexts realize its subdomains across namespaces",
+                            id.namespace,
+                        ),
+                        subject: subject.clone(),
+                        subject_field: "id.namespace".into(),
                         ..Default::default()
                     });
                 }
@@ -2202,7 +2763,8 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     subject_ref.id.as_ref(),
                     &format!("items[{i}].subject"),
                     subject.clone(),
-                    &known,
+                    known,
+                    lens,
                     &mut issues,
                 );
                 if let Some(id) = subject_ref.id.as_ref() {
@@ -2255,7 +2817,868 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
 //   * `member_set`: members claimed by THIS event model
 // Both feed every pass; no other state is shared across pass boundaries.
 // =============================================================================
+fn id_key_order(a: &pb::IdKey, b: &pb::IdKey) -> std::cmp::Ordering {
+    (&a.namespace, &a.slug, a.version).cmp(&(&b.namespace, &b.slug, b.version))
+}
+
+/// What a consumer reads from a read model: two read models with an equal
+/// shape in one namespace are the same view. Docs and annotations on fields
+/// are left out because they don't change the data.
+#[derive(PartialEq)]
+struct ReadModelShape {
+    namespace: String,
+    key: Vec<String>,
+    fields: Vec<pb::FieldSpec>,
+    source_events: Vec<pb::IdKey>,
+}
+
+impl ReadModelShape {
+    fn of(id: &pb::Id, rm: &pb::ReadModel, fields: &[pb::FieldSpec]) -> Option<Self> {
+        let mut source_events: Vec<pb::IdKey> = rm
+            .source_events
+            .iter()
+            .filter_map(|e| e.id.as_ref())
+            .map(pb::IdKey::new)
+            .collect();
+        if source_events.is_empty() {
+            return None;
+        }
+        source_events.sort_by(id_key_order);
+        source_events.dedup();
+        let mut key = rm.key.clone();
+        key.sort_unstable();
+        Some(Self {
+            namespace: id.namespace.clone(),
+            key,
+            fields: shape_fields(fields),
+            source_events,
+        })
+    }
+}
+
+/// Fields with docs and annotations removed at every nesting level, sorted
+/// by name, so only the data a consumer reads is compared.
+fn shape_fields(fields: &[pb::FieldSpec]) -> Vec<pb::FieldSpec> {
+    let mut out: Vec<pb::FieldSpec> = fields
+        .iter()
+        .map(|f| pb::FieldSpec {
+            doc: String::new(),
+            metadata: Vec::new(),
+            r#type: f.r#type.as_ref().map(|t| match t.kind.as_ref() {
+                Some(pb::field_type::Kind::Object(object)) => pb::FieldType {
+                    kind: Some(pb::field_type::Kind::Object(pb::field_type::ObjectType {
+                        fields: shape_fields(&object.fields),
+                    })),
+                },
+                _ => t.clone(),
+            }),
+            ..f.clone()
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+fn find_stored<'a>(
+    all: &'a [StoredEntity],
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a StoredEntity> {
+    all.iter().find(|se| {
+        entity_kind(&se.entity) == Some(kind)
+            && entity_id(&se.entity).is_some_and(|sid| {
+                sid.namespace == id.namespace && sid.slug == id.slug && sid.version == id.version
+            })
+    })
+}
+
+/// Classifications of the subdomains a context realizes that resolve in the
+/// store. Unclassified subdomains are left out: `SUBDOMAIN_UNCLASSIFIED`
+/// already names them, and an absent classification is no investment level.
+fn realized_classifications(
+    bc: &pb::BoundedContext,
+    all: &[StoredEntity],
+) -> BTreeSet<pb::subdomain::Classification> {
+    bc.realizes
+        .iter()
+        .filter_map(|r| r.id.as_ref())
+        .filter_map(|sid| find_stored(all, pb::EntityKind::Subdomain, sid))
+        .filter_map(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Subdomain(sd)) => {
+                pb::subdomain::Classification::try_from(sd.classification).ok()
+            }
+            _ => None,
+        })
+        .filter(|c| *c != pb::subdomain::Classification::Unspecified)
+        .collect()
+}
+
+/// Latest stored version per (kind, namespace, slug) for the strategic kinds,
+/// so declared-in-namespace collection validates a lineage once, at its head,
+/// instead of reporting stale findings from superseded versions.
+fn latest_strategic_versions(all: &[StoredEntity]) -> HashMap<(pb::EntityKind, &str, &str), u64> {
+    let mut latest: HashMap<(pb::EntityKind, &str, &str), u64> = HashMap::new();
+    for se in all {
+        let (kind, id) = match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::BoundedContext(x)) => {
+                (pb::EntityKind::BoundedContext, x.id.as_ref())
+            }
+            Some(pb::entity::Kind::Domain(x)) => (pb::EntityKind::Domain, x.id.as_ref()),
+            Some(pb::entity::Kind::Subdomain(x)) => (pb::EntityKind::Subdomain, x.id.as_ref()),
+            _ => continue,
+        };
+        let Some(id) = id else { continue };
+        let slot = latest
+            .entry((kind, id.namespace.as_str(), id.slug.as_str()))
+            .or_insert(id.version);
+        *slot = (*slot).max(id.version);
+    }
+    latest
+}
+
+fn strategic_subdomain_domain<'a>(
+    sd: &pb::Subdomain,
+    all: &'a [StoredEntity],
+) -> Option<&'a StoredEntity> {
+    sd.domain
+        .as_ref()
+        .and_then(|r| r.id.as_ref())
+        .and_then(|did| find_stored(all, pb::EntityKind::Domain, did))
+}
+
+/// Strategic findings for the chain behind the given namespaces: the bounded
+/// contexts, domains and subdomains declared in them (latest version of
+/// each), the subdomains those contexts realize, and the domains of all of
+/// those. Every subdomain of a collected domain is included too, so an
+/// unrealized subdomain surfaces. Each entity is validated once however many
+/// namespaces reach it.
+///
+/// Refs resolve by exact id, the same convention `REALIZES_DANGLING` and
+/// `SUBDOMAIN_DANGLING_DOMAIN` use: a ref that names no stored version is
+/// reported as dangling, not silently resolved to the latest.
+#[must_use]
+pub fn strategic_chain_issues<'a>(
+    namespaces: impl IntoIterator<Item = &'a str>,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    strategic_chain_issues_within(namespaces, all, &Lens::Everything)
+}
+
+pub(crate) fn strategic_chain_issues_within<'a>(
+    namespaces: impl IntoIterator<Item = &'a str>,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
+    let namespaces: HashSet<&str> = namespaces.into_iter().collect();
+    let latest = latest_strategic_versions(all);
+    let declared_here = |kind: pb::EntityKind, id: Option<&pb::Id>| {
+        id.is_some_and(|id| {
+            namespaces.contains(id.namespace.as_str())
+                && latest
+                    .get(&(kind, id.namespace.as_str(), id.slug.as_str()))
+                    .is_some_and(|v| *v == id.version)
+        })
+    };
+    let mut chain: Vec<(pb::EntityKind, &StoredEntity)> = Vec::new();
+    for se in all {
+        match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::BoundedContext(bc))
+                if declared_here(pb::EntityKind::BoundedContext, bc.id.as_ref()) =>
+            {
+                chain.push((pb::EntityKind::BoundedContext, se));
+                for sid in bc.realizes.iter().filter_map(|r| r.id.as_ref()) {
+                    let Some(sub) = find_stored(all, pb::EntityKind::Subdomain, sid) else {
+                        continue;
+                    };
+                    chain.push((pb::EntityKind::Subdomain, sub));
+                    let Some(pb::entity::Kind::Subdomain(sd)) = sub.entity.kind.as_ref() else {
+                        continue;
+                    };
+                    if let Some(domain) = strategic_subdomain_domain(sd, all) {
+                        chain.push((pb::EntityKind::Domain, domain));
+                    }
+                }
+            }
+            Some(pb::entity::Kind::Domain(d))
+                if declared_here(pb::EntityKind::Domain, d.id.as_ref()) =>
+            {
+                chain.push((pb::EntityKind::Domain, se));
+            }
+            Some(pb::entity::Kind::Subdomain(sd))
+                if declared_here(pb::EntityKind::Subdomain, sd.id.as_ref()) =>
+            {
+                chain.push((pb::EntityKind::Subdomain, se));
+                if let Some(domain) = strategic_subdomain_domain(sd, all) {
+                    chain.push((pb::EntityKind::Domain, domain));
+                }
+            }
+            _ => {}
+        }
+    }
+    let collected_domains: HashSet<(&str, &str)> = chain
+        .iter()
+        .filter_map(|(kind, se)| match (kind, se.entity.kind.as_ref()) {
+            (pb::EntityKind::Domain, Some(pb::entity::Kind::Domain(d))) => {
+                d.id.as_ref()
+                    .map(|id| (id.namespace.as_str(), id.slug.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    for se in all {
+        let Some(pb::entity::Kind::Subdomain(sd)) = se.entity.kind.as_ref() else {
+            continue;
+        };
+        let belongs = sd
+            .domain
+            .as_ref()
+            .and_then(|r| r.id.as_ref())
+            .is_some_and(|did| {
+                collected_domains.contains(&(did.namespace.as_str(), did.slug.as_str()))
+            });
+        if belongs && declared_latest(&latest, pb::EntityKind::Subdomain, sd.id.as_ref()) {
+            chain.push((pb::EntityKind::Subdomain, se));
+        }
+    }
+    let index = ScenarioIndex::new(all);
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    chain
+        .into_iter()
+        .filter(|(kind, se)| {
+            entity_id(&se.entity).is_some_and(|id| seen.insert(pb::EntityKey::new(*kind, id)))
+        })
+        .flat_map(|(_, se)| validate_scenarios_indexed(&se.entity, &index, lens))
+        .collect()
+}
+
+fn declared_latest(
+    latest: &HashMap<(pb::EntityKind, &str, &str), u64>,
+    kind: pb::EntityKind,
+    id: Option<&pb::Id>,
+) -> bool {
+    id.is_some_and(|id| {
+        latest
+            .get(&(kind, id.namespace.as_str(), id.slug.as_str()))
+            .is_some_and(|v| *v == id.version)
+    })
+}
+
+fn latest_realizers<'a>(
+    world: &'a [StoredEntity],
+    latest: &HashMap<(pb::EntityKind, &str, &str), u64>,
+    subdomain: &pb::Id,
+) -> Vec<&'a StoredEntity> {
+    world
+        .iter()
+        .filter(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::BoundedContext(bc)) => {
+                declared_latest(latest, pb::EntityKind::BoundedContext, bc.id.as_ref())
+                    && bc.realizes.iter().filter_map(|r| r.id.as_ref()).any(|rid| {
+                        rid.namespace == subdomain.namespace && rid.slug == subdomain.slug
+                    })
+            }
+            _ => false,
+        })
+        .collect()
+}
+
+fn latest_subdomains_of<'a>(
+    world: &'a [StoredEntity],
+    latest: &HashMap<(pb::EntityKind, &str, &str), u64>,
+    domain: &pb::Id,
+) -> Vec<&'a StoredEntity> {
+    world
+        .iter()
+        .filter(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Subdomain(sd)) => {
+                declared_latest(latest, pb::EntityKind::Subdomain, sd.id.as_ref())
+                    && sd
+                        .domain
+                        .as_ref()
+                        .and_then(|r| r.id.as_ref())
+                        .is_some_and(|did| {
+                            did.namespace == domain.namespace && did.slug == domain.slug
+                        })
+            }
+            _ => false,
+        })
+        .collect()
+}
+
+/// A change to one strategic entity: the key of the entity a write put or
+/// merged.
+pub type StrategicChange = (pb::EntityKind, pb::Id);
+
+type IssueKey = (
+    String,
+    i32,
+    String,
+    String,
+    u64,
+    String,
+    Vec<finding_evidence::EvidenceKey>,
+);
+
+fn issue_key(issue: &pb::ValidationIssue) -> IssueKey {
+    let (kind, ns, slug, version) = issue
+        .subject
+        .as_ref()
+        .map(|s| {
+            let id = s.id.clone().unwrap_or_default();
+            (s.kind, id.namespace, id.slug, id.version)
+        })
+        .unwrap_or_default();
+    (
+        issue.code.clone(),
+        kind,
+        ns,
+        slug,
+        version,
+        issue.subject_field.clone(),
+        issue
+            .evidence
+            .iter()
+            .map(finding_evidence::evidence_key)
+            .collect(),
+    )
+}
+
+/// The entities in `world` that the version of `kind`/`id` stored in `before`
+/// referenced: the subdomains a context realized, the domain a subdomain
+/// named.
+fn replaced_targets<'a>(
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    before: &[StoredEntity],
+    world: &'a [StoredEntity],
+) -> Vec<&'a StoredEntity> {
+    let Some(previous) = find_stored(before, kind, id) else {
+        return Vec::new();
+    };
+    match previous.entity.kind.as_ref() {
+        Some(pb::entity::Kind::BoundedContext(bc)) => bc
+            .realizes
+            .iter()
+            .filter_map(|r| r.id.as_ref())
+            .filter_map(|sid| find_stored(world, pb::EntityKind::Subdomain, sid))
+            .collect(),
+        Some(pb::entity::Kind::Subdomain(sd)) => {
+            strategic_subdomain_domain(sd, world).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The strategic findings each change causes, judged against `world` (the
+/// store as it will be once every change landed, so the order of changes
+/// does not matter). `before` is the store without any of the changes. A
+/// change covers its own entity and the entities whose verdict it can move:
+///
+/// - a domain: itself;
+/// - a subdomain: itself, the latest version of every context realizing it,
+///   and its domain;
+/// - a bounded context: itself, the subdomains it realizes, and the domains
+///   declared in its namespace.
+///
+/// A change also covers what the version it replaced referenced (the
+/// subdomains a context realized, the domain a subdomain named), reporting
+/// only the findings on those entities that `before` did not already have, so
+/// a write is never blamed for a problem it did not cause.
+///
+/// A finding is reported once, under the change whose entity it is about
+/// (the subject), or else under the first change that reaches it. Findings
+/// are advisory; the caller decides what, if anything, they block.
+#[must_use]
+pub fn strategic_issues_by_change(
+    changes: &[StrategicChange],
+    before: &[StoredEntity],
+    world: &[StoredEntity],
+) -> Vec<Vec<pb::ValidationIssue>> {
+    let latest = latest_strategic_versions(world);
+    let mut reached: Vec<(usize, pb::ValidationIssue)> = Vec::new();
+    for (index, (kind, id)) in changes.iter().enumerate() {
+        let Some(own) = find_stored(world, *kind, id) else {
+            continue;
+        };
+        let mut targets: Vec<&StoredEntity> = vec![own];
+        match own.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Subdomain(sd)) => {
+                targets.extend(latest_realizers(world, &latest, id));
+                if let Some(domain) = strategic_subdomain_domain(sd, world) {
+                    targets.push(domain);
+                }
+            }
+            Some(pb::entity::Kind::BoundedContext(bc)) => {
+                for sid in bc.realizes.iter().filter_map(|r| r.id.as_ref()) {
+                    if let Some(sub) = find_stored(world, pb::EntityKind::Subdomain, sid) {
+                        targets.push(sub);
+                    }
+                }
+                for se in world {
+                    if let Some(pb::entity::Kind::Domain(d)) = se.entity.kind.as_ref() {
+                        if d.id
+                            .as_ref()
+                            .is_some_and(|did| did.namespace == id.namespace)
+                            && declared_latest(&latest, pb::EntityKind::Domain, d.id.as_ref())
+                        {
+                            targets.push(se);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let current: HashSet<pb::EntityKey> = targets
+            .iter()
+            .filter_map(|t| {
+                Some(pb::EntityKey::new(
+                    entity_kind(&t.entity)?,
+                    entity_id(&t.entity)?,
+                ))
+            })
+            .collect();
+        for target in targets {
+            reached.extend(
+                validate_scenarios(&target.entity, world)
+                    .into_iter()
+                    .map(|issue| (index, issue)),
+            );
+        }
+        for target in replaced_targets(*kind, id, before, world) {
+            let (Some(target_kind), Some(target_id)) =
+                (entity_kind(&target.entity), entity_id(&target.entity))
+            else {
+                continue;
+            };
+            if current.contains(&pb::EntityKey::new(target_kind, target_id)) {
+                continue;
+            }
+            let existing: HashSet<IssueKey> = find_stored(before, target_kind, target_id)
+                .map(|prior| validate_scenarios(&prior.entity, before))
+                .unwrap_or_default()
+                .iter()
+                .map(issue_key)
+                .collect();
+            reached.extend(
+                validate_scenarios(&target.entity, world)
+                    .into_iter()
+                    .filter(|issue| !existing.contains(&issue_key(issue)))
+                    .map(|issue| (index, issue)),
+            );
+        }
+    }
+
+    let own_change: HashMap<(i32, &str, &str, u64), usize> = changes
+        .iter()
+        .enumerate()
+        .map(|(i, (kind, id))| {
+            (
+                (
+                    *kind as i32,
+                    id.namespace.as_str(),
+                    id.slug.as_str(),
+                    id.version,
+                ),
+                i,
+            )
+        })
+        .collect();
+    let mut seen: HashSet<IssueKey> = HashSet::new();
+    let mut by_change: Vec<Vec<pb::ValidationIssue>> = vec![Vec::new(); changes.len()];
+    for (index, issue) in reached {
+        if !seen.insert(issue_key(&issue)) {
+            continue;
+        }
+        let owner = issue
+            .subject
+            .as_ref()
+            .and_then(|s| {
+                let id = s.id.as_ref()?;
+                own_change
+                    .get(&(s.kind, id.namespace.as_str(), id.slug.as_str(), id.version))
+                    .copied()
+            })
+            .unwrap_or(index);
+        by_change[owner].push(issue);
+    }
+    by_change
+}
+
+/// The strategic findings each deletion leaves behind. `before` is the world
+/// with the deletions not yet applied and `after` the world without them; a
+/// finding is reported only when it appears in `after` and not in `before`,
+/// so what a delete reports is what it caused. A deletion covers the
+/// surviving entities whose verdict it can move:
+///
+/// - a domain: the latest surviving version of each subdomain that named it;
+/// - a subdomain: the latest surviving version of each context realizing it
+///   and its domain;
+/// - a bounded context: the subdomains it realized and the domains declared
+///   in its namespace.
+///
+/// A finding is attached to the first deletion that reaches it. Findings
+/// already in `reported` (for instance on a put of the same batch) are not
+/// repeated. Findings are advisory; deletes are never blocked by them.
+#[must_use]
+pub fn strategic_issues_for_deletes(
+    deleted: &[StrategicChange],
+    before: &[StoredEntity],
+    after: &[StoredEntity],
+    reported: &[pb::ValidationIssue],
+) -> Vec<Vec<pb::ValidationIssue>> {
+    let latest_after = latest_strategic_versions(after);
+    let mut seen: HashSet<IssueKey> = reported.iter().map(issue_key).collect();
+    let mut by_delete: Vec<Vec<pb::ValidationIssue>> = vec![Vec::new(); deleted.len()];
+    for (index, (kind, id)) in deleted.iter().enumerate() {
+        let Some(gone) = find_stored(before, *kind, id) else {
+            continue;
+        };
+        let mut targets: Vec<&StoredEntity> = Vec::new();
+        match gone.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Domain(_)) => {
+                targets.extend(latest_subdomains_of(after, &latest_after, id));
+            }
+            Some(pb::entity::Kind::Subdomain(sd)) => {
+                targets.extend(latest_realizers(after, &latest_after, id));
+                if let Some(domain) = strategic_subdomain_domain(sd, after) {
+                    targets.push(domain);
+                }
+            }
+            Some(pb::entity::Kind::BoundedContext(bc)) => {
+                for sid in bc.realizes.iter().filter_map(|r| r.id.as_ref()) {
+                    if let Some(sub) = find_stored(after, pb::EntityKind::Subdomain, sid) {
+                        targets.push(sub);
+                    }
+                }
+                for se in after {
+                    if let Some(pb::entity::Kind::Domain(d)) = se.entity.kind.as_ref() {
+                        if d.id
+                            .as_ref()
+                            .is_some_and(|did| did.namespace == id.namespace)
+                            && declared_latest(&latest_after, pb::EntityKind::Domain, d.id.as_ref())
+                        {
+                            targets.push(se);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        for target in targets {
+            let existing: HashSet<IssueKey> = validate_scenarios(&target.entity, before)
+                .iter()
+                .map(issue_key)
+                .collect();
+            for issue in validate_scenarios(&target.entity, after) {
+                let key = issue_key(&issue);
+                if !existing.contains(&key) && seen.insert(key) {
+                    by_delete[index].push(issue);
+                }
+            }
+        }
+    }
+    by_delete
+}
+
+/// Everything wrong with one model: its own content and the strategic chain
+/// of its namespace, so the findings a model's context inherits from the
+/// problem space are not hidden until someone validates those entities.
+#[must_use]
 pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_model_within(model, all, &Lens::Everything)
+}
+
+/// [`validate_model`] for a caller that reads only the namespaces `lens`
+/// admits. A target in a namespace the lens excludes is absent from `all`
+/// whether or not it exists, so it is reported as outside the caller's
+/// visibility instead of as missing.
+#[must_use]
+pub fn validate_model_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_model_content_within(model, all, lens);
+    if let Some(id) = model.id.as_ref() {
+        issues.extend(strategic_chain_issues_within(
+            [id.namespace.as_str()],
+            all,
+            lens,
+        ));
+    }
+    issues
+}
+
+/// The write-path scenario check over each slice `model` lists in its own
+/// namespace, read against `all` rather than the world the slice was written
+/// into, so a lane or command edit that breaks a stored scenario shows up
+/// before the slice is written again. Also returns the slices checked.
+#[must_use]
+pub(crate) fn validate_model_scenarios_within(
+    model: &pb::EventModel,
+    index: &ScenarioIndex<'_>,
+    lens: &Lens,
+) -> (Vec<pb::ValidationIssue>, HashSet<pb::EntityKey>) {
+    let mut issues = Vec::new();
+    let mut examined: HashSet<pb::EntityKey> = HashSet::new();
+    for member in &model.members {
+        let Some(kind) = pb::EntityKind::try_from(member.kind)
+            .ok()
+            .filter(|k| runs_scenarios(*k))
+        else {
+            continue;
+        };
+        let Some(id) = member
+            .id
+            .as_ref()
+            .filter(|id| outbound_pass_walks(model, id))
+        else {
+            continue;
+        };
+        let key = pb::EntityKey::new(kind, id);
+        // A missing member is the model suite's MEMBER_NOT_FOUND.
+        let Some(stored) = index.by_key.get(&key) else {
+            continue;
+        };
+        if examined.insert(key) {
+            issues.extend(validate_scenarios_indexed(&stored.entity, index, lens));
+        }
+    }
+    (issues, examined)
+}
+
+/// Slice kinds that carry scenarios, so the scenarios check applies to them.
+pub(crate) fn runs_scenarios(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::CommandSlice
+            | pb::EntityKind::ReadModelSlice
+            | pb::EntityKind::AutomationSlice
+    )
+}
+
+/// Stable suite ids reported on [`pb::ValidationCoverage`]. Keep in sync with
+/// `docs/explanation/validation-coverage.md`.
+pub const CHECK_MODEL: &str = "model";
+pub const CHECK_STRATEGIC: &str = "strategic";
+pub const CHECK_STORE_HYGIENE: &str = "store_hygiene";
+pub const CHECK_ARCHITECTURE: &str = "architecture";
+pub const CHECK_SCENARIOS: &str = "scenarios";
+pub const CHECK_REQUEST_SHAPE: &str = "request_shape";
+
+/// Reason when a suite is not part of the write/merge gate.
+pub const REASON_WRITE_PATH: &str = "write_path";
+pub const REASON_MERGE_PATH: &str = "merge_path";
+pub const REASON_KIND_NOT_APPLICABLE: &str = "kind_not_applicable";
+pub const REASON_BLOCKED_BY_HYGIENE: &str = "blocked_by_hygiene";
+pub const REASON_BLOCKED_BY_SCENARIOS: &str = "blocked_by_scenarios";
+
+#[must_use]
+pub fn coverage_check(
+    check_id: impl Into<String>,
+    state: pb::validation_check_result::State,
+    reason: impl Into<String>,
+    subjects_examined: i32,
+) -> pb::ValidationCheckResult {
+    pb::ValidationCheckResult {
+        check_id: check_id.into(),
+        state: state as i32,
+        reason: reason.into(),
+        subjects_examined,
+    }
+}
+
+/// Mark a suite that ran against the loaded snapshot. Truncation makes the
+/// result `PARTIAL` so an empty issue list cannot look complete.
+#[must_use]
+pub fn ran_against_snapshot(
+    check_id: impl Into<String>,
+    subjects_examined: i32,
+    snapshot_truncated: bool,
+) -> pb::ValidationCheckResult {
+    if snapshot_truncated {
+        coverage_check(
+            check_id,
+            pb::validation_check_result::State::Partial,
+            "snapshot_truncated",
+            subjects_examined,
+        )
+    } else {
+        coverage_check(
+            check_id,
+            pb::validation_check_result::State::Completed,
+            "",
+            subjects_examined,
+        )
+    }
+}
+
+#[must_use]
+pub fn validation_coverage(
+    checks: Vec<pb::ValidationCheckResult>,
+    effective_scope: pb::ValidationScope,
+    requested_scope: pb::ValidationScope,
+    snapshot_truncated: bool,
+) -> pb::ValidationCoverage {
+    pb::ValidationCoverage {
+        checks,
+        effective_scope: Some(effective_scope),
+        snapshot_truncated,
+        requested_scope: Some(requested_scope),
+    }
+}
+
+/// Whether a write-path suite ran for a request, and over how many subjects.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SuiteRun {
+    Ran(i32),
+    /// No subject in the request was of a kind the suite applies to.
+    #[default]
+    NotApplicable,
+    /// The suite applied but the request stopped before it ran.
+    NotReached(&'static str),
+}
+
+impl SuiteRun {
+    #[must_use]
+    pub fn over(subjects: usize) -> Self {
+        if subjects == 0 {
+            Self::NotApplicable
+        } else {
+            Self::Ran(i32::try_from(subjects).unwrap_or(i32::MAX))
+        }
+    }
+}
+
+/// What a PutEntity / BatchMutate call actually ran, so its coverage report
+/// cannot claim a suite the request never reached.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WriteSuites {
+    pub architecture: SuiteRun,
+    pub scenarios: SuiteRun,
+    pub strategic: SuiteRun,
+    pub snapshot_truncated: bool,
+}
+
+/// What a MergeBranch call ran once it reached post-merge validation.
+#[derive(Debug, Clone, Copy)]
+pub struct MergeSuites {
+    pub architecture: SuiteRun,
+    pub strategic: SuiteRun,
+    pub snapshot_truncated: bool,
+}
+
+fn suite_check(
+    check_id: &str,
+    run: SuiteRun,
+    snapshot_truncated: bool,
+) -> pb::ValidationCheckResult {
+    match run {
+        SuiteRun::Ran(n) => ran_against_snapshot(check_id, n, snapshot_truncated),
+        SuiteRun::NotApplicable => skipped_check(check_id, REASON_KIND_NOT_APPLICABLE),
+        SuiteRun::NotReached(reason) => skipped_check(check_id, reason),
+    }
+}
+
+fn skipped_check(check_id: &str, reason: &str) -> pb::ValidationCheckResult {
+    coverage_check(
+        check_id,
+        pb::validation_check_result::State::Skipped,
+        reason,
+        0,
+    )
+}
+
+fn write_scope(branch: Option<&str>) -> pb::ValidationScope {
+    pb::ValidationScope {
+        branch: branch.unwrap_or_default().to_owned(),
+        ..Default::default()
+    }
+}
+
+/// Coverage for PutEntity / BatchMutate. `request_shape` always ran to reach
+/// a response; `model` and `store_hygiene` never run on the write path.
+#[must_use]
+pub fn write_validation_coverage(
+    branch: Option<&str>,
+    subjects: i32,
+    suites: WriteSuites,
+) -> pb::ValidationCoverage {
+    let truncated = suites.snapshot_truncated;
+    let checks = vec![
+        ran_against_snapshot(CHECK_REQUEST_SHAPE, subjects, false),
+        suite_check(CHECK_ARCHITECTURE, suites.architecture, false),
+        suite_check(CHECK_SCENARIOS, suites.scenarios, truncated),
+        suite_check(CHECK_STRATEGIC, suites.strategic, truncated),
+        skipped_check(CHECK_MODEL, REASON_WRITE_PATH),
+        skipped_check(CHECK_STORE_HYGIENE, REASON_WRITE_PATH),
+    ];
+    let scope = write_scope(branch);
+    validation_coverage(checks, scope.clone(), scope, truncated)
+}
+
+/// Coverage for MergeBranch once post-merge validation ran. The examined
+/// world is the merge target, so `effective_scope` is the baseline while
+/// `requested_scope` names the merged branch.
+#[must_use]
+pub fn merge_validation_coverage(branch: &str, suites: MergeSuites) -> pb::ValidationCoverage {
+    let truncated = suites.snapshot_truncated;
+    let checks = vec![
+        suite_check(CHECK_ARCHITECTURE, suites.architecture, false),
+        ran_against_snapshot(CHECK_STORE_HYGIENE, 1, truncated),
+        suite_check(CHECK_STRATEGIC, suites.strategic, truncated),
+        skipped_check(CHECK_MODEL, REASON_MERGE_PATH),
+        skipped_check(CHECK_SCENARIOS, REASON_MERGE_PATH),
+        skipped_check(CHECK_REQUEST_SHAPE, REASON_MERGE_PATH),
+    ];
+    validation_coverage(
+        checks,
+        write_scope(None),
+        write_scope(Some(branch)),
+        truncated,
+    )
+}
+
+#[must_use]
+pub fn validate_model_content(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    validate_model_content_within(model, all, &Lens::Everything)
+}
+
+fn outside_visible_scope(
+    subject: Option<pb::EntityRef>,
+    subject_field: String,
+    target: &str,
+) -> pb::ValidationIssue {
+    pb::ValidationIssue {
+        severity: pb::validation_issue::Severity::Info as i32,
+        code: "REF_OUTSIDE_VISIBLE_SCOPE".into(),
+        message: format!(
+            "{target} lies in a namespace outside this caller's visibility, so it was not resolved"
+        ),
+        subject,
+        subject_field,
+        ..Default::default()
+    }
+}
+
+/// Members from another context are validated by their own model, so the
+/// outbound-ref pass only walks members in the model's namespace.
+fn outbound_pass_walks(model: &pb::EventModel, member: &pb::Id) -> bool {
+    model
+        .id
+        .as_ref()
+        .is_none_or(|i| i.namespace == member.namespace)
+}
+
+#[must_use]
+pub fn validate_model_content_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
 
     let known: HashSet<pb::EntityKey> = all
@@ -2305,7 +3728,19 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             continue;
         };
         let key = pb::EntityKey::new(k, id);
-        if !known.contains(&key) {
+        if !lens.admits(&id.namespace) {
+            issues.push(outside_visible_scope(
+                Some(m.clone()),
+                String::new(),
+                &format!(
+                    "member {}:{}/{}@{}",
+                    trogon_atlas_proto::canonical::kind_short(k),
+                    id.namespace,
+                    id.slug,
+                    id.version
+                ),
+            ));
+        } else if !known.contains(&key) {
             issues.push(pb::ValidationIssue {
                 severity: pb::validation_issue::Severity::Error as i32,
                 code: "MEMBER_NOT_FOUND".into(),
@@ -2323,17 +3758,25 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
     }
 
+    let visible_members = || {
+        model.members.iter().filter(move |member| {
+            member
+                .id
+                .as_ref()
+                .is_none_or(|id| lens.admits(&id.namespace))
+        })
+    };
+
     // Invariant: a processor issues exactly ONE command. Branching outcomes
     // (e.g. approve vs reject) are different scenarios and must be modeled as
     // separate automation slices with separate processors.
     //
-    // Invariant: a read model is observed by at most ONE automation. Different
-    // consumer code paths need different data, so each automation observes its
-    // own consumer-shaped view (external webhooks may project into several
-    // ExternalSource read models for this purpose).
+    // Several automations may observe one read model: consumers that read the
+    // same data share it, and READ_MODEL_DUPLICATE_SHAPE catches the clones
+    // that splitting per consumer produces.
     let mut processor_commands: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
     let mut read_model_automations: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::AutomationSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2423,8 +3866,9 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             let mut list: Vec<&str> = slices.iter().map(String::as_str).collect();
             list.sort_unstable();
             // Decision #34: a SharedConsumersAnnotation on the RM declares
-            // that the multi-consumer arrangement is intentional, and the
-            // finding downgrades from Error to Info. An empty doc on the
+            // that the multi-consumer arrangement is intentional. The
+            // finding is Info either way, and a declared one is marked
+            // acknowledged so clients offer no fix. An empty doc on the
             // annotation triggers the doc-empty companion below.
             let (shared_declared, shared_doc_ok) = all
                 .iter()
@@ -2447,9 +3891,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                     let mut present = false;
                     let mut doc_ok = false;
                     for any in &rm.metadata {
-                        if !any
-                            .type_url
-                            .ends_with("trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation")
+                        if !crate::annotation_type::BuiltinAnnotation::SHARED_CONSUMERS.matches(any)
                         {
                             continue;
                         }
@@ -2457,7 +3899,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                         if let Ok(a) = <pb::SharedConsumersAnnotation as prost::Message>::decode(
                             any.value.as_slice(),
                         ) {
-                            doc_ok = !a.doc.is_empty();
+                            doc_ok = is_stated_reason(&a.doc);
                         }
                         break;
                     }
@@ -2465,11 +3907,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 })
                 .unwrap_or((false, false));
 
-            let severity = if shared_declared {
-                pb::validation_issue::Severity::Info as i32
-            } else {
-                pb::validation_issue::Severity::Error as i32
-            };
+            let severity = pb::validation_issue::Severity::Info as i32;
             let code = if shared_declared {
                 "READ_MODEL_SHARED_CONSUMERS"
             } else {
@@ -2484,7 +3922,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 )
             } else {
                 format!(
-                    "read model {}/{}@{} is observed by {} automation slices ({}); each automation observes its own consumer-shaped read model: split the view per consumer, or declare a SharedConsumersAnnotation if the consumers genuinely share the same data",
+                    "read model {}/{}@{} is observed by {} automation slices ({}); declare a SharedConsumersAnnotation naming them, or split the view if a consumer needs a different shape",
                     ns, slug, version, slices.len(), list.join(", ")
                 )
             };
@@ -2497,6 +3935,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                     id: Some(key.id()),
                 }),
                 subject_field: "source_read_models".into(),
+                acknowledged: shared_declared,
                 ..Default::default()
             });
             if shared_declared && !shared_doc_ok {
@@ -2532,7 +3971,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         .filter_map(|r| r.id.as_ref())
         .map(|i| (i.namespace.clone(), i.slug.clone()))
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2576,7 +4015,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         .filter_map(|cr| cr.id.as_ref())
         .map(pb::IdKey::new)
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2635,7 +4074,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             ))
         })
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2835,7 +4274,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(cmd_id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2867,6 +4306,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // Repeated references from the same issuer (e.g. the same UI used by two
     // CommandSlices on the same command) collapse to one entry, by design.
     let mut command_issuers: HashMap<pb::IdKey, BTreeSet<CommandIssuer>> = HashMap::new();
+    let mut issuer_evidence: HashMap<pb::IdKey, Vec<Evidence>> = HashMap::new();
     for se in all {
         match se.entity.kind.as_ref() {
             Some(pb::entity::Kind::CommandSlice(cs)) => {
@@ -2888,6 +4328,16 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                         .entry(pb::IdKey::new(cmd_id))
                         .or_default()
                         .insert(CommandIssuer::ui(ui_id));
+                    if let Some(slice_id) = cs.id.as_ref() {
+                        issuer_evidence
+                            .entry(pb::IdKey::new(cmd_id))
+                            .or_default()
+                            .push(
+                                Evidence::new(Role::Issuer, pb::EntityKind::CommandSlice, slice_id)
+                                    .at("ui")
+                                    .pointing_at(pb::EntityKind::Ui, ui_id),
+                            );
+                    }
                 }
             }
             Some(pb::entity::Kind::AutomationSlice(asl)) => {
@@ -2909,12 +4359,26 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                         .entry(pb::IdKey::new(cmd_id))
                         .or_default()
                         .insert(CommandIssuer::processor(proc_id));
+                    if let Some(slice_id) = asl.id.as_ref() {
+                        issuer_evidence
+                            .entry(pb::IdKey::new(cmd_id))
+                            .or_default()
+                            .push(
+                                Evidence::new(
+                                    Role::Issuer,
+                                    pb::EntityKind::AutomationSlice,
+                                    slice_id,
+                                )
+                                .at("processor")
+                                .pointing_at(pb::EntityKind::Processor, proc_id),
+                            );
+                    }
                 }
             }
             _ => {}
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(cmd_id), Ok(pb::EntityKind::Command)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -2945,6 +4409,11 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 id: Some(cmd_id.clone()),
             }),
             subject_field: String::new(),
+            evidence: finding_evidence::canonical(
+                issuer_evidence
+                    .remove(&pb::IdKey::new(cmd_id))
+                    .unwrap_or_default(),
+            ),
             ..Default::default()
         });
     }
@@ -2959,6 +4428,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // #24 migrations where command@1 and command@2 coexist. Version is not
     // part of the fingerprint: evolving one decision is not causal fan-in.
     let mut event_emitters: HashMap<pb::IdKey, BTreeSet<String>> = HashMap::new();
+    let mut emitter_evidence: HashMap<pb::IdKey, Vec<Evidence>> = HashMap::new();
     for se in all {
         let Some(pb::entity::Kind::CommandSlice(cs)) = se.entity.kind.as_ref() else {
             continue;
@@ -2979,9 +4449,19 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 .entry(pb::IdKey::new(ev_id))
                 .or_default()
                 .insert(format!("command:{}/{}", cmd_id.namespace, cmd_id.slug));
+            if let Some(slice_id) = cs.id.as_ref() {
+                emitter_evidence
+                    .entry(pb::IdKey::new(ev_id))
+                    .or_default()
+                    .push(
+                        Evidence::new(Role::Emitter, pb::EntityKind::CommandSlice, slice_id)
+                            .at("command")
+                            .pointing_at(pb::EntityKind::Command, cmd_id),
+                    );
+            }
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3011,6 +4491,9 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 id: Some(ev_id.clone()),
             }),
             subject_field: String::new(),
+            evidence: finding_evidence::canonical(
+                emitter_evidence.remove(&key).unwrap_or_default(),
+            ),
             ..Default::default()
         });
     }
@@ -3018,7 +4501,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // bookmark that resolves to nothing: it cannot be verified for drift,
     // queried, or rendered. Walk every member entity's metadata. Malformed
     // payloads are treated as absent: they must not panic.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(m_id), Ok(m_kind)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -3032,10 +4515,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             }
             let metadata = entity_metadata(&se.entity);
             for any in metadata {
-                if !any
-                    .type_url
-                    .ends_with("trogonatlas.annotation.v1alpha1.CodeRefAnnotation")
-                {
+                if !crate::annotation_type::BuiltinAnnotation::CODE_REF.matches(any) {
                     continue;
                 }
                 let Ok(cr) =
@@ -3099,10 +4579,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // Malformed payloads are treated as absent: they must not panic.
     let decode_lifecycle_status = |metadata: &[prost_types::Any]| -> Option<String> {
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.annotation.v1alpha1.LifecycleAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::LIFECYCLE.matches(any) {
                 continue;
             }
             if let Ok(ann) =
@@ -3188,6 +4665,19 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 kind: slice_kind as i32,
                 id: Some(slice_id.clone()),
             }),
+            evidence: finding_evidence::canonical([
+                Evidence::new(Role::StalePin, slice_kind, slice_id)
+                    .at(field.clone())
+                    .pointing_at(ref_kind, ref_id),
+                Evidence::new(
+                    Role::LatestVersion,
+                    ref_kind,
+                    &pb::Id {
+                        version: latest,
+                        ..ref_id.clone()
+                    },
+                ),
+            ]),
             subject_field: field,
             ..Default::default()
         }
@@ -3198,16 +4688,13 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // findings accidentally.
     let decode_pinned_ann = |metadata: &[prost_types::Any]| -> Option<pb::PinnedRefAnnotation> {
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.PinnedRefAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::PINNED_REF.matches(any) {
                 continue;
             }
             if let Ok(ann) =
                 <pb::PinnedRefAnnotation as prost::Message>::decode(any.value.as_slice())
             {
-                if !ann.doc.is_empty() {
+                if is_stated_reason(&ann.doc) {
                     return Some(ann);
                 }
             }
@@ -3544,7 +5031,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             _ => None,
         })
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3671,7 +5158,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             _ => {}
         }
     }
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ui_id), Ok(pb::EntityKind::Ui)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3727,7 +5214,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     }
 
     // EVENT_FIELD_UNSOURCED: per emitted event in each CommandSlice.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3817,7 +5304,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // AUTOMATION_COMMAND_FIELD_UNSOURCED: per field of the command an
     // AutomationSlice emits, must be present in the union of fields of
     // source_read_models or annotated as derived.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::AutomationSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3890,7 +5377,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // lanes. Otherwise the RM is lying: the projection cannot
     // populate the field, and any AutomationSlice that consumes the
     // RM is reading a value that doesn't actually exist.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -3899,6 +5386,30 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         let Some(rm) = rms_by_id.get(&pb::IdKey::new(rm_id)) else {
             continue;
         };
+        // An external feed's payload is the source of its fields; no
+        // event inside the model can carry them.
+        if rm
+            .external_source
+            .as_ref()
+            .is_some_and(|src| src.system.is_some())
+        {
+            continue;
+        }
+        if rm
+            .source_events
+            .iter()
+            .filter_map(|sr| sr.id.as_ref())
+            .any(|id| {
+                !lens.admits(&id.namespace)
+                    || events_by_id
+                        .get(&pb::IdKey::new(id))
+                        .and_then(|event| event.swimlane.as_ref())
+                        .and_then(|lane| lane.id.as_ref())
+                        .is_some_and(|lane| !lens.admits(&lane.namespace))
+            })
+        {
+            continue;
+        }
         // Union of (source event field names) + (each source event's
         // lane's state field names).
         let mut available: HashSet<String> = HashSet::new();
@@ -3948,7 +5459,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     //     key cannot have its row identity validated. Surfaced as Info
     //     during the migration window; candidate for Warning once the
     //     store is fully migrated.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4002,6 +5513,53 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
     }
 
+    // ===== PASS: rm_duplicate_shape =====
+    // Read models in one namespace with the same key, fields and source
+    // events are one view drawn several times. External feeds have no
+    // source events to compare, so they are skipped.
+    let mut shape_groups: Vec<(ReadModelShape, Vec<pb::IdKey>)> = Vec::new();
+    for m in visible_members() {
+        let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
+            (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
+        else {
+            continue;
+        };
+        let Some(rm) = rms_by_id.get(&pb::IdKey::new(rm_id)) else {
+            continue;
+        };
+        let Some(shape) = ReadModelShape::of(rm_id, rm, declared(&rm_fields, rm.id.as_ref()))
+        else {
+            continue;
+        };
+        let rm_key = pb::IdKey::new(rm_id);
+        match shape_groups.iter_mut().find(|(s, _)| *s == shape) {
+            Some((_, ids)) if !ids.contains(&rm_key) => ids.push(rm_key),
+            Some(_) => {}
+            None => shape_groups.push((shape, vec![rm_key])),
+        }
+    }
+    for (_, ids) in shape_groups.iter_mut().filter(|(_, ids)| ids.len() > 1) {
+        ids.sort_by(id_key_order);
+        let list: Vec<String> = ids
+            .iter()
+            .map(|k| format!("{}/{}@{}", k.namespace, k.slug, k.version))
+            .collect();
+        issues.push(pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "READ_MODEL_DUPLICATE_SHAPE".into(),
+            message: format!(
+                "read models {} have the same key, fields and source events: merge them into one read model that every consumer observes",
+                list.join(", ")
+            ),
+            subject: Some(pb::EntityRef {
+                kind: pb::EntityKind::ReadModel as i32,
+                id: Some(ids[0].id()),
+            }),
+            subject_field: "schema".into(),
+            ..Default::default()
+        });
+    }
+
     // ===== PASS: rm_slice_key_sourcing =====
     // When a ReadModel declares a non-empty key, every ReadModelSlice
     // that projects into it must source ALL key fields from its
@@ -4015,7 +5573,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     //
     // One issue per (slice, event, missing key field) so the caller
     // can see exactly which (event, field) pair is incomplete.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4050,6 +5608,9 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             let Some(ev_id) = se_ref.event.as_ref().and_then(|r| r.id.as_ref()) else {
                 continue;
             };
+            if !lens.admits(&ev_id.namespace) {
+                continue;
+            }
             let ev_fields: HashSet<&str> = events_by_id
                 .get(&pb::IdKey::new(ev_id))
                 .map(|ev| {
@@ -4101,7 +5662,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // of the slice's emitted_events OR appear in the command's
     // swimlane.state. Otherwise the runtime takes the value in and
     // the model has no record of what was done with it.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(slice_id), Ok(pb::EntityKind::CommandSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4227,14 +5788,15 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         })
         .filter(|ui| {
             ui.metadata.iter().any(|m| {
-                m.type_url
-                    .ends_with("/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation")
+                crate::annotation_type::BuiltinAnnotation::MIXED_SURFACE.matches(m)
+                    && <pb::MixedSurfaceAnnotation as prost::Message>::decode(m.value.as_slice())
+                        .is_ok_and(|a| is_stated_reason(&a.doc))
             })
         })
         .filter_map(|ui| ui.id.as_ref())
         .map(pb::IdKey::new)
         .collect();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::Ui)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
             continue;
@@ -4275,7 +5837,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // Uuidv5IdentityAnnotation on the swimlane itself. Inline expressions
     // ("{uuidv5(...)}") are malformed: register the identity once under a
     // name and reference the name.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(lane_id), Ok(pb::EntityKind::Swimlane)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4333,10 +5895,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
         let mut names: HashSet<String> = HashSet::new();
         for any in &lane.metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.Uuidv5IdentityAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::UUIDV5_IDENTITY.matches(any) {
                 continue;
             }
             if let Ok(a) =
@@ -4408,7 +5967,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // consume. Within a storyboard, a read-model slice must come after the
     // slice emitting its source event, and no command or automation slice may
     // run in between, otherwise the board can no longer tell the order.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(sb_ref_id), Ok(pb::EntityKind::Storyboard)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4438,21 +5997,37 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         });
         // Storyboard hygiene: an honest entry (what is observed, by whom) and
         // an outcome (the terminal facts) are what make sub-workflows chain.
-        if sb
-            .entry
-            .as_ref()
-            .and_then(|e| e.read_model.as_ref())
-            .is_none()
-        {
+        let missing_entry = match sb.entry.as_ref() {
+            None => Some((
+                "declares no entry; say which read model is observed and by whom (human persona+ui or automation processor)",
+                "entry",
+            )),
+            Some(entry) => match (entry.read_model.is_some(), entry.observer.is_some()) {
+                (false, false) => Some((
+                    "entry names neither a read model nor an observer; say which read model is observed and by whom (human persona+ui or automation processor)",
+                    "entry",
+                )),
+                (false, true) => Some((
+                    "entry names an observer but no read model it observes; say which read model is observed",
+                    "entry.read_model",
+                )),
+                (true, false) => Some((
+                    "entry names a read model but no observer; say who observes it (human persona+ui or automation processor)",
+                    "entry.observer",
+                )),
+                (true, true) => None,
+            },
+        };
+        if let Some((detail, subject_field)) = missing_entry {
             issues.push(pb::ValidationIssue {
                 severity: pb::validation_issue::Severity::Warning as i32,
                 code: "STORYBOARD_MISSING_ENTRY".into(),
                 message: format!(
-                    "storyboard {}/{}@{} declares no entry; say which read model is observed and by whom (human persona+ui or automation processor)",
+                    "storyboard {}/{}@{} {detail}",
                     sb_ref_id.namespace, sb_ref_id.slug, sb_ref_id.version,
                 ),
                 subject: sb_subject.clone(),
-                subject_field: "entry".into(),
+                subject_field: subject_field.into(),
                 ..Default::default()
             });
         }
@@ -4469,8 +6044,9 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 ..Default::default()
             });
         }
-        let mut ordered: Vec<(pb::EntityKind, &pb::Entity)> = Vec::new();
-        for sref in &sb.slices {
+        // (position in sb.slices, kind, slice) for every slice that resolves.
+        let mut ordered: Vec<(usize, pb::EntityKind, &pb::Entity)> = Vec::new();
+        for (position, sref) in sb.slices.iter().enumerate() {
             let Some(sid) = sref.id.as_ref() else {
                 continue;
             };
@@ -4494,7 +6070,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 }
                 let i = entity_id(&se.entity)?;
                 (i.namespace == sid.namespace && i.slug == sid.slug && i.version == sid.version)
-                    .then_some((k, &se.entity))
+                    .then_some((position, k, &se.entity))
             });
             if let Some(f) = found {
                 ordered.push(f);
@@ -4512,7 +6088,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 *last_ui = Some(ui_key);
                 *carrier = false;
             };
-            for (_, e) in &ordered {
+            for (_, _, e) in &ordered {
                 match e.kind.as_ref() {
                     Some(pb::entity::Kind::CommandSlice(cs)) => {
                         if let Some(uid) = cs
@@ -4548,23 +6124,30 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             }
         }
 
-        let mut emit_idx: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, (_, e)) in ordered.iter().enumerate() {
+        let occurrence = |i: usize| Occurrence::new(sb_ref_id, ordered[i].0);
+        // Emitting slices per event: (index into `ordered`, slice kind, slice
+        // id, field path of the emitted event).
+        let mut emit_idx: HashMap<String, Vec<(usize, pb::EntityKind, &pb::Id, String)>> =
+            HashMap::new();
+        for (i, (_, k, e)) in ordered.iter().enumerate() {
             if let Some(pb::entity::Kind::CommandSlice(cs)) = e.kind.as_ref() {
-                for ev in cs
-                    .emitted_events
-                    .iter()
-                    .filter_map(|x| x.event.as_ref())
-                    .filter_map(|r| r.id.as_ref())
-                {
+                let Some(cs_id) = cs.id.as_ref() else {
+                    continue;
+                };
+                for (m, ev) in cs.emitted_events.iter().enumerate().filter_map(|(m, x)| {
+                    x.event
+                        .as_ref()
+                        .and_then(|r| r.id.as_ref())
+                        .map(|ev| (m, ev))
+                }) {
                     emit_idx
                         .entry(format!("{}/{}@{}", ev.namespace, ev.slug, ev.version))
                         .or_default()
-                        .push(i);
+                        .push((i, *k, cs_id, format!("emitted_events[{m}]")));
                 }
             }
         }
-        for (i, (_, e)) in ordered.iter().enumerate() {
+        for (i, (_, _, e)) in ordered.iter().enumerate() {
             let Some(pb::entity::Kind::ReadModelSlice(rs)) = e.kind.as_ref() else {
                 continue;
             };
@@ -4575,18 +6158,33 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 kind: pb::EntityKind::ReadModelSlice as i32,
                 id: Some(rs_id.clone()),
             });
-            for ev in rs
-                .source_events
-                .iter()
-                .filter_map(|x| x.event.as_ref())
-                .filter_map(|r| r.id.as_ref())
-            {
+            for (n, ev) in rs.source_events.iter().enumerate().filter_map(|(n, x)| {
+                x.event
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .map(|ev| (n, ev))
+            }) {
                 let key = format!("{}/{}@{}", ev.namespace, ev.slug, ev.version);
+                let emitters = emit_idx.get(&key).map(Vec::as_slice).unwrap_or_default();
+                let consumer = || {
+                    Evidence::new(Role::Consumer, pb::EntityKind::ReadModelSlice, rs_id)
+                        .at(format!("source_events[{n}]"))
+                        .pointing_at(pb::EntityKind::Event, ev)
+                        .in_storyboard(occurrence(i))
+                };
+                let emitter = |role: Role, (j, kind, id, field): &(usize, pb::EntityKind, &pb::Id, String)| {
+                    Evidence::new(role, *kind, id)
+                        .at(field.clone())
+                        .pointing_at(pb::EntityKind::Event, ev)
+                        .in_storyboard(occurrence(*j))
+                };
                 // Nearest preceding emitter (max j where j < i), not last overall.
-                let j = emit_idx
-                    .get(&key)
-                    .and_then(|idxs| idxs.iter().copied().rev().find(|&j| j < i));
-                let Some(j) = j else {
+                let nearest = emitters.iter().rev().find(|(j, ..)| *j < i);
+                let Some(nearest) = nearest else {
+                    let later = emitters
+                        .iter()
+                        .filter(|(j, ..)| *j > i)
+                        .map(|em| emitter(Role::LaterEmitter, em));
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PROJECTION_BEFORE_EMITTER".into(),
@@ -4597,21 +6195,34 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                         ),
                         subject: subject.clone(),
                         subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(
+                            std::iter::once(consumer()).chain(later),
+                        ),
                         ..Default::default()
                     });
                     continue;
                 };
-                let blockers: Vec<String> = ordered[j + 1..i]
+                let j = nearest.0;
+                let blockers: Vec<(usize, pb::EntityKind, &pb::Id)> = ordered[j + 1..i]
                     .iter()
-                    .filter(|(k2, _)| {
+                    .enumerate()
+                    .filter(|(_, (_, k2, _))| {
                         matches!(
                             k2,
                             pb::EntityKind::CommandSlice | pb::EntityKind::AutomationSlice
                         )
                     })
-                    .filter_map(|(_, be)| entity_id(be).map(|bid| bid.slug.clone()))
+                    .filter_map(|(offset, (_, k2, be))| {
+                        entity_id(be).map(|bid| (j + 1 + offset, *k2, bid))
+                    })
                     .collect();
                 if !blockers.is_empty() {
+                    let names: Vec<&str> =
+                        blockers.iter().map(|(_, _, b)| b.slug.as_str()).collect();
+                    let intervening = blockers.iter().map(|(b, kind, bid)| {
+                        Evidence::new(Role::InterveningAction, *kind, bid)
+                            .in_storyboard(occurrence(*b))
+                    });
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PROJECTION_NOT_ADJACENT".into(),
@@ -4619,11 +6230,107 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                             "read model slice {}/{}@{} consumes event {key}, but {} action slice(s) ({}) run between the emitter and the projection in storyboard {}/{}@{}; project an event into its read models before the next command or automation acts",
                             rs_id.namespace, rs_id.slug, rs_id.version,
                             blockers.len(),
-                            blockers.join(", "),
+                            names.join(", "),
                             sb_ref_id.namespace, sb_ref_id.slug, sb_ref_id.version,
                         ),
                         subject: subject.clone(),
                         subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(
+                            [consumer(), emitter(Role::EarlierEmitter, nearest)]
+                                .into_iter()
+                                .chain(intervening),
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // Updates from divergent branches are separate slices. A read
+    // model slice that projects two alternative successors of one lane
+    // transition merges the fork into one moment.
+    {
+        let (event_lane, lane_transitions) = lane_maps(all);
+        for m in visible_members() {
+            let (Some(rs_id), Ok(pb::EntityKind::ReadModelSlice)) =
+                (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
+            else {
+                continue;
+            };
+            let Some(rs) = all.iter().find_map(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::ReadModelSlice(rs)) if rs.id.as_ref() == Some(rs_id) => {
+                    Some(rs)
+                }
+                _ => None,
+            }) else {
+                continue;
+            };
+            let sources: Vec<(usize, &pb::Id)> = rs
+                .source_events
+                .iter()
+                .enumerate()
+                .filter_map(|(n, x)| Some((n, x.event.as_ref()?.id.as_ref()?)))
+                .collect();
+            let mut reported: HashSet<(pb::IdKey, Vec<pb::IdKey>)> = HashSet::new();
+            for (n, ev) in &sources {
+                let Some(lane) = event_lane.get(&pb::IdKey::new(ev)) else {
+                    continue;
+                };
+                let Some(transitions) = lane_transitions.get(&pb::IdKey::new(lane)) else {
+                    continue;
+                };
+                for t in *transitions {
+                    let next: Vec<&pb::Id> = t
+                        .next
+                        .iter()
+                        .filter_map(|x| x.event.as_ref()?.id.as_ref())
+                        .collect();
+                    if !next.contains(ev) {
+                        continue;
+                    }
+                    let merged: Vec<(usize, &pb::Id)> = sources
+                        .iter()
+                        .filter(|(_, s)| next.iter().any(|x| x == s))
+                        .filter(|(_, s)| event_lane.get(&pb::IdKey::new(s)) == Some(lane))
+                        .copied()
+                        .collect();
+                    if merged.len() < 2
+                        || merged[0].0 != *n
+                        || merged.iter().all(|(_, source)| *source == merged[0].1)
+                    {
+                        continue;
+                    }
+                    let group = (
+                        pb::IdKey::new(lane),
+                        merged.iter().map(|(_, s)| pb::IdKey::new(s)).collect(),
+                    );
+                    if !reported.insert(group) {
+                        continue;
+                    }
+                    let names: Vec<String> = merged
+                        .iter()
+                        .map(|(_, s)| format!("{}/{}@{}", s.namespace, s.slug, s.version))
+                        .collect();
+                    issues.push(pb::ValidationIssue {
+                        severity: pb::validation_issue::Severity::Warning as i32,
+                        code: "PROJECTION_MERGES_BRANCHES".into(),
+                        message: format!(
+                            "read model slice {}/{}@{} projects {} which are alternative successors on lane {}/{}@{}; divergent branches are separate slices: split into one projection slice per branch, or emit one event with an outcome field (this drops the fork from the lane transitions)",
+                            rs_id.namespace, rs_id.slug, rs_id.version,
+                            names.join(" and "),
+                            lane.namespace, lane.slug, lane.version,
+                        ),
+                        subject: Some(pb::EntityRef {
+                            kind: pb::EntityKind::ReadModelSlice as i32,
+                            id: Some(rs_id.clone()),
+                        }),
+                        subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(merged.iter().map(|(k, s)| {
+                            Evidence::new(Role::Consumer, pb::EntityKind::ReadModelSlice, rs_id)
+                                .at(format!("source_events[{k}]"))
+                                .pointing_at(pb::EntityKind::Event, s)
+                        })),
                         ..Default::default()
                     });
                 }
@@ -4635,7 +6342,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // affordances, deep links). A hop the storyboards already explain via
     // a command path is derived; declaring it again is managed duplication
     // that drifts the moment the storyboard changes.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ui_id), Ok(pb::EntityKind::Ui)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4678,6 +6385,19 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 continue;
             };
             if !known.contains(&pb::EntityKey::new(pb::EntityKind::Ui, to_id)) {
+                if !lens.admits(&to_id.namespace) {
+                    if !outbound_pass_walks(model, ui_id) {
+                        issues.push(outside_visible_scope(
+                            Some(pb::EntityRef {
+                                kind: pb::EntityKind::Ui as i32,
+                                id: Some(ui_id.clone()),
+                            }),
+                            format!("transitions[{ti}].to"),
+                            &format!("ui:{}/{}@{}", to_id.namespace, to_id.slug, to_id.version),
+                        ));
+                    }
+                    continue;
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Error as i32,
                     code: "UI_TRANSITION_DANGLING".into(),
@@ -4745,7 +6465,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         pb::EntityKind::AutomationSlice,
         pb::EntityKind::UiSlice,
     ];
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -4770,10 +6490,47 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         });
     }
 
+    for m in visible_members() {
+        let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
+            continue;
+        };
+        if !runs_scenarios(k) {
+            continue;
+        }
+        let Some(se) = find_stored(all, k, id) else {
+            continue;
+        };
+        let scenario_count = match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::CommandSlice(s)) => s.scenarios.len(),
+            Some(pb::entity::Kind::ReadModelSlice(s)) => s.scenarios.len(),
+            Some(pb::entity::Kind::AutomationSlice(s)) => s.scenarios.len(),
+            _ => continue,
+        };
+        if scenario_count == 0 {
+            issues.push(pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Info as i32,
+                code: "SLICE_NO_SCENARIOS".into(),
+                message: format!(
+                    "{}:{}/{}@{} has no given/when/then scenarios",
+                    pb::canonical::kind_short(k),
+                    id.namespace,
+                    id.slug,
+                    id.version,
+                ),
+                subject: Some(pb::EntityRef {
+                    kind: m.kind,
+                    id: Some(id.clone()),
+                }),
+                subject_field: "scenarios".into(),
+                ..Default::default()
+            });
+        }
+    }
+
     // A storyboard walking a slice the EventModel has not claimed is a
     // curation gap: the storyboard knows the moment, the model does
     // not. Mirror of SLICE_NOT_IN_STORYBOARD.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(sb_id), Ok(pb::EntityKind::Storyboard)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4831,7 +6588,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     //
     // (rm key) → events some in-model rmSlice consumes for it
     let mut rm_consumed_by_slices: HashMap<pb::IdKey, HashSet<pb::IdKey>> = HashMap::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rs_id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -4926,7 +6683,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // is the workflow-state pattern: the entity says "I consume X" but
     // the curated story never walks that projection. Either add a slice
     // or drop the event from the RM.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5034,7 +6791,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // subscription pattern and validated by their owning model. Skip
     // them here.
     let mut events_consumed_locally: HashSet<pb::IdKey> = HashSet::new();
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(pb::EntityKind::ReadModelSlice)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5065,7 +6822,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
     }
     let model_ns = model.id.as_ref().map_or("", |i| i.namespace.as_str());
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(ev_id), Ok(pb::EntityKind::Event)) =
             (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
         else {
@@ -5097,7 +6854,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         });
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -5120,12 +6877,23 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         // subscription view names) is validated by ITS model; walking its
         // internals from here only produces noise about a boundary we
         // deliberately do not own.
-        if let Some(model_ns) = model.id.as_ref().map(|i| i.namespace.as_str()) {
-            if id.namespace != model_ns {
-                continue;
-            }
+        if !outbound_pass_walks(model, id) {
+            continue;
         }
-        for o in outbound_refs(&se.entity) {
+        let Ok(outbound) = try_outbound_refs(&se.entity) else {
+            issues.push(pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Error as i32,
+                code: "ENTITY_METADATA_INVALID".into(),
+                message: "Native metadata is malformed".into(),
+                subject: Some(pb::EntityRef {
+                    kind: k as i32,
+                    id: Some(id.clone()),
+                }),
+                ..Default::default()
+            });
+            continue;
+        };
+        for o in outbound {
             // Bounded contexts touch at exactly ONE seam: an upstream EVENT
             // flowing into a downstream subscription READ MODEL (the
             // translation pattern). Any other cross-namespace structural
@@ -5135,11 +6903,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             if o.to_id.namespace != id.namespace {
                 let seam = o.from_field.starts_with("source_events[")
                     || o.from_field.starts_with("calls[")
-                    // Strategic mapping, not behavioral coupling: contexts
-                    // point at the problem space they realize (Decision #29)
-                    // and record the agreement behind each seam (Decision #30).
-                    || o.from_field.starts_with("realizes[")
-                    || o.from_field.starts_with("relationships[")
+                    || is_strategic_mapping_field(k, &o.from_field)
                     || o.from_field == "external_source.system"
                     // Automation slices are the wire that crosses contexts:
                     // a choreographer subscribes to an upstream event (via
@@ -5220,6 +6984,19 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 Some(k) => trogon_atlas_proto::canonical::kind_short(k),
             };
             match resolved {
+                None if !lens.admits(&o.to_id.namespace) => {
+                    issues.push(outside_visible_scope(
+                        Some(pb::EntityRef {
+                            kind: k as i32,
+                            id: Some(id.clone()),
+                        }),
+                        o.from_field.clone(),
+                        &format!(
+                            "{}:{}/{}@{}",
+                            to_kind_label, o.to_id.namespace, o.to_id.slug, o.to_id.version,
+                        ),
+                    ));
+                }
                 None => {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
@@ -5252,6 +7029,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                     let declared_seam = o.to_id.namespace != id.namespace
                         && (o.from_field.starts_with("source_events[")
                             || o.from_field.starts_with("calls[")
+                            || is_strategic_mapping_field(k, &o.from_field)
                             || o.from_field == "external_source.system"
                             || o.from_field == "emitted_command"
                             || o.from_field.starts_with("outcome.events[")
@@ -5305,7 +7083,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             set.insert(pb::EntityKey::new(kind, i));
         }
     };
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -5493,7 +7271,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         pb::EntityKind::Ui,
         pb::EntityKind::Persona,
     ];
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -5527,15 +7305,12 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         let mut orphan_doc: Option<String> = None;
         let mut orphan_present = false;
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.OrphanAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::ORPHAN.matches(any) {
                 continue;
             }
             orphan_present = true;
             if let Ok(a) = <pb::OrphanAnnotation as prost::Message>::decode(any.value.as_slice()) {
-                if !a.doc.is_empty() {
+                if is_stated_reason(&a.doc) {
                     orphan_doc = Some(a.doc);
                     break;
                 }
@@ -5593,11 +7368,16 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // metadata: an open design question, or a belief the design proceeds
     // on that nobody has confirmed. Unlike the orphan walk above, this is
     // not restricted to a handful of entity kinds: either annotation can
-    // land on any member.
-    for m in &model.members {
+    // land on any member. A member listed twice still reports each
+    // annotation once.
+    let mut annotated = HashSet::new();
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
+        if !annotated.insert((k, &id.namespace, &id.slug, id.version)) {
+            continue;
+        }
         let Some(se) = all.iter().find(|se| {
             matches!(
                 (entity_kind(&se.entity), entity_id(&se.entity)),
@@ -5628,12 +7408,13 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             &label,
             &mut issues,
         );
+        push_scenario_annotation_findings(&se.entity, subject.as_ref(), &mut issues);
     }
 
     // Decision #33: shape is declared, not inferred. Two entities
     // pointing at the same schema `type_url` are nominally same-type
     // by declaration, so no twin warning is needed.
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -5682,7 +7463,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         }
     }
 
-    for m in &model.members {
+    for m in visible_members() {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
@@ -5736,7 +7517,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                     });
                     continue;
                 };
-                if ann.doc.is_empty() {
+                if !is_stated_reason(&ann.doc) {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PII_DOC_MISSING".into(),
@@ -6154,7 +7935,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 false
             };
 
-        for m in &model.members {
+        for m in visible_members() {
             let (Some(sli_id), Ok(pb::EntityKind::ServiceLevelIndicator)) =
                 (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
             else {
@@ -6175,7 +7956,18 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             let mut journey_end: Option<pb::Id> = None;
             let mut journey_correlate_on: Vec<String> = Vec::new();
 
-            match sli.connection.as_ref().and_then(|c| c.kind.as_ref()) {
+            let connection = sli.connection.as_ref().and_then(|c| c.kind.as_ref());
+            let slice_target = match connection {
+                Some(pb::connection::Kind::CommandHandling(ch)) => ch.command_slice.as_ref(),
+                Some(pb::connection::Kind::Projection(p)) => p.read_model_slice.as_ref(),
+                Some(pb::connection::Kind::Reaction(r)) => r.automation_slice.as_ref(),
+                Some(pb::connection::Kind::Display(d)) => d.ui_slice.as_ref(),
+                _ => None,
+            };
+            let connection_visible = slice_target
+                .and_then(|slice| slice.id.as_ref())
+                .is_none_or(|id| lens.admits(&id.namespace));
+            match connection.filter(|_| connection_visible) {
                 Some(pb::connection::Kind::CommandHandling(ch)) => {
                     let Some(slice_id) = ch.command_slice.as_ref().and_then(|s| s.id.as_ref())
                     else {
@@ -6536,7 +8328,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             }
         }
 
-        for m in &model.members {
+        for m in visible_members() {
             let (Some(slo_id), Ok(pb::EntityKind::ServiceLevelObjective)) =
                 (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
             else {
@@ -6551,20 +8343,26 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             });
             let label = format!("{}/{}@{}", slo_id.namespace, slo_id.slug, slo_id.version);
 
-            let is_latency = slo
+            let indicator_visible = slo
                 .indicator
                 .as_ref()
                 .and_then(|r| r.id.as_ref())
-                .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
-                .is_some_and(|sli| {
-                    matches!(
-                        sli.measure,
-                        Some(pb::service_level_indicator::Measure::Latency(_))
-                    )
-                });
+                .is_none_or(|id| lens.admits(&id.namespace));
+            let is_latency = indicator_visible.then(|| {
+                slo.indicator
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .and_then(|id| slis_by_id.get(&pb::IdKey::new(id)))
+                    .is_some_and(|sli| {
+                        matches!(
+                            sli.measure,
+                            Some(pb::service_level_indicator::Measure::Latency(_))
+                        )
+                    })
+            });
 
             for (i, obj) in slo.objectives.iter().enumerate() {
-                if is_latency && obj.threshold.is_none() {
+                if is_latency == Some(true) && obj.threshold.is_none() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
@@ -6576,7 +8374,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                         ..Default::default()
                     });
                 }
-                if !is_latency && obj.threshold.is_some() {
+                if is_latency == Some(false) && obj.threshold.is_some() {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "SLO_THRESHOLD_MISMATCH".into(),
@@ -6856,6 +8654,7 @@ mod transition_tests {
                     next: next
                         .iter()
                         .map(|n| pb::swimlane::transition::Next {
+                            connection_id: None,
                             event: Some(pb::EventRef { id: Some(id(n)) }),
                             doc: "guard".into(),
                             metadata: Vec::new(),
@@ -7060,6 +8859,15 @@ mod scenario_gap_tests {
     }
 }
 
+/// Strategic mapping, not behavioral coupling: contexts point at the problem
+/// space they realize (Decision #29) and record the agreement behind each seam
+/// (Decision #30). Shared by the boundary check and CROSS_MODEL_REF so the two
+/// seam lists cannot drift.
+fn is_strategic_mapping_field(kind: pb::EntityKind, from_field: &str) -> bool {
+    kind == pb::EntityKind::BoundedContext
+        && (from_field.starts_with("realizes[") || from_field.starts_with("relationships["))
+}
+
 #[cfg(test)]
 mod boundary_tests {
     use super::*;
@@ -7101,6 +8909,160 @@ mod boundary_tests {
         issues.iter().filter(|i| i.code == code).count()
     }
 
+    fn subscriber(source_ns: &str) -> (pb::EventModel, pb::Entity) {
+        let view = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("downstream", "orders.delivered")),
+                title: "orders.delivered".into(),
+                source_events: vec![pb::EventRef {
+                    id: Some(id(source_ns, "order.fulfilled")),
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::ReadModel,
+                "downstream",
+                "orders.delivered",
+            )],
+            ..Default::default()
+        };
+        (model, view)
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn lens_over(namespaces: &[&str]) -> Lens {
+        Lens::Only(std::sync::Arc::new(
+            namespaces
+                .iter()
+                .map(|ns| trogon_atlas_core::NamespaceId::parse(ns).unwrap())
+                .collect(),
+        ))
+    }
+
+    #[test]
+    fn missing_target_inside_the_visible_scope_is_dangling() {
+        let (model, view) = subscriber("downstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn visible_cross_namespace_seam_resolves() {
+        let (model, view) = subscriber("upstream");
+        let all = vec![stored(view), stored(event("upstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream", "upstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn target_outside_the_visible_scope_is_not_called_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn member_outside_the_visible_scope_is_not_called_missing() {
+        let (mut model, view) = subscriber("downstream");
+        model
+            .members
+            .push(member(pb::EntityKind::Event, "upstream", "order.fulfilled"));
+        let all = vec![stored(view), stored(event("downstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "MEMBER_NOT_FOUND"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_transition_outside_the_visible_scope_is_not_called_dangling() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("downstream", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "downstream", "home")],
+            ..Default::default()
+        };
+        let issues = validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_member_from_another_visible_namespace_classifies_its_hidden_transition() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("shell", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "shell", "home")],
+            ..Default::default()
+        };
+        let issues =
+            validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream", "shell"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(outside[0].subject_field, "transitions[0].to");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn full_visibility_reports_a_missing_cross_namespace_target_as_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &Lens::Everything);
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
     #[test]
     fn subscription_view_seam_is_legal() {
         // downstream read model sources an upstream event: the ONE seam.
@@ -7133,6 +9095,123 @@ mod boundary_tests {
             "{issues:?}"
         );
         assert_eq!(count(&issues, "CROSS_MODEL_REF"), 0); // declared seam: legal, silent
+    }
+
+    fn assert_seam_is_silent(issues: &[pb::ValidationIssue]) {
+        assert_eq!(count(issues, "CROSS_MODEL_REF"), 0, "{issues:?}");
+        assert_eq!(
+            count(issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    fn bc_with(ns: &str, f: impl FnOnce(&mut pb::BoundedContext)) -> pb::Entity {
+        let mut bc = pb::BoundedContext {
+            id: Some(id(ns, ns)),
+            title: ns.into(),
+            ..Default::default()
+        };
+        f(&mut bc);
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::BoundedContext(bc)),
+        }
+    }
+
+    fn model_with_bc(ns: &str) -> pb::EventModel {
+        pb::EventModel {
+            id: Some(id(ns, "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::BoundedContext, ns, ns)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn realizes_into_other_namespace_is_declared_seam() {
+        let bc = bc_with("acme-orders", |bc| {
+            bc.realizes = vec![pb::SubdomainRef {
+                id: Some(id("acme", "orders")),
+            }];
+        });
+        let subdomain = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Subdomain(pb::Subdomain {
+                id: Some(id("acme", "orders")),
+                title: "orders".into(),
+                ..Default::default()
+            })),
+        };
+        let issues = validate_model(
+            &model_with_bc("acme-orders"),
+            &[stored(bc), stored(subdomain)],
+        );
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn relationship_to_other_namespace_is_declared_seam() {
+        let down = bc_with("acme-billing", |bc| {
+            bc.relationships = vec![pb::bounded_context::ContextRelationship {
+                upstream: Some(pb::BoundedContextRef {
+                    id: Some(id("acme-orders", "acme-orders")),
+                }),
+                ..Default::default()
+            }];
+        });
+        let up = bc_with("acme-orders", |_| {});
+        let issues = validate_model(&model_with_bc("acme-billing"), &[stored(down), stored(up)]);
+        assert_seam_is_silent(&issues);
+    }
+
+    #[test]
+    fn component_relationship_to_other_namespace_is_not_strategic_seam() {
+        let source_id = id("acme-orders", "order-service");
+        let target_id = id("acme-billing", "billing-service");
+        let source = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(source_id.clone()),
+                title: "order-service".into(),
+                relationships: vec![pb::ArchitecturalRelationship {
+                    target: Some(pb::ArchitecturalEndpoint {
+                        target: Some(pb::architectural_endpoint::Target::Component(
+                            pb::ComponentRef {
+                                id: Some(target_id.clone()),
+                            },
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let target = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(target_id),
+                title: "billing-service".into(),
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("acme-orders", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::Component,
+                "acme-orders",
+                "order-service",
+            )],
+            ..Default::default()
+        };
+        let issues = validate_model(&model, &[stored(source), stored(target)]);
+        assert_eq!(
+            count(&issues, "CROSS_MODEL_BOUNDARY_VIOLATION"),
+            1,
+            "{issues:?}"
+        );
+        assert_eq!(count(&issues, "CROSS_MODEL_REF"), 1, "{issues:?}");
     }
 
     #[test]
@@ -7371,6 +9450,129 @@ mod context_root_tests {
                 .count(),
             1
         );
+    }
+
+    fn stored(entity: pb::Entity) -> StoredEntity {
+        StoredEntity {
+            entity,
+            etag: "1".into(),
+        }
+    }
+
+    #[test]
+    fn store_flags_only_the_diverging_context() {
+        let all = vec![
+            stored(bc("acme-probe", "acme-probe")),
+            stored(bc("acme-probe", "billing")),
+        ];
+        let flagged: Vec<_> = validate_store(&all)
+            .into_iter()
+            .filter(|i| i.code == "CONTEXT_SLUG_MISMATCH")
+            .collect();
+        assert_eq!(flagged.len(), 1, "{flagged:?}");
+        assert_eq!(
+            flagged[0]
+                .subject
+                .as_ref()
+                .and_then(|s| s.id.as_ref())
+                .map(|id| id.slug.as_str()),
+            Some("billing"),
+        );
+        assert_eq!(
+            flagged[0].severity,
+            pb::validation_issue::Severity::Error as i32
+        );
+    }
+}
+
+#[cfg(test)]
+mod mixed_surface_tests {
+    use prost::Message as _;
+
+    use super::*;
+
+    fn id(slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: "t".into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn stored(kind: pb::entity::Kind) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(kind),
+            },
+            etag: "1".into(),
+        }
+    }
+
+    fn edge() -> pb::UiEdge {
+        pb::UiEdge {
+            ui: Some(pb::UiRef {
+                id: Some(id("order-ticket")),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn issues_for(doc: &str) -> Vec<pb::ValidationIssue> {
+        let all = vec![
+            stored(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("order-ticket")),
+                title: "order ticket".into(),
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation"
+                            .into(),
+                    value: pb::MixedSurfaceAnnotation { doc: doc.into() }.encode_to_vec(),
+                }],
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(id("cancel-order")),
+                ui: Some(edge()),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::UiSlice(pb::UiSlice {
+                id: Some(id("show-order")),
+                ui: Some(edge()),
+                ..Default::default()
+            })),
+        ];
+        let model = pb::EventModel {
+            id: Some(id("m")),
+            title: "m".into(),
+            members: vec![pb::EntityRef {
+                kind: pb::EntityKind::Ui as i32,
+                id: Some(id("order-ticket")),
+            }],
+            ..Default::default()
+        };
+        validate_model(&model, &all)
+    }
+
+    fn mixed(issues: &[pb::ValidationIssue]) -> usize {
+        issues
+            .iter()
+            .filter(|i| i.code == "UI_USED_AS_INPUT_AND_OUTPUT")
+            .count()
+    }
+
+    #[test]
+    fn stated_reason_suppresses_mixed_surface() {
+        let issues = issues_for("click a row to cancel, the row shows its fills");
+        assert_eq!(mixed(&issues), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn blank_reason_does_not_suppress_mixed_surface() {
+        for doc in BLANK_DOCS {
+            let issues = issues_for(doc);
+            assert_eq!(mixed(&issues), 1, "{doc:?}: {issues:?}");
+        }
     }
 }
 
@@ -7785,6 +9987,32 @@ mod command_issuer_tests {
     }
 
     #[test]
+    fn multiple_issuers_evidence_names_every_wiring_slice_and_its_issuer() {
+        let all = vec![
+            stored(command("post")),
+            stored(ui("composer")),
+            stored(processor("auto-poster")),
+            stored(automation_slice("auto-slice", "auto-poster", "post")),
+            stored(command_slice_with_ui("post-slice-b", "composer", "post")),
+            stored(command_slice_with_ui("post-slice-a", "composer", "post")),
+        ];
+        let issues = validate_model(&model_with_command("post"), &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "COMMAND_MULTIPLE_ISSUERS")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        let ns = &id("x").namespace;
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                format!("issuer command_slice:{ns}/post-slice-a@1.ui -> ui:{ns}/composer@1"),
+                format!("issuer command_slice:{ns}/post-slice-b@1.ui -> ui:{ns}/composer@1"),
+                format!("issuer automation_slice:{ns}/auto-slice@1.processor -> processor:{ns}/auto-poster@1"),
+            ],
+        );
+    }
+
+    #[test]
     fn two_distinct_processors_error() {
         let all = vec![
             stored(command("retry")),
@@ -8056,50 +10284,52 @@ mod information_completeness_tests {
     // annotation silently suppress EVENT_FIELD_UNSOURCED.
     #[test]
     fn empty_doc_derived_field_annotation_does_not_silence_unsourced() {
-        let empty_derived = pb::FieldSpec {
-            name: "placed_at".into(),
-            r#type: Some(pb::FieldType {
-                kind: Some(timestamp_kind()),
-            }),
-            metadata: vec![prost_types::Any {
-                type_url:
-                    "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation"
-                        .into(),
-                value: pb::DerivedFieldAnnotation {
-                    doc: String::new(),
-                    kind: 0,
-                }
-                .encode_to_vec(),
-            }],
-            ..Default::default()
-        };
-        let all = vec![
-            stored(lane("order", Vec::new())),
-            stored(command(
-                "place-order",
-                "order",
-                vec![field("order_id", string_kind())],
-            )),
-            stored(event(
-                "order-placed",
-                "order",
-                vec![field("order_id", string_kind()), empty_derived],
-            )),
-            stored(command_slice(
-                "place-order-slice",
-                "place-order",
-                vec!["order-placed"],
-            )),
-        ];
-        let issues = validate_model(
-            &model_member(pb::EntityKind::CommandSlice, "place-order-slice"),
-            &all,
-        );
-        assert_eq!(
+        for doc in BLANK_DOCS {
+            let empty_derived = pb::FieldSpec {
+                name: "placed_at".into(),
+                r#type: Some(pb::FieldType {
+                    kind: Some(timestamp_kind()),
+                }),
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation"
+                            .into(),
+                    value: pb::DerivedFieldAnnotation {
+                        doc: (*doc).into(),
+                        kind: 0,
+                    }
+                    .encode_to_vec(),
+                }],
+                ..Default::default()
+            };
+            let all = vec![
+                stored(lane("order", Vec::new())),
+                stored(command(
+                    "place-order",
+                    "order",
+                    vec![field("order_id", string_kind())],
+                )),
+                stored(event(
+                    "order-placed",
+                    "order",
+                    vec![field("order_id", string_kind()), empty_derived],
+                )),
+                stored(command_slice(
+                    "place-order-slice",
+                    "place-order",
+                    vec!["order-placed"],
+                )),
+            ];
+            let issues = validate_model(
+                &model_member(pb::EntityKind::CommandSlice, "place-order-slice"),
+                &all,
+            );
+            assert_eq!(
             count(&issues, "EVENT_FIELD_UNSOURCED"),
             1,
-            "empty-doc DerivedFieldAnnotation must not silence EVENT_FIELD_UNSOURCED: {issues:?}"
+            "blank-doc DerivedFieldAnnotation {doc:?} must not silence EVENT_FIELD_UNSOURCED: {issues:?}"
         );
+        }
     }
 
     #[test]
@@ -8211,6 +10441,48 @@ mod information_completeness_tests {
             )),
         ];
         let issues = validate_model(&model_member(pb::EntityKind::ReadModel, "orders"), &all);
+        assert_eq!(
+            count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
+            1,
+            "{issues:?}"
+        );
+    }
+
+    fn external_read_model(slug: &str, system: Option<&str>) -> pb::Entity {
+        let mut entity = read_model(slug, vec![field("order_id", string_kind())], Vec::new());
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.external_source = Some(pb::read_model::ExternalSource {
+                system: system.map(|s| pb::ExternalSystemRef { id: Some(id(s)) }),
+                ..Default::default()
+            });
+        }
+        entity
+    }
+
+    #[test]
+    fn external_source_read_model_fields_come_from_the_payload() {
+        let all = vec![stored(external_read_model(
+            "payment-webhooks",
+            Some("acme-payments"),
+        ))];
+        let issues = validate_model(
+            &model_member(pb::EntityKind::ReadModel, "payment-webhooks"),
+            &all,
+        );
+        assert_eq!(
+            count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn external_source_without_a_system_still_needs_sourced_fields() {
+        let all = vec![stored(external_read_model("payment-webhooks", None))];
+        let issues = validate_model(
+            &model_member(pb::EntityKind::ReadModel, "payment-webhooks"),
+            &all,
+        );
         assert_eq!(
             count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
             1,
@@ -8372,23 +10644,25 @@ mod personal_data_tests {
 
     #[test]
     fn empty_doc_personal_data_annotation_errors() {
-        let all = vec![
-            stored(lane("customer")),
-            stored(event(
-                "customer-registered",
-                "customer",
-                vec![pii_field(
-                    "email",
-                    string_kind(),
-                    pii_annotation("", Erasure::CryptoShredding, ""),
-                )],
-            )),
-        ];
-        let issues = validate_model(
-            &model_member(pb::EntityKind::Event, "customer-registered"),
-            &all,
-        );
-        assert_eq!(count(&issues, "PII_DOC_MISSING"), 1, "{issues:?}");
+        for doc in BLANK_DOCS {
+            let all = vec![
+                stored(lane("customer")),
+                stored(event(
+                    "customer-registered",
+                    "customer",
+                    vec![pii_field(
+                        "email",
+                        string_kind(),
+                        pii_annotation(doc, Erasure::CryptoShredding, ""),
+                    )],
+                )),
+            ];
+            let issues = validate_model(
+                &model_member(pb::EntityKind::Event, "customer-registered"),
+                &all,
+            );
+            assert_eq!(count(&issues, "PII_DOC_MISSING"), 1, "{doc:?}: {issues:?}");
+        }
     }
 
     #[test]
@@ -8981,6 +11255,62 @@ mod slice_stale_ref_tests {
     }
 
     #[test]
+    fn slice_without_scenarios_is_reported_as_info() {
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(command_slice_pinning(
+                "post-slice",
+                id_v("composer", 1),
+                id_v("post", 1),
+                vec![id_v("posted", 1)],
+            )),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        let found: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "SLICE_NO_SCENARIOS")
+            .collect();
+        assert_eq!(found.len(), 1, "{issues:?}");
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+        assert_eq!(
+            found[0].subject.as_ref().and_then(|s| s.id.as_ref()),
+            Some(&id_v("post-slice", 1))
+        );
+    }
+
+    #[test]
+    fn slice_with_a_scenario_is_not_reported() {
+        let mut slice = command_slice_pinning(
+            "post-slice",
+            id_v("composer", 1),
+            id_v("post", 1),
+            vec![id_v("posted", 1)],
+        );
+        if let Some(pb::entity::Kind::CommandSlice(s)) = slice.kind.as_mut() {
+            s.scenarios.push(pb::CommandScenario {
+                title: "posts".into(),
+                ..Default::default()
+            });
+        }
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(slice),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        assert!(
+            !issues.iter().any(|i| i.code == "SLICE_NO_SCENARIOS"),
+            "{issues:?}",
+        );
+    }
+
+    #[test]
     fn ref_pinning_latest_is_clean() {
         let all = vec![
             stored(ui_v("composer", 2)),
@@ -9052,6 +11382,37 @@ mod slice_stale_ref_tests {
         assert!(fields.contains("ui"), "{fields:?}");
         assert!(fields.contains("command"), "{fields:?}");
         assert!(fields.contains("emitted_events[0]"), "{fields:?}");
+    }
+
+    #[test]
+    fn stale_ref_evidence_names_the_exact_pin_and_latest_version() {
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(event_v("posted", 2)),
+            stored(event_v("posted", 3)),
+            stored(command_slice_pinning(
+                "post-slice",
+                id_v("composer", 1),
+                id_v("post", 1),
+                vec![id_v("posted", 3), id_v("posted", 2)],
+            )),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "SLICE_STALE_REF")
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].subject_field, "emitted_events[1]");
+        assert_eq!(
+            finding_evidence::describe(&hits[0].evidence),
+            [
+                "stale_pin command_slice:t/post-slice@1.emitted_events[1] -> event:t/posted@2",
+                "latest_version event:t/posted@3",
+            ],
+        );
     }
 
     // Build a PinnedRefAnnotation Any payload for use in slice metadata.
@@ -9170,23 +11531,25 @@ mod slice_stale_ref_tests {
     // An empty doc does NOT silence anything even when pinned entries are listed.
     #[test]
     fn empty_doc_does_not_silence() {
-        let all = vec![
-            stored(ui_v("composer", 1)),
-            stored(ui_v("composer", 2)),
-            stored(command_v("post", 1)),
-            stored(command_slice_with_metadata(
-                "post-slice",
-                id_v("composer", 1),
-                id_v("post", 1),
-                vec![],
-                vec![pinned_ann_any("", vec!["t/composer@1"])],
-            )),
-        ];
-        let issues = validate_model(&model_with_slice("post-slice"), &all);
-        assert!(
-            issues.iter().any(|i| i.code == "SLICE_STALE_REF"),
-            "empty doc must not silence: {issues:?}",
-        );
+        for doc in BLANK_DOCS {
+            let all = vec![
+                stored(ui_v("composer", 1)),
+                stored(ui_v("composer", 2)),
+                stored(command_v("post", 1)),
+                stored(command_slice_with_metadata(
+                    "post-slice",
+                    id_v("composer", 1),
+                    id_v("post", 1),
+                    vec![],
+                    vec![pinned_ann_any(doc, vec!["t/composer@1"])],
+                )),
+            ];
+            let issues = validate_model(&model_with_slice("post-slice"), &all);
+            assert!(
+                issues.iter().any(|i| i.code == "SLICE_STALE_REF"),
+                "blank doc {doc:?} must not silence: {issues:?}",
+            );
+        }
     }
 
     // An annotation listing a different canonical id (wrong version or wrong slug)
@@ -9223,6 +11586,7 @@ mod slice_stale_ref_tests {
         let ann = pb::LifecycleAnnotation {
             status: status.into(),
             doc: String::new(),
+            ..Default::default()
         };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation"
@@ -10236,6 +12600,594 @@ mod knowledge_graph_tests {
             "{issues:?}"
         );
     }
+
+    fn count_code(issues: &[pb::ValidationIssue], code: &str) -> usize {
+        issues.iter().filter(|i| i.code == code).count()
+    }
+
+    fn event_model(ns: &str, slug: &str) -> pb::EventModel {
+        pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: slug.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn domain_in_context_namespace_warns() {
+        let dom = domain("accounts", "accounts");
+        let all = vec![stored(dom.clone()), stored(context("accounts", &[]))];
+        let issues = validate_scenarios(&dom, &all);
+        assert_eq!(
+            count_code(&issues, "DOMAIN_IN_CONTEXT_NAMESPACE"),
+            1,
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .filter(|i| i.code == "DOMAIN_IN_CONTEXT_NAMESPACE")
+                .all(|i| i.severity == pb::validation_issue::Severity::Warning as i32),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn domain_in_its_own_namespace_is_clean() {
+        let dom = domain("marketplace", "marketplace");
+        let all = vec![stored(dom.clone()), stored(context("accounts", &[]))];
+        let issues = validate_scenarios(&dom, &all);
+        assert_eq!(
+            count_code(&issues, "DOMAIN_IN_CONTEXT_NAMESPACE"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_classifications_warn_instead_of_multiple() {
+        let all = vec![
+            stored(domain("marketplace", "marketplace")),
+            stored(subdomain(
+                "marketplace",
+                "ordering",
+                Some("marketplace"),
+                true,
+            )),
+            stored(subdomain_supporting(
+                "marketplace",
+                "fulfillment",
+                Some("marketplace"),
+            )),
+        ];
+        let mixed = context(
+            "accounts",
+            &[("marketplace", "ordering"), ("marketplace", "fulfillment")],
+        );
+        let issues = validate_scenarios(&mixed, &all);
+        assert_eq!(
+            count_code(&issues, "REALIZES_MIXED_CLASSIFICATIONS"),
+            1,
+            "{issues:?}"
+        );
+        assert_eq!(count_code(&issues, "REALIZES_MULTIPLE"), 0, "{issues:?}");
+        assert!(
+            issues
+                .iter()
+                .filter(|i| i.code == "REALIZES_MIXED_CLASSIFICATIONS")
+                .all(|i| i.severity == pb::validation_issue::Severity::Warning as i32),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .filter(|i| i.code == "REALIZES_MIXED_CLASSIFICATIONS")
+                .all(|i| i.message.contains("core and supporting")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn same_classification_stays_info_multiple() {
+        let all = vec![
+            stored(domain("marketplace", "marketplace")),
+            stored(subdomain(
+                "marketplace",
+                "ordering",
+                Some("marketplace"),
+                true,
+            )),
+            stored(subdomain(
+                "marketplace",
+                "pricing",
+                Some("marketplace"),
+                true,
+            )),
+        ];
+        let issues = validate_scenarios(
+            &context(
+                "accounts",
+                &[("marketplace", "ordering"), ("marketplace", "pricing")],
+            ),
+            &all,
+        );
+        assert_eq!(count_code(&issues, "REALIZES_MULTIPLE"), 1, "{issues:?}");
+        assert_eq!(
+            count_code(&issues, "REALIZES_MIXED_CLASSIFICATIONS"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn unclassified_and_unresolved_subdomains_do_not_mix() {
+        let all = vec![
+            stored(domain("marketplace", "marketplace")),
+            stored(subdomain(
+                "marketplace",
+                "ordering",
+                Some("marketplace"),
+                true,
+            )),
+            stored(subdomain(
+                "marketplace",
+                "unsorted",
+                Some("marketplace"),
+                false,
+            )),
+        ];
+        let issues = validate_scenarios(
+            &context(
+                "accounts",
+                &[
+                    ("marketplace", "ordering"),
+                    ("marketplace", "unsorted"),
+                    ("marketplace", "ghost"),
+                ],
+            ),
+            &all,
+        );
+        assert_eq!(
+            count_code(&issues, "REALIZES_MIXED_CLASSIFICATIONS"),
+            0,
+            "{issues:?}"
+        );
+        assert_eq!(count_code(&issues, "REALIZES_MULTIPLE"), 1, "{issues:?}");
+    }
+
+    fn mixed_store() -> Vec<StoredEntity> {
+        vec![
+            stored(domain("shop", "retail")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain_supporting("shop", "fulfillment", Some("shop"))),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "fulfillment")],
+            )),
+        ]
+    }
+
+    #[test]
+    fn model_validation_includes_the_strategic_chain() {
+        let all = mixed_store();
+        let issues = validate_model(&event_model("shop", "checkout"), &all);
+        for code in [
+            "DOMAIN_SLUG_MISMATCH",
+            "DOMAIN_IN_CONTEXT_NAMESPACE",
+            "REALIZES_MIXED_CLASSIFICATIONS",
+        ] {
+            assert_eq!(count_code(&issues, code), 1, "{code}: {issues:?}");
+        }
+        assert!(
+            validate_model_content(&event_model("shop", "checkout"), &all)
+                .iter()
+                .all(|i| i.rule_category != "strategic"),
+        );
+    }
+
+    #[test]
+    fn model_validation_ignores_unrelated_strategic_entities() {
+        let issues = validate_model(&event_model("elsewhere", "checkout"), &mixed_store());
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.rule_category == "strategic")
+                .count(),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn chain_validates_a_shared_domain_once() {
+        let mut all = vec![
+            stored(domain("business", "business")),
+            stored(subdomain("business", "ordering", Some("business"), true)),
+            stored(subdomain("business", "pricing", Some("business"), true)),
+        ];
+        all.push(stored(context("orders", &[("business", "ordering")])));
+        all.push(stored(context("prices", &[("business", "pricing")])));
+        let issues = strategic_chain_issues(["orders", "prices"], &all);
+        assert_eq!(count_code(&issues, "DOMAIN_HAS_NO_CORE"), 0, "{issues:?}");
+        assert_eq!(
+            count_code(&issues, "DOMAIN_IN_CONTEXT_NAMESPACE"),
+            0,
+            "{issues:?}"
+        );
+
+        let mut shared_no_core = vec![
+            stored(domain("business", "business")),
+            stored(subdomain_supporting(
+                "business",
+                "ordering",
+                Some("business"),
+            )),
+            stored(subdomain_supporting(
+                "business",
+                "pricing",
+                Some("business"),
+            )),
+        ];
+        shared_no_core.push(stored(context("orders", &[("business", "ordering")])));
+        shared_no_core.push(stored(context("prices", &[("business", "pricing")])));
+        let issues = strategic_chain_issues(["orders", "prices"], &shared_no_core);
+        assert_eq!(count_code(&issues, "DOMAIN_HAS_NO_CORE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn chain_reaches_subdomains_declared_in_a_problem_space_namespace() {
+        let all = vec![
+            stored(domain("business", "business")),
+            stored(subdomain("business", "ordering", Some("business"), true)),
+            stored(subdomain("business", "pricing", Some("business"), true)),
+            stored(context("orders", &[("business", "ordering")])),
+        ];
+        let issues = strategic_chain_issues(["business"], &all);
+        let unrealized: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "SUBDOMAIN_UNREALIZED")
+            .filter_map(|i| i.subject.as_ref()?.id.as_ref())
+            .map(|id| id.slug.as_str())
+            .collect();
+        assert_eq!(unrealized, ["pricing"], "{issues:?}");
+    }
+
+    #[test]
+    fn chain_reaches_subdomains_of_a_collected_domain_from_another_namespace() {
+        let all = vec![
+            stored(domain("business", "business")),
+            stored(subdomain("business", "ordering", Some("business"), true)),
+            stored(subdomain("business", "pricing", Some("business"), true)),
+            stored(context("orders", &[("business", "ordering")])),
+        ];
+        let issues = strategic_chain_issues(["orders"], &all);
+        assert_eq!(count_code(&issues, "SUBDOMAIN_UNREALIZED"), 1, "{issues:?}");
+    }
+
+    fn at_version(mut entity: pb::Entity, version: u64) -> pb::Entity {
+        let id = match entity.kind.as_mut() {
+            Some(pb::entity::Kind::BoundedContext(x)) => x.id.as_mut(),
+            Some(pb::entity::Kind::Subdomain(x)) => x.id.as_mut(),
+            Some(pb::entity::Kind::Domain(x)) => x.id.as_mut(),
+            _ => None,
+        };
+        if let Some(id) = id {
+            id.version = version;
+        }
+        entity
+    }
+
+    fn supersede_world() -> Vec<StoredEntity> {
+        vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain("shop", "pricing", Some("shop"), true)),
+            stored(subdomain_supporting("shop", "fulfillment", Some("shop"))),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "fulfillment")],
+            )),
+            stored(at_version(
+                context("shop", &[("shop", "ordering"), ("shop", "pricing")]),
+                2,
+            )),
+        ]
+    }
+
+    fn subjects_at_version(
+        issues: &[pb::ValidationIssue],
+        kind: pb::EntityKind,
+        version: u64,
+    ) -> Vec<&str> {
+        issues
+            .iter()
+            .filter(|i| {
+                i.subject.as_ref().is_some_and(|s| {
+                    s.kind == kind as i32 && s.id.as_ref().is_some_and(|id| id.version == version)
+                })
+            })
+            .map(|i| i.code.as_str())
+            .collect()
+    }
+
+    fn change_subdomain(slug: &str) -> StrategicChange {
+        (pb::EntityKind::Subdomain, id("shop", slug))
+    }
+
+    fn flat(issues: Vec<Vec<pb::ValidationIssue>>) -> Vec<pb::ValidationIssue> {
+        issues.into_iter().flatten().collect()
+    }
+
+    #[test]
+    fn subdomain_change_skips_superseded_context_versions() {
+        let world = supersede_world();
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &world,
+            &world,
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_delete_skips_superseded_context_versions() {
+        let before = supersede_world();
+        let gone = id("shop", "ordering");
+        let after = before
+            .iter()
+            .filter(|se| {
+                !matches!(
+                    se.entity.kind.as_ref(),
+                    Some(pb::entity::Kind::Subdomain(sd)) if sd.id.as_ref() == Some(&gone)
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let issues = flat(strategic_issues_for_deletes(
+            &[change_subdomain("ordering")],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 2),
+            ["REALIZES_DANGLING"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn domain_delete_skips_superseded_subdomain_versions() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(at_version(
+                subdomain("shop", "ordering", Some("shop"), true),
+                2,
+            )),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let after = before[1..].to_vec();
+        let issues = flat(strategic_issues_for_deletes(
+            &[(pb::EntityKind::Domain, id("shop", "shop"))],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 2),
+            ["SUBDOMAIN_DANGLING_DOMAIN"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn domain_delete_checks_the_version_left_as_head_when_the_batch_deletes_the_latest() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(at_version(
+                subdomain("shop", "ordering", Some("shop"), true),
+                2,
+            )),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let after = vec![before[1].clone(), before[3].clone()];
+        let issues = flat(strategic_issues_for_deletes(
+            &[
+                (pb::EntityKind::Domain, id("shop", "shop")),
+                (
+                    pb::EntityKind::Subdomain,
+                    pb::Id {
+                        version: 2,
+                        ..id("shop", "ordering")
+                    },
+                ),
+            ],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 1),
+            ["SUBDOMAIN_DANGLING_DOMAIN"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_delete_checks_the_context_left_as_head_when_the_batch_deletes_the_latest() {
+        let before = supersede_world();
+        let gone = id("shop", "ordering");
+        let after = before
+            .iter()
+            .filter(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::Subdomain(sd)) => sd.id.as_ref() != Some(&gone),
+                Some(pb::entity::Kind::BoundedContext(bc)) => {
+                    bc.id.as_ref().is_some_and(|bid| bid.version != 2)
+                }
+                _ => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let issues = flat(strategic_issues_for_deletes(
+            &[
+                change_subdomain("ordering"),
+                (
+                    pb::EntityKind::BoundedContext,
+                    pb::Id {
+                        version: 2,
+                        ..id("shop", "shop")
+                    },
+                ),
+            ],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            ["REALIZES_DANGLING", "REALIZES_MULTIPLE"],
+            "{issues:?}"
+        );
+    }
+
+    fn put_in(
+        before: &[StoredEntity],
+        entity: pb::Entity,
+    ) -> (Vec<StoredEntity>, Vec<StoredEntity>) {
+        let mut world: Vec<StoredEntity> = before
+            .iter()
+            .filter(|se| {
+                entity_kind(&se.entity) != entity_kind(&entity)
+                    || entity_id(&se.entity) != entity_id(&entity)
+            })
+            .cloned()
+            .collect();
+        world.push(stored(entity));
+        (before.to_vec(), world)
+    }
+
+    fn pricing_world() -> Vec<StoredEntity> {
+        vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain("shop", "pricing", Some("shop"), true)),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "pricing")],
+            )),
+        ]
+    }
+
+    #[test]
+    fn context_put_reports_the_subdomain_it_stops_realizing() {
+        let (before, world) = put_in(&pricing_world(), context("shop", &[("shop", "ordering")]));
+        let issues = flat(strategic_issues_by_change(
+            &[(pb::EntityKind::BoundedContext, id("shop", "shop"))],
+            &before,
+            &world,
+        ));
+        let pricing: Vec<&str> = issues
+            .iter()
+            .filter(|i| {
+                i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.slug == "pricing")
+            })
+            .map(|i| i.code.as_str())
+            .collect();
+        assert_eq!(pricing, ["SUBDOMAIN_UNREALIZED"], "{issues:?}");
+    }
+
+    #[test]
+    fn context_put_does_not_repeat_findings_on_what_it_stops_realizing() {
+        let mut before = pricing_world();
+        before[2] = stored(subdomain("shop", "pricing", Some("shop"), false));
+        let (before, world) = put_in(&before, context("shop", &[("shop", "ordering")]));
+        let issues = flat(strategic_issues_by_change(
+            &[(pb::EntityKind::BoundedContext, id("shop", "shop"))],
+            &before,
+            &world,
+        ));
+        let pricing: Vec<&str> = issues
+            .iter()
+            .filter(|i| {
+                i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.slug == "pricing")
+            })
+            .map(|i| i.code.as_str())
+            .collect();
+        assert_eq!(pricing, ["SUBDOMAIN_UNREALIZED"], "{issues:?}");
+    }
+
+    #[test]
+    fn subdomain_put_reports_the_domain_it_moves_away_from() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain_supporting("shop", "pricing", Some("shop"))),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "pricing")],
+            )),
+        ];
+        let (before, world) = put_in(
+            &before,
+            subdomain_supporting("shop", "ordering", Some("elsewhere")),
+        );
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &before,
+            &world,
+        ));
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.code == "DOMAIN_HAS_NO_CORE")
+                .filter_map(|i| i.subject.as_ref()?.id.as_ref())
+                .map(|id| id.slug.as_str())
+                .collect::<Vec<_>>(),
+            ["shop"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_put_does_not_repeat_findings_on_the_domain_it_leaves() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain_supporting("shop", "ordering", Some("shop"))),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let (before, world) = put_in(
+            &before,
+            subdomain_supporting("shop", "ordering", Some("elsewhere")),
+        );
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &before,
+            &world,
+        ));
+        assert_eq!(count_code(&issues, "DOMAIN_HAS_NO_CORE"), 0, "{issues:?}");
+    }
 }
 
 #[cfg(test)]
@@ -10725,6 +13677,89 @@ mod previously_untested_rules {
     }
 
     #[test]
+    fn storyboard_entry_without_read_model_names_the_read_model() {
+        let ns = "sb";
+        let mut sb = sb_missing_entry_and_outcome(ns, "story");
+        if let Some(pb::entity::Kind::Storyboard(s)) = sb.kind.as_mut() {
+            s.entry = Some(pb::StoryboardEntry {
+                read_model: None,
+                observer: Some(pb::storyboard_entry::Observer::Human(
+                    pb::storyboard_entry::HumanObserver::default(),
+                )),
+            });
+        }
+        let issues = validate_model(&model_with_storyboard_member(ns, "story"), &[stored(sb)]);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "STORYBOARD_MISSING_ENTRY")
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].subject_field, "entry.read_model");
+        assert!(
+            hits[0].message.contains("no read model"),
+            "{}",
+            hits[0].message
+        );
+        assert!(
+            !hits[0].message.contains("declares no entry"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    fn entry_issue(entry: pb::StoryboardEntry) -> Vec<pb::ValidationIssue> {
+        let ns = "sb";
+        let mut sb = sb_missing_entry_and_outcome(ns, "story");
+        if let Some(pb::entity::Kind::Storyboard(s)) = sb.kind.as_mut() {
+            s.entry = Some(entry);
+        }
+        validate_model(&model_with_storyboard_member(ns, "story"), &[stored(sb)])
+            .into_iter()
+            .filter(|i| i.code == "STORYBOARD_MISSING_ENTRY")
+            .collect()
+    }
+
+    #[test]
+    fn storyboard_empty_entry_names_neither_read_model_nor_observer() {
+        let hits = entry_issue(pb::StoryboardEntry::default());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].subject_field, "entry");
+        assert!(
+            hits[0]
+                .message
+                .contains("neither a read model nor an observer"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn storyboard_entry_without_observer_names_the_observer() {
+        let hits = entry_issue(pb::StoryboardEntry {
+            read_model: Some(pb::ReadModelEdge::default()),
+            observer: None,
+        });
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].subject_field, "entry.observer");
+        assert!(
+            hits[0].message.contains("no observer"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn storyboard_entry_with_read_model_and_observer_is_clean() {
+        let hits = entry_issue(pb::StoryboardEntry {
+            read_model: Some(pb::ReadModelEdge::default()),
+            observer: Some(pb::storyboard_entry::Observer::Human(
+                pb::storyboard_entry::HumanObserver::default(),
+            )),
+        });
+        assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    #[test]
     fn storyboard_missing_entry_warns() {
         let ns = "sb";
         let sb = sb_missing_entry_and_outcome(ns, "story");
@@ -10736,6 +13771,16 @@ mod previously_untested_rules {
                 .count(),
             1,
             "{issues:?}",
+        );
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "STORYBOARD_MISSING_ENTRY")
+            .collect();
+        assert_eq!(hits[0].subject_field, "entry");
+        assert!(
+            hits[0].message.contains("declares no entry"),
+            "{}",
+            hits[0].message
         );
     }
 
@@ -10767,6 +13812,7 @@ mod previously_untested_rules {
                 doc: String::new(),
                 design_ref: String::new(),
                 transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
                     to: Some(pb::UiRef {
                         id: Some(id(ns, "ghost", 1)),
                     }),
@@ -10786,6 +13832,10 @@ mod previously_untested_rules {
             metadata: Vec::new(),
             supersedes: None,
         };
+        assert_eq!(
+            trogon_atlas_core::connections::validate_stored_connection_ids(&ui),
+            Ok(())
+        );
         let issues = validate_model(&model, &[stored(ui)]);
         let count = issues
             .iter()
@@ -11408,6 +14458,31 @@ mod event_emitter_tests {
     }
 
     #[test]
+    fn multiple_emitters_evidence_names_every_emitting_slice_and_command() {
+        let all = vec![
+            stored(event("paid", vec![])),
+            stored(command("pay")),
+            stored(command("refund")),
+            stored(command_slice("refund-slice", "refund", &["paid"])),
+            stored(command_slice("pay-slice", "pay", &["paid"])),
+            stored(command_slice("pay-slice-alt", "pay", &["paid"])),
+        ];
+        let issues = validate_model(&model_with_event("paid"), &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "EVENT_MULTIPLE_EMITTERS")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "emitter command_slice:t/pay-slice@1.command -> command:t/pay@1",
+                "emitter command_slice:t/pay-slice-alt@1.command -> command:t/pay@1",
+                "emitter command_slice:t/refund-slice@1.command -> command:t/refund@1",
+            ],
+        );
+    }
+
+    #[test]
     fn two_slices_of_one_command_collapse_to_one_emitter() {
         let all = vec![
             stored(event("paid", vec![])),
@@ -11763,6 +14838,120 @@ mod projection_ordering_tests {
         }
     }
 
+    fn event(slug: &str, lane: &str) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Event(pb::Event {
+                id: Some(id(slug)),
+                title: slug.into(),
+                swimlane: Some(pb::SwimlaneRef { id: Some(id(lane)) }),
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn lane_with_transitions(transitions: &[(&str, &[&str])]) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("review")),
+                title: "review".into(),
+                transitions: transitions
+                    .iter()
+                    .map(|(after, next)| pb::swimlane::Transition {
+                        after: Some(pb::EventRef {
+                            id: Some(id(after)),
+                        }),
+                        next: next
+                            .iter()
+                            .map(|n| pb::swimlane::transition::Next {
+                                connection_id: None,
+                                event: Some(pb::EventRef { id: Some(id(n)) }),
+                                doc: "guard".into(),
+                                metadata: Vec::new(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn merge_findings(
+        transitions: &[(&str, &[&str])],
+        events: &[&str],
+        lane_events: &[&str],
+    ) -> Vec<pb::ValidationIssue> {
+        let mut all = vec![stored(rm_slice("status", events))];
+        if !transitions.is_empty() {
+            all.push(stored(lane_with_transitions(transitions)));
+        }
+        all.extend(lane_events.iter().map(|e| stored(event(e, "review"))));
+        let m = model(&[(pb::EntityKind::ReadModelSlice, "status")]);
+        validate_model(&m, &all)
+            .into_iter()
+            .filter(|i| i.code == "PROJECTION_MERGES_BRANCHES")
+            .collect()
+    }
+
+    const FORK: &[(&str, &[&str])] =
+        &[("review.submitted", &["review.approved", "review.rejected"])];
+    const ALL_EVENTS: &[&str] = &["review.submitted", "review.approved", "review.rejected"];
+
+    #[test]
+    fn merged_siblings_warn_and_name_both_events() {
+        let issues = merge_findings(FORK, &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        let hit = &issues[0];
+        assert_eq!(hit.severity, pb::validation_issue::Severity::Warning as i32);
+        assert!(
+            hit.message.contains("t/review.approved@1"),
+            "{}",
+            hit.message
+        );
+        assert!(
+            hit.message.contains("t/review.rejected@1"),
+            "{}",
+            hit.message
+        );
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "consumer read_model_slice:t/status@1.source_events[0] -> event:t/review.approved@1",
+                "consumer read_model_slice:t/status@1.source_events[1] -> event:t/review.rejected@1",
+            ],
+        );
+    }
+
+    #[test]
+    fn sequential_events_in_one_slice_do_not_warn() {
+        let chain: &[(&str, &[&str])] = &[
+            ("review.submitted", &["review.approved"]),
+            ("review.approved", &["review.rejected"]),
+        ];
+        let issues = merge_findings(chain, &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn single_branch_does_not_warn() {
+        let issues = merge_findings(FORK, &["review.approved"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn repeated_single_branch_does_not_warn() {
+        let issues = merge_findings(FORK, &["review.approved", "review.approved"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn events_without_lane_transitions_do_not_warn() {
+        let issues = merge_findings(&[], &["review.approved", "review.rejected"], ALL_EVENTS);
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
     // Catalog: "emitting command slice comes later (or never)".
     // Current emit_idx lookup silently `continue`s when the emitter is absent
     // from the storyboard, so PROJECTION_BEFORE_EMITTER never fires.
@@ -11785,6 +14974,75 @@ mod projection_ordering_tests {
                 .iter()
                 .any(|i| i.code == "PROJECTION_BEFORE_EMITTER"),
             "catalog promises PROJECTION_BEFORE_EMITTER when the emitter is never in the storyboard; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_projection_occurrences_stay_distinguishable() {
+        let all = vec![
+            stored(command_slice("emit-slice", "place", &["order.placed"])),
+            stored(rm_slice("proj-slice", &["order.placed"])),
+            stored(storyboard(
+                "sb",
+                &["proj-slice", "missing-slice", "proj-slice", "emit-slice"],
+            )),
+        ];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "emit-slice"),
+            (pb::EntityKind::ReadModelSlice, "proj-slice"),
+            (pb::EntityKind::Storyboard, "sb"),
+        ]);
+        let issues = validate_model(&m, &all);
+        let hits: Vec<Vec<String>> = issues
+            .iter()
+            .filter(|i| i.code == "PROJECTION_BEFORE_EMITTER")
+            .map(|i| finding_evidence::describe(&i.evidence))
+            .collect();
+        let later = "later_emitter command_slice:t/emit-slice@1.emitted_events[0] -> event:t/order.placed@1 @sb#3";
+        assert_eq!(
+            hits,
+            [
+                vec![
+                    "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#0",
+                    later,
+                ],
+                vec![
+                    "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#2",
+                    later,
+                ],
+            ],
+        );
+    }
+
+    #[test]
+    fn not_adjacent_evidence_names_emitter_and_intervening_actions() {
+        let all = vec![
+            stored(command_slice("emit-slice", "place", &["order.placed"])),
+            stored(command_slice("other-action", "cancel", &[])),
+            stored(rm_slice("proj-slice", &["order.placed"])),
+            stored(storyboard(
+                "sb",
+                &["emit-slice", "other-action", "proj-slice"],
+            )),
+        ];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "emit-slice"),
+            (pb::EntityKind::CommandSlice, "other-action"),
+            (pb::EntityKind::ReadModelSlice, "proj-slice"),
+            (pb::EntityKind::Storyboard, "sb"),
+        ]);
+        let issues = validate_model(&m, &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "PROJECTION_NOT_ADJACENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#2",
+                "earlier_emitter command_slice:t/emit-slice@1.emitted_events[0] -> event:t/order.placed@1 @sb#0",
+                "intervening_action command_slice:t/other-action@1 @sb#1",
+            ],
         );
     }
 
@@ -11914,18 +15172,21 @@ mod annotation_finding_tests {
         }
     }
 
-    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+    fn pack_open_question(ann: &pb::OpenQuestionAnnotation) -> prost_types::Any {
         use prost::Message;
-        let ann = pb::OpenQuestionAnnotation {
-            question: question.into(),
-            author: author.into(),
-            created_at: String::new(),
-        };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation"
                 .into(),
             value: ann.encode_to_vec(),
         }
+    }
+
+    fn open_question_any(question: &str, author: &str) -> prost_types::Any {
+        pack_open_question(&pb::OpenQuestionAnnotation {
+            question: question.into(),
+            author: author.into(),
+            ..Default::default()
+        })
     }
 
     fn assumption_any(statement: &str, author: &str) -> prost_types::Any {
@@ -11968,6 +15229,67 @@ mod annotation_finding_tests {
                 .collect(),
             ..Default::default()
         }
+    }
+
+    fn open_question_with_owner_due(owner: &str, due: &str) -> prost_types::Any {
+        pack_open_question(&pb::OpenQuestionAnnotation {
+            question: "who refunds a split shipment?".into(),
+            author: "alex".into(),
+            owner: owner.into(),
+            due: Some(pb::CalendarDate { value: due.into() }),
+            ..Default::default()
+        })
+    }
+
+    fn open_question_issues(any: prost_types::Any) -> Vec<pb::ValidationIssue> {
+        let all = vec![stored(event_with_metadata("order.placed", vec![any]))];
+        validate_model(&model(&[(pb::EntityKind::Event, "order.placed")]), &all)
+    }
+
+    #[test]
+    fn open_question_owner_and_due_appear_in_message() {
+        let issues =
+            open_question_issues(open_question_with_owner_due("payments team", "2026-12-01"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(
+            hit.message
+                .ends_with("[owner: payments team] [due: 2026-12-01]"),
+            "{}",
+            hit.message
+        );
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
+    }
+
+    #[test]
+    fn open_question_without_owner_or_due_keeps_old_message() {
+        let issues = open_question_issues(open_question_any("why?", "alex"));
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert!(hit.message.ends_with("(alex): why?"), "{}", hit.message);
+    }
+
+    #[test]
+    fn open_question_malformed_due_warns() {
+        for bad in ["next week", "2026-02-30", "2026-1-5"] {
+            let issues = open_question_issues(open_question_with_owner_due("", bad));
+            let hit = issues
+                .iter()
+                .find(|i| i.code == "OPEN_QUESTION_DUE_INVALID")
+                .unwrap_or_else(|| panic!("{bad}: {issues:?}"));
+            assert_eq!(hit.severity, pb::validation_issue::Severity::Warning as i32);
+            assert!(issues.iter().any(|i| i.code == "OPEN_QUESTION_PRESENT"));
+        }
+    }
+
+    #[test]
+    fn open_question_empty_due_value_is_unset() {
+        let issues = open_question_issues(open_question_with_owner_due("", ""));
+        assert!(issues.iter().all(|i| i.code != "OPEN_QUESTION_DUE_INVALID"));
     }
 
     #[test]
@@ -12114,6 +15436,85 @@ mod annotation_finding_tests {
         assert!(hit
             .message
             .contains("the payload always carries a currency"));
+    }
+
+    // validate_event_model must answer "what is still open?" in one call, so
+    // it walks scenario metadata as well as the entity's own metadata.
+    fn command_slice_with_both_metadata(
+        entity_meta: prost_types::Any,
+        scenario_meta: prost_types::Any,
+    ) -> pb::Entity {
+        let mut e =
+            command_slice_with_scenario_metadata("place-slice", "place", vec![scenario_meta]);
+        if let Some(pb::entity::Kind::CommandSlice(s)) = e.kind.as_mut() {
+            s.metadata = vec![entity_meta];
+        }
+        e
+    }
+
+    fn fields_for(issues: &[pb::ValidationIssue], code: &str) -> Vec<String> {
+        let mut f: Vec<String> = issues
+            .iter()
+            .filter(|i| i.code == code)
+            .map(|i| i.subject_field.clone())
+            .collect();
+        f.sort();
+        f
+    }
+
+    #[test]
+    fn validate_model_reports_open_questions_on_slice_and_scenario() {
+        let slice = command_slice_with_both_metadata(
+            open_question_any("who owns refunds?", "alex"),
+            open_question_any("what happens on a tie?", "alex"),
+        );
+        let all = vec![stored(slice.clone())];
+        let m = model(&[(pb::EntityKind::CommandSlice, "place-slice")]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "OPEN_QUESTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
+        let from_model = issues
+            .iter()
+            .find(|i| i.subject_field == "scenarios[].metadata")
+            .unwrap_or_else(|| panic!("expected scenario finding; got {issues:?}"));
+        let from_apply = validate_scenarios(&slice, &[])
+            .into_iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected scenario finding from validate_scenarios"));
+        assert_eq!(from_model, &from_apply);
+    }
+
+    #[test]
+    fn validate_model_reports_assumptions_on_slice_and_scenario() {
+        let all = vec![stored(command_slice_with_both_metadata(
+            assumption_any("refunds are rare", "alex"),
+            assumption_any("the payload always carries a currency", "alex"),
+        ))];
+        let m = model(&[(pb::EntityKind::CommandSlice, "place-slice")]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "ASSUMPTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
+    }
+
+    #[test]
+    fn validate_model_reports_each_annotation_once_for_a_repeated_member() {
+        let all = vec![stored(command_slice_with_both_metadata(
+            open_question_any("who owns refunds?", "alex"),
+            open_question_any("what happens on a tie?", "alex"),
+        ))];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "place-slice"),
+            (pb::EntityKind::CommandSlice, "place-slice"),
+        ]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "OPEN_QUESTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
     }
 }
 
@@ -13152,5 +16553,292 @@ mod reliability_rule_tests {
             0,
             "{issues:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod read_model_shape_tests {
+    use super::*;
+
+    fn id(ns: &str, slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: ns.into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn stored(entity: pb::Entity) -> StoredEntity {
+        StoredEntity {
+            entity,
+            etag: "1".into(),
+        }
+    }
+
+    fn issues_with<'a>(
+        issues: &'a [pb::ValidationIssue],
+        code: &str,
+    ) -> Vec<&'a pb::ValidationIssue> {
+        issues.iter().filter(|i| i.code == code).collect()
+    }
+
+    fn read_model(
+        ns: &str,
+        slug: &str,
+        fields: &[&str],
+        events: &[&str],
+        shared_doc: Option<&str>,
+    ) -> pb::Entity {
+        let metadata = shared_doc
+            .map(|doc| prost_types::Any {
+                type_url:
+                    "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation"
+                        .into(),
+                value: prost::Message::encode_to_vec(&pb::SharedConsumersAnnotation {
+                    doc: doc.into(),
+                }),
+            })
+            .into_iter()
+            .collect();
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id(ns, slug)),
+                title: slug.into(),
+                key: vec!["reservation_id".into()],
+                schema: Some(trogon_atlas_core::schema::pack_fields(
+                    fields
+                        .iter()
+                        .map(|n| pb::FieldSpec {
+                            name: (*n).into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                )),
+                source_events: events
+                    .iter()
+                    .map(|e| pb::EventRef {
+                        id: Some(id(ns, e)),
+                    })
+                    .collect(),
+                metadata,
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn automation_slice(slug: &str, read_model: &str) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+                id: Some(id("acme", slug)),
+                title: slug.into(),
+                source_read_models: vec![pb::ReadModelEdge {
+                    read_model: Some(pb::ReadModelRef {
+                        id: Some(id("acme", read_model)),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn validate(entities: Vec<pb::Entity>) -> Vec<pb::ValidationIssue> {
+        let members = entities
+            .iter()
+            .filter_map(|e| {
+                Some(pb::EntityRef {
+                    kind: entity_kind(e)? as i32,
+                    id: Some(entity_id(e)?.clone()),
+                })
+            })
+            .collect();
+        let model = pb::EventModel {
+            id: Some(id("acme", "m")),
+            title: "m".into(),
+            members,
+            ..Default::default()
+        };
+        let all: Vec<StoredEntity> = entities.into_iter().map(stored).collect();
+        validate_model(&model, &all)
+    }
+
+    const FIELDS: &[&str] = &["reservation_id", "expires_at"];
+    const EVENTS: &[&str] = &["reservation.placed", "reservation.released"];
+
+    #[test]
+    fn several_automations_on_one_read_model_is_info() {
+        let issues = validate(vec![
+            read_model("acme", "held-reservations", FIELDS, EVENTS, None),
+            automation_slice("confirm", "held-reservations"),
+            automation_slice("expire", "held-reservations"),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_MULTIPLE_AUTOMATIONS");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+        assert!(!found[0].acknowledged);
+    }
+
+    #[test]
+    fn declared_shared_consumers_is_info() {
+        let issues = validate(vec![
+            read_model(
+                "acme",
+                "held-reservations",
+                FIELDS,
+                EVENTS,
+                Some("confirm and expire read the same rows"),
+            ),
+            automation_slice("confirm", "held-reservations"),
+            automation_slice("expire", "held-reservations"),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+        assert!(found[0].acknowledged);
+        assert_eq!(
+            issues_with(&issues, "READ_MODEL_MULTIPLE_AUTOMATIONS").len(),
+            0
+        );
+    }
+
+    #[test]
+    fn shared_consumers_without_doc_is_error() {
+        for doc in BLANK_DOCS {
+            let issues = validate(vec![
+                read_model("acme", "held-reservations", FIELDS, EVENTS, Some(doc)),
+                automation_slice("confirm", "held-reservations"),
+                automation_slice("expire", "held-reservations"),
+            ]);
+            let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY");
+            assert_eq!(found.len(), 1, "{doc:?}: {issues:?}");
+            assert_eq!(
+                found[0].severity,
+                pb::validation_issue::Severity::Error as i32
+            );
+        }
+    }
+
+    #[test]
+    fn read_models_with_the_same_shape_warn_once() {
+        let issues = validate(vec![
+            read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+            read_model(
+                "acme",
+                "expired-reservations",
+                FIELDS,
+                &["reservation.released", "reservation.placed"],
+                None,
+            ),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Warning as i32
+        );
+        assert!(found[0].message.contains("acme/expired-reservations@1"));
+        assert!(found[0].message.contains("acme/reservations-to-confirm@1"));
+    }
+
+    #[test]
+    fn key_order_does_not_hide_a_duplicate() {
+        let mut first = read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None);
+        let mut second = read_model("acme", "expired-reservations", FIELDS, EVENTS, None);
+        set_key(&mut first, &["reservation_id", "expires_at"]);
+        set_key(&mut second, &["expires_at", "reservation_id"]);
+        let issues = validate(vec![first, second]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 1);
+    }
+
+    #[test]
+    fn nested_field_docs_do_not_hide_a_duplicate() {
+        let issues = validate(vec![
+            with_nested_field(
+                read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+                "guest",
+                "name",
+                "Name on the booking.",
+            ),
+            with_nested_field(
+                read_model("acme", "expired-reservations", FIELDS, EVENTS, None),
+                "guest",
+                "name",
+                "",
+            ),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 1);
+    }
+
+    fn set_key(entity: &mut pb::Entity, key: &[&str]) {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.key = key.iter().map(|k| (*k).into()).collect();
+        }
+    }
+
+    fn with_nested_field(
+        mut entity: pb::Entity,
+        object: &str,
+        field: &str,
+        doc: &str,
+    ) -> pb::Entity {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            let mut fields = trogon_atlas_core::schema::schema_fields(rm.schema.as_ref());
+            fields.push(pb::FieldSpec {
+                name: object.into(),
+                r#type: Some(pb::FieldType {
+                    kind: Some(pb::field_type::Kind::Object(pb::field_type::ObjectType {
+                        fields: vec![pb::FieldSpec {
+                            name: field.into(),
+                            doc: doc.into(),
+                            ..Default::default()
+                        }],
+                    })),
+                }),
+                ..Default::default()
+            });
+            rm.schema = Some(trogon_atlas_core::schema::pack_fields(fields));
+        }
+        entity
+    }
+
+    #[test]
+    fn read_models_with_different_fields_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+            read_model(
+                "acme",
+                "reservation-board",
+                &["reservation_id", "guest_name"],
+                EVENTS,
+                None,
+            ),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
+    }
+
+    #[test]
+    fn read_models_in_different_contexts_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "held-reservations", FIELDS, EVENTS, None),
+            read_model("billing", "held-reservations", FIELDS, EVENTS, None),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
+    }
+
+    #[test]
+    fn read_models_without_source_events_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "dispute-webhooks", FIELDS, &[], None),
+            read_model("acme", "refund-webhooks", FIELDS, &[], None),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
     }
 }

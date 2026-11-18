@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: wishlist-page
+  namespace: acme-wishlist
+spec:
+  doc: 'Shopper-facing: lists saved products and takes a new one.'
+  title: Wishlist page

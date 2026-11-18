@@ -1,7 +1,11 @@
+pub mod artifact_publication;
 pub mod error;
 pub mod key;
+pub mod metrics;
 pub mod nats;
+pub mod protection;
 pub mod recovery;
+pub mod source;
 pub mod store;
 
 // `refs` moved to the dedicated `trogon-atlas-core` crate so any third-party
@@ -10,10 +14,15 @@ pub mod store;
 // reach for `trogon_atlas_store::refs` keep compiling -- new code should
 // depend on `trogon-atlas-core` directly.
 pub use error::{StoreError, StoreResult};
+pub use metrics::StoreMetrics;
 pub use nats::{
     ConflictResolution, LegacyFieldsFinding, LegacyFieldsLocation, LegacyFieldsReport,
     LegacyFieldsShape, MigrationMode, NatsCredentials, NatsStore, NatsStoreConfig, StoreOpenMode,
     STORE_SCHEMA_MARKER,
+};
+pub use protection::{
+    EntityIdentity, ProtectionListing, ProtectionReason, ProtectionRecord, ProtectionRevision,
+    ProtectionState, ProtectionUnknown, ProtectionUnknownCause, StoredProtection,
 };
 pub use recovery::{
     BatchJournalId, BatchRecovery, BatchRecoveryReport, JournalPhase, RecoveryAction, RecoveryMode,
@@ -21,8 +30,10 @@ pub use recovery::{
 };
 pub use store::{
     ChangeKind, ChangeRecord, ChangeStreamStats, ChangesetOp, ChangesetPage, ChangesetRecord,
-    ChangesetRef, ChangesetScope, ClaimOutcome, EntityRevisionRecord, NamespaceClaim,
-    NamespaceRecord, NamespaceTenure, OperationRecord, OperationStatus, RevisionPage, Store,
-    StoredEntity, WriteContext,
+    ChangesetRef, ChangesetScope, ChangesetValidation, ClaimOutcome, EntityByteBudget,
+    EntityRevisionRecord, IssueCounts, NamespaceClaim, NamespaceRecord, NamespaceTenure,
+    OperationRecord, OperationStatus, ReceiptCoverage, RevisionPage, RuleCatalogDigest, Store,
+    StoreNamespaceMarker, StoreReadMarker, StoredEntity, UnvalidatedReason, ValidationReceipt,
+    WriteContext,
 };
 pub use trogon_atlas_core::refs;

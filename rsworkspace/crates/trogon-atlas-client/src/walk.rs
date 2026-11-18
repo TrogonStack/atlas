@@ -702,14 +702,14 @@ impl Case {
 /// Parse every `Specification` document in a multi-document YAML stream.
 pub fn parse_cases(text: &str, source: &str) -> Result<Vec<Case>> {
     let mut cases = Vec::new();
-    for (i, document) in serde_yaml::Deserializer::from_str(text).enumerate() {
+    for (i, document) in serde_norway::Deserializer::from_str(text).enumerate() {
         let at = format!("{source}#doc{i}");
-        let value = serde_yaml::Value::deserialize(document)
+        let value = serde_norway::Value::deserialize(document)
             .map_err(|e| crate::failure::invalid_input(format!("{at}: parsing YAML: {e}")))?;
         if value.is_null() {
             continue;
         }
-        let doc: CaseDocument = serde_yaml::from_value(value)
+        let doc: CaseDocument = serde_norway::from_value(value)
             .map_err(|e| crate::failure::invalid_input(format!("{at}: {e}")))?;
         if doc.api_version != manifest::API_VERSION {
             crate::invalid_input!(

@@ -20,7 +20,7 @@ use tonic_types::StatusExt;
 use crate::{
     apply::ApplyRejected,
     compat::CompatibilityError,
-    precondition::{StalePlan, StaleResolution},
+    precondition::{Revision, StalePlan, StaleResolution},
 };
 
 /// Domain of the `ErrorInfo` this client recognizes. Must match the
@@ -163,6 +163,9 @@ pub enum NextAction {
     /// A `ListChanges` cursor failed to open; retry the poll with an empty
     /// `since_token` instead of reusing it.
     RestartListing,
+    /// The target identity is protected; an admin must lift the protection
+    /// with `UnprotectEntity` before any change to it can land.
+    RequestUnprotect,
     /// No retry helps.
     None,
 }
@@ -176,6 +179,7 @@ impl fmt::Display for NextAction {
             NextAction::CheckOperation => "check_operation",
             NextAction::UseNewOperationId => "use_new_operation_id",
             NextAction::RestartListing => "restart_listing",
+            NextAction::RequestUnprotect => "request_unprotect",
             NextAction::None => "none",
         })
     }
@@ -316,6 +320,16 @@ impl Failure {
     /// `tonic::Status` at the chain's root. Never matches on error text.
     #[must_use]
     pub fn classify(err: &anyhow::Error) -> Self {
+        if let Some(completion) = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<crate::artifacts::UploadCompletionError>())
+        {
+            let mut failure = Self::classify(&completion.source);
+            let mut details = failure.details.into_json();
+            details["artifact_upload"] = json!(completion.recovery);
+            failure.details = FailureDetails::from_json(details);
+            return failure;
+        }
         if let Some(stale) = err.chain().find_map(|c| c.downcast_ref::<StalePlan>()) {
             return Self::new(FailureCategory::StaleState, stale.to_string())
                 .with_details(FailureDetails::from_json(stale.to_json()));
@@ -372,10 +386,22 @@ impl Failure {
     ) -> Option<Self> {
         let (category, code, next_action): (FailureCategory, &'static str, Option<NextAction>) =
             match reason {
+                // A conditional write whose target is gone carries expected_etag
+                // (and empty actual_etag). That is a stale plan, not a generic miss.
+                "NOT_FOUND" if metadata.contains_key("expected_etag") => (
+                    FailureCategory::StaleState,
+                    "NOT_FOUND",
+                    Some(NextAction::Replan),
+                ),
                 "NOT_FOUND" => (FailureCategory::NotFound, "NOT_FOUND", None),
                 "ALREADY_EXISTS" => (FailureCategory::Precondition, "ALREADY_EXISTS", None),
                 "STALE_PRECONDITION" => (FailureCategory::StaleState, "STALE_PRECONDITION", None),
                 "VALIDATION_FAILED" => (FailureCategory::Validation, "VALIDATION_FAILED", None),
+                "INVARIANT_VIOLATED" => (FailureCategory::Precondition, "INVARIANT_VIOLATED", None),
+                "INVARIANT_UNEVALUABLE" => {
+                    (FailureCategory::Precondition, "INVARIANT_UNEVALUABLE", None)
+                }
+                "INVARIANT_STALE" => (FailureCategory::StaleState, "INVARIANT_STALE", None),
                 "UNAVAILABLE" => (FailureCategory::Unavailable, "UNAVAILABLE", None),
                 "PARTIAL_APPLY" => (FailureCategory::PartialApply, "PARTIAL_APPLY", None),
                 "INTERNAL" => (FailureCategory::Internal, "INTERNAL", None),
@@ -390,17 +416,82 @@ impl Failure {
                     Some(NextAction::UseNewOperationId),
                 ),
                 "NOT_WRITER" => (FailureCategory::Unavailable, "NOT_WRITER", None),
+                "EXPORT_INCOMPLETE" => (
+                    FailureCategory::Precondition,
+                    "EXPORT_INCOMPLETE",
+                    Some(NextAction::None),
+                ),
+                "SIGNING_KEY_UNAVAILABLE" => (
+                    FailureCategory::Precondition,
+                    "SIGNING_KEY_UNAVAILABLE",
+                    Some(NextAction::None),
+                ),
                 "CURSOR_REJECTED" => (
                     FailureCategory::Validation,
                     "CURSOR_REJECTED",
                     Some(NextAction::RestartListing),
                 ),
+                "ENTITY_PROTECTED" => (
+                    FailureCategory::Precondition,
+                    "ENTITY_PROTECTED",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" if metadata.contains_key("row_revision") => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    None,
+                ),
                 _ => return None,
             };
-        let details = match metadata.get("journal") {
-            Some(journal) => FailureDetails::from_json(json!({ "journal": journal })),
-            None => FailureDetails::empty(),
-        };
+        // Single-entity stale refusals carry the same revision pair BatchMutate
+        // puts on precondition_failure. Prefer those keys when present so Put
+        // and Delete dry-run/apply refusals surface them to MCP/CLI.
+        let details =
+            if metadata.contains_key("expected_etag") || metadata.contains_key("actual_etag") {
+                let expected = metadata.get("expected_etag").map_or("", String::as_str);
+                let actual = metadata.get("actual_etag").map_or("", String::as_str);
+                FailureDetails::from_json(json!({
+                    "expected_etag": revision_detail(expected),
+                    "actual_etag": revision_detail(actual),
+                }))
+            } else if code.starts_with("INVARIANT_") {
+                FailureDetails::from_json(json!(metadata))
+            } else if code == "EXPORT_INCOMPLETE" {
+                // Comma-joined by the server, like `did_you_mean`, and named as the
+                // CLI names a bundle's reasons.
+                let reasons: Vec<&str> = metadata
+                    .get("reasons")
+                    .map(|reasons| reasons.split(',').filter(|r| !r.is_empty()).collect())
+                    .unwrap_or_default();
+                FailureDetails::from_json(json!({ "incomplete_reasons": reasons }))
+            } else if let Some(source) = metadata
+                .get("source")
+                .filter(|_| code == "SIGNING_KEY_UNAVAILABLE")
+            {
+                FailureDetails::from_json(json!({ "source": source }))
+            } else if let Some(journal) = metadata.get("journal") {
+                FailureDetails::from_json(json!({ "journal": journal }))
+            } else if let Some(identity) = metadata.get("identity") {
+                let mut fields = serde_json::Map::from_iter([("identity".into(), json!(identity))]);
+                for key in ["protection_reason", "protected_by", "row_revision"] {
+                    if let Some(value) = metadata.get(key) {
+                        fields.insert(key.into(), json!(value));
+                    }
+                }
+                FailureDetails::from_json(serde_json::Value::Object(fields))
+            } else if let Some(slugs) = metadata.get("did_you_mean") {
+                // ErrorInfo metadata is string-to-string, so the server joins the
+                // slugs with a comma, which a valid slug can never contain.
+                let slugs: Vec<&str> = slugs.split(',').filter(|s| !s.is_empty()).collect();
+                FailureDetails::from_json(json!({ "did_you_mean": slugs }))
+            } else {
+                FailureDetails::empty()
+            };
         let failure = Self::new(category, status.message().to_string())
             .with_code(FailureCode::known(code))
             .with_details(details);
@@ -414,6 +505,13 @@ impl Failure {
     /// carries no `ErrorInfo` this client recognizes (most `InvalidArgument`
     /// statuses raised directly by request validation, for instance).
     fn from_code(status: &Status) -> Self {
+        if status.code() == Code::ResourceExhausted {
+            return Self::new(
+                FailureCategory::Validation,
+                "request resource limit exhausted",
+            )
+            .with_code(FailureCode::known("RESOURCE_EXHAUSTED"));
+        }
         let category = match status.code() {
             Code::Aborted => FailureCategory::StaleState,
             Code::FailedPrecondition | Code::AlreadyExists => FailureCategory::Precondition,
@@ -449,6 +547,21 @@ impl Failure {
             None => failure,
         }
     }
+}
+
+/// Encode an ErrorInfo etag metadata value the same way `Revision::to_json`
+/// does for batch `StalePlan` details: empty wire form becomes JSON null.
+fn revision_detail(wire: &str) -> Value {
+    Revision::from_wire(wire).map_or_else(
+        |_| {
+            if wire.is_empty() {
+                Value::Null
+            } else {
+                json!(wire)
+            }
+        },
+        |revision| revision.to_json(),
+    )
 }
 
 /// `BatchMutateResponse.failure[].code` -> `FailureCategory`, for the codes
@@ -499,6 +612,10 @@ mod tests {
             NextAction::Replan,
             NextAction::Retry,
             NextAction::FixInput,
+            NextAction::CheckOperation,
+            NextAction::UseNewOperationId,
+            NextAction::RestartListing,
+            NextAction::RequestUnprotect,
             NextAction::None,
         ] {
             let serialized: String = serde_json::from_value(json!(action)).unwrap();
@@ -567,6 +684,7 @@ mod tests {
                 message: "entity is referenced".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let err = anyhow::Error::new(rejected).context("BatchMutate failed");
         let failure = Failure::classify(&err);
@@ -590,6 +708,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            coverage: None,
         };
         let err = anyhow::Error::new(rejected);
         let failure = Failure::classify(&err);
@@ -641,6 +760,165 @@ mod tests {
     }
 
     #[test]
+    fn signing_key_unavailable_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "SIGNING_KEY_UNAVAILABLE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([("source".to_string(), "file".to_string())]),
+        );
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "signing unavailable", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(failure.details.0["source"], json!("file"));
+    }
+
+    #[test]
+    fn incomplete_export_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "EXPORT_INCOMPLETE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "reasons".to_string(),
+                "REASON_CONCURRENT_WRITE,REASON_BOUNDARY_UNVERIFIED".to_string(),
+            )]),
+        );
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "export incomplete", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(
+            failure.details.0["incomplete_reasons"],
+            json!(["REASON_CONCURRENT_WRITE", "REASON_BOUNDARY_UNVERIFIED"])
+        );
+    }
+
+    #[test]
+    fn not_found_with_did_you_mean_carries_the_slugs_as_a_list() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "NOT_FOUND",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "did_you_mean".to_string(),
+                "place-order-slice,place-orders".to_string(),
+            )]),
+        );
+        let status = Status::with_error_details(Code::NotFound, "entity not found", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::NotFound);
+        assert_eq!(
+            failure.details.0["did_you_mean"],
+            json!(["place-order-slice", "place-orders"])
+        );
+    }
+
+    #[test]
+    fn stale_precondition_error_info_carries_expected_and_actual_etags() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "STALE_PRECONDITION",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("expected_etag".to_string(), "1".to_string()),
+                ("actual_etag".to_string(), "2".to_string()),
+            ]),
+        );
+        let status = Status::with_error_details(Code::Aborted, "etag mismatch", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::StaleState);
+        assert_eq!(failure.next_action, NextAction::Replan);
+        assert_eq!(failure.code.unwrap().as_str(), "STALE_PRECONDITION");
+        assert_eq!(failure.details.0["expected_etag"], json!("1"));
+        assert_eq!(failure.details.0["actual_etag"], json!("2"));
+    }
+
+    #[test]
+    fn invariant_refusals_classify_by_whether_replanning_can_help() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let classify = |reason: &str, code: Code| {
+            let details = ErrorDetails::with_error_info(
+                reason,
+                SERVER_ERROR_DOMAIN,
+                HashMap::from([("invariant".to_string(), "no-dangling".to_string())]),
+            );
+            Failure::from_status(&Status::with_error_details(code, "refused", details))
+        };
+        let violated = classify("INVARIANT_VIOLATED", Code::FailedPrecondition);
+        assert_eq!(violated.category, FailureCategory::Precondition);
+        assert_eq!(violated.details.0["invariant"], json!("no-dangling"));
+        let unevaluable = classify("INVARIANT_UNEVALUABLE", Code::FailedPrecondition);
+        assert_eq!(unevaluable.category, FailureCategory::Precondition);
+        let stale = classify("INVARIANT_STALE", Code::Aborted);
+        assert_eq!(stale.category, FailureCategory::StaleState);
+        assert_eq!(stale.next_action, NextAction::Replan);
+    }
+
+    #[test]
+    fn create_only_already_exists_error_info_names_the_live_revision() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "ALREADY_EXISTS",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("expected_etag".to_string(), String::new()),
+                ("actual_etag".to_string(), "9".to_string()),
+            ]),
+        );
+        let status =
+            Status::with_error_details(Code::AlreadyExists, "entity already exists", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.details.0["expected_etag"], Value::Null);
+        assert_eq!(failure.details.0["actual_etag"], json!("9"));
+    }
+
+    #[test]
+    fn if_match_not_found_error_info_keeps_the_planned_revision() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "NOT_FOUND",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("expected_etag".to_string(), "3".to_string()),
+                ("actual_etag".to_string(), String::new()),
+            ]),
+        );
+        let status = Status::with_error_details(Code::NotFound, "entity not found", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::StaleState);
+        assert_eq!(failure.next_action, NextAction::Replan);
+        assert_eq!(failure.code.unwrap().as_str(), "NOT_FOUND");
+        assert_eq!(failure.details.0["expected_etag"], json!("3"));
+        assert_eq!(failure.details.0["actual_etag"], Value::Null);
+    }
+
+    #[test]
     fn status_with_not_writer_reason_classifies_as_unavailable_with_its_metadata() {
         use std::collections::HashMap;
 
@@ -663,6 +941,77 @@ mod tests {
         assert_eq!(failure.category, FailureCategory::Unavailable);
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "NOT_WRITER");
+    }
+
+    #[test]
+    fn status_with_entity_protected_reason_asks_for_an_unprotect() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "ENTITY_PROTECTED",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("identity".to_string(), "event/orders/placed".to_string()),
+                ("protection_reason".to_string(), "published".to_string()),
+                ("protected_by".to_string(), "ops".to_string()),
+            ]),
+        );
+        let status = Status::with_error_details(
+            Code::FailedPrecondition,
+            "event/orders/placed is protected (published)",
+            details,
+        );
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "ENTITY_PROTECTED");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert_eq!(failure.details.0["protected_by"], json!("ops"));
+    }
+
+    fn protection_state_unknown_status(metadata: &[(&str, &str)]) -> Status {
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "PROTECTION_STATE_UNKNOWN",
+            SERVER_ERROR_DOMAIN,
+            metadata
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        Status::with_error_details(
+            Code::Unavailable,
+            "protection state of event/orders/placed is unknown",
+            details,
+        )
+    }
+
+    #[test]
+    fn status_with_protection_state_unknown_is_retryable_not_a_lift_request() {
+        let status = protection_state_unknown_status(&[("identity", "event/orders/placed")]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::Retry);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert!(failure.details.0.get("row_revision").is_none());
+        assert!(failure.details.0.get("protected_by").is_none());
+    }
+
+    #[test]
+    fn status_with_an_unreadable_protection_row_asks_for_a_lift_not_a_retry() {
+        let status = protection_state_unknown_status(&[
+            ("identity", "event/orders/placed"),
+            ("row_revision", "7"),
+        ]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["row_revision"], json!("7"));
     }
 
     #[test]

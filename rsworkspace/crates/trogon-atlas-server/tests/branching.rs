@@ -30,6 +30,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
@@ -37,7 +38,7 @@ async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -1020,7 +1021,8 @@ async fn start_auth_server() -> String {
     let addr = listener.local_addr().unwrap();
 
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc_impl = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc_impl =
+        EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc_service = EventModelServiceServer::new(svc_impl);
 
     let registry = Arc::new(make_registry());
@@ -1120,6 +1122,8 @@ fn term(ns: &str, slug: &str, embodies: Vec<pb::EntityRef>) -> pb::Entity {
             embodied_by: embodies,
             metadata: vec![],
             supersedes: None,
+            owning_domain: None,
+            glossary: None,
         })),
     }
 }
@@ -1700,6 +1704,133 @@ async fn merge_branch_dry_run_validates_without_persisting() {
     assert_eq!(branch.delta_count, 1);
 }
 
+/// A reviewer reads one dry-run result instead of running `DiffBranch` and a
+/// validation call beside it: the landable entries arrive split by class,
+/// and the post-merge findings arrive even when none of them blocks.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_dry_run_splits_counts_by_class_and_reports_findings() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(put_req(event("p2split", "to-change", 1, "Before"), false))
+        .await
+        .unwrap();
+    c.put_entity(put_req(event("p2split", "to-delete", 1, "Doomed"), false))
+        .await
+        .unwrap();
+    c.create_branch(pb::CreateBranchRequest {
+        name: "split-branch".into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(
+            pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                    id: Some(id("p2split", "to-add", 1)),
+                    title: "Fresh".into(),
+                    ..Default::default()
+                })),
+            },
+            false,
+        ),
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(event("p2split", "to-change", 1, "After"), false),
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+    c.delete_entity(with_branch(
+        pb::DeleteEntityRequest {
+            operation_id: String::new(),
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id("p2split", "to-delete", 1)),
+            if_match: String::new(),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+        },
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+
+    let resp = c
+        .merge_branch(pb::MergeBranchRequest {
+            operation_id: String::new(),
+            name: "split-branch".into(),
+            dry_run: true,
+            keep_branch: false,
+            auto_merge: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        resp.status,
+        pb::merge_branch_response::Status::Validated as i32
+    );
+    assert_eq!(
+        (
+            resp.added_count,
+            resp.changed_count,
+            resp.deleted_count,
+            resp.applied_count
+        ),
+        (1, 1, 1, 3)
+    );
+    assert!(
+        !resp.validation.is_empty(),
+        "a dry run must report the findings the merge leaves behind"
+    );
+    let errors: Vec<&pb::ValidationIssue> = resp
+        .validation
+        .iter()
+        .filter(|i| i.severity == pb::validation_issue::Severity::Error as i32)
+        .collect();
+    assert!(
+        errors.iter().any(|i| i.code == "DOMAIN_SLUG_MISMATCH"),
+        "a strategic Error rides a VALIDATED merge: {errors:?}"
+    );
+    assert!(
+        errors.iter().all(|i| {
+            i.subject.as_ref().is_some_and(|s| {
+                [
+                    pb::EntityKind::Domain,
+                    pb::EntityKind::Subdomain,
+                    pb::EntityKind::BoundedContext,
+                ]
+                .contains(&pb::EntityKind::try_from(s.kind).unwrap())
+            })
+        }),
+        "only strategic findings may be Errors on a non-INVALID merge: {errors:?}"
+    );
+
+    let applied = c
+        .merge_branch(pb::MergeBranchRequest {
+            operation_id: String::new(),
+            name: "split-branch".into(),
+            dry_run: false,
+            keep_branch: false,
+            auto_merge: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        (
+            applied.added_count,
+            applied.changed_count,
+            applied.deleted_count
+        ),
+        (1, 1, 1)
+    );
+}
+
 /// The dry-run overlay path (`req.dry_run` branch inside `merge_branch`)
 /// must build a `MutationOp::Delete` for landable entries whose diff status
 /// is `Deleted`, not just `MutationOp::Put` for adds/changes: validate a
@@ -1777,6 +1908,179 @@ async fn merge_branch_dry_run_validates_a_pending_delete() {
     assert_eq!(branch.delta_count, 1);
 }
 
+fn dangling_term(ns: &str, slug: &str) -> pb::Entity {
+    term(
+        ns,
+        slug,
+        vec![pb::EntityRef {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id(ns, "missing", 1)),
+        }],
+    )
+}
+
+async fn seed_old_dangling_term(c: &mut EventModelServiceClient<Channel>) {
+    // Written straight to the baseline with `force`, so the store already has
+    // one hygiene Error in `acme-legacy` before any branch exists.
+    c.put_entity(put_req(dangling_term("acme-legacy", "old-ghost"), true))
+        .await
+        .unwrap();
+}
+
+async fn branch_with_event(c: &mut EventModelServiceClient<Channel>, name: &str) {
+    c.create_branch(pb::CreateBranchRequest {
+        name: name.into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(event("acme-orders", "order-placed", 1, "Placed"), false),
+        name,
+    ))
+    .await
+    .unwrap();
+}
+
+fn merge_req(name: &str, dry_run: bool) -> pb::MergeBranchRequest {
+    pb::MergeBranchRequest {
+        operation_id: String::new(),
+        name: name.into(),
+        dry_run,
+        keep_branch: true,
+        auto_merge: false,
+    }
+}
+
+/// An error that was in the store before the merge, in a namespace the
+/// branch did not touch, is shown as Info and does not refuse the merge.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_ignores_preexisting_errors_in_other_namespaces() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    branch_with_event(&mut c, "orders-change").await;
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("orders-change", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        let expected = if dry_run {
+            pb::merge_branch_response::Status::Validated
+        } else {
+            pb::merge_branch_response::Status::Applied
+        };
+        assert_eq!(resp.status, expected as i32, "dry_run={dry_run}");
+        let old = resp
+            .validation
+            .iter()
+            .find(|i| i.code == "TERM_DANGLING_ENTITY")
+            .expect("the old finding stays visible");
+        assert_eq!(
+            old.severity,
+            pb::validation_issue::Severity::Info as i32,
+            "dry_run={dry_run}"
+        );
+        assert!(old.message.contains("predates the merge"));
+    }
+}
+
+/// A new error from the branch still refuses, and the old error is shown as
+/// Info beside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_refuses_new_errors_when_old_errors_exist() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    branch_with_event(&mut c, "orders-change").await;
+    c.put_entity(with_branch(
+        put_req(dangling_term("acme-orders", "new-ghost"), true),
+        "orders-change",
+    ))
+    .await
+    .unwrap();
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("orders-change", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            resp.status,
+            pb::merge_branch_response::Status::Invalid as i32,
+            "dry_run={dry_run}"
+        );
+        let severity_in = |ns: &str| {
+            resp.validation
+                .iter()
+                .find(|i| {
+                    i.code == "TERM_DANGLING_ENTITY"
+                        && i.subject.as_ref().unwrap().id.as_ref().unwrap().namespace == ns
+                })
+                .unwrap_or_else(|| panic!("no finding in {ns}, dry_run={dry_run}"))
+                .severity
+        };
+        assert_eq!(
+            severity_in("acme-legacy"),
+            pb::validation_issue::Severity::Info as i32,
+            "dry_run={dry_run}"
+        );
+        assert_eq!(
+            severity_in("acme-orders"),
+            pb::validation_issue::Severity::Error as i32,
+            "dry_run={dry_run}"
+        );
+    }
+}
+
+/// A branch that only writes the next version of an entity whose error
+/// predates the merge adds no new error, even though both versions stay
+/// stored.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_ignores_a_successor_version_of_a_preexisting_error() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    seed_old_dangling_term(&mut c).await;
+    c.create_branch(pb::CreateBranchRequest {
+        name: "legacy-touch".into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    let mut successor = dangling_term("acme-legacy", "old-ghost");
+    if let Some(pb::entity::Kind::Term(t)) = successor.kind.as_mut() {
+        t.id = Some(id("acme-legacy", "old-ghost", 2));
+        t.supersedes = Some(id("acme-legacy", "old-ghost", 1));
+    }
+    c.put_entity(with_branch(put_req(successor, true), "legacy-touch"))
+        .await
+        .unwrap();
+
+    for dry_run in [true, false] {
+        let resp = c
+            .merge_branch(merge_req("legacy-touch", dry_run))
+            .await
+            .unwrap()
+            .into_inner();
+        let expected = if dry_run {
+            pb::merge_branch_response::Status::Validated
+        } else {
+            pb::merge_branch_response::Status::Applied
+        };
+        assert_eq!(resp.status, expected as i32, "dry_run={dry_run}");
+        assert!(
+            resp.validation
+                .iter()
+                .filter(|i| i.code == "TERM_DANGLING_ENTITY")
+                .all(|i| i.severity == pb::validation_issue::Severity::Info as i32),
+            "dry_run={dry_run}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn merge_branch_invalid_via_dangling_reference() {
     let endpoint = start_server().await;
@@ -1834,6 +2138,20 @@ async fn merge_branch_invalid_via_dangling_reference() {
         .iter()
         .any(|i| i.code == "TERM_DANGLING_ENTITY"
             && i.severity == pb::validation_issue::Severity::Error as i32));
+    let strategic = resp
+        .coverage
+        .as_ref()
+        .and_then(|c| c.checks.iter().find(|c| c.check_id == "strategic"))
+        .expect("an invalid merge must report strategic coverage");
+    assert_eq!(
+        strategic.reason, "kind_not_applicable",
+        "a Term-only merge never reaches strategic, even when hygiene blocks it"
+    );
+    assert_eq!(resp.applied_count, 0);
+    assert_eq!(
+        (resp.added_count, resp.changed_count, resp.deleted_count),
+        (1, 0, 0)
+    );
 
     // Nothing persisted.
     let err = c
@@ -2877,6 +3195,7 @@ async fn delete_entity_on_branch_must_see_branch_referrers() {
                     id: Some(id("delref-ns", "referrer-slice", 1)),
                     title: "referrer-slice".into(),
                     emitted_events: vec![pb::EventEdge {
+                        connection_id: None,
                         event: Some(pb::EventRef {
                             id: Some(id("delref-ns", "target", 1)),
                         }),

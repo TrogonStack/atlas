@@ -35,6 +35,22 @@ describe('BoardTopRight', () => {
     expect(screen.getByText('summary').parentElement?.className).toContain('order-last');
   });
 
+  it('seats the view switcher in the same row as the corner, so neither is pushed below the other', () => {
+    render(
+      <BoardTopRightHost corner={<span>summary</span>} switcher={<span>switcher</span>}>
+        <BoardTopRight>
+          <span>board control</span>
+        </BoardTopRight>
+      </BoardTopRightHost>,
+    );
+    const toolbar = screen.getByTestId('board-toolbar');
+    expect(toolbar.contains(screen.getByText('switcher'))).toBe(true);
+    expect(toolbar.contains(screen.getByTestId('board-top-right'))).toBe(true);
+    // The breakpoint offset is gone: the row hugs the top edge at every width.
+    expect(toolbar.className).toContain('top-2');
+    expect(toolbar.className).not.toContain('top-12');
+  });
+
   it('renders a board control in place when no shell provides the row', () => {
     render(
       <BoardTopRight>

@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$MISE_PROJECT_ROOT"
 
 set +e
-osv-scanner scan source --recursive --format sarif --output-file results.sarif .
+osv-scanner scan source --recursive --config rsworkspace/osv-scanner.toml --format sarif --output-file results.sarif .
 status=$?
 set -e
 

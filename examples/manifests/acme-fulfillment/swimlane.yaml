@@ -1,0 +1,17 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: fulfillment
+  namespace: acme-fulfillment
+spec:
+  doc: Dispatch and delivery of a paid order.
+  order: 1
+  state:
+  - name: status
+    type:
+      enumeration:
+        values:
+        - pending
+        - fulfilled
+  streamId: order-{order_id}
+  title: Fulfillment

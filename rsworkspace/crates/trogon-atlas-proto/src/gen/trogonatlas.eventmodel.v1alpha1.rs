@@ -9,6 +9,31 @@
 /// Where a connection between entities can carry data (slice endpoints,
 /// storyboard entry/outcome), the schema uses Edge messages instead.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataProductRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SpecificationRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SchemaRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChannelRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataStoreRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -54,6 +79,11 @@ pub struct ExternalSystemRef {
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DomainRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -83,6 +113,31 @@ pub struct EntityRef {
     #[prost(enumeration="EntityKind", tag="1")]
     pub kind: i32,
     #[prost(message, optional, tag="2")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TeamRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PersonRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DesignGraphRef {
+    #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
 /// Discriminated union over every addressable thing. The shape of the inner
@@ -122,6 +177,16 @@ pub enum EntityKind {
     AlertPolicy = 27,
     AlertNotificationTarget = 28,
     TypeLibrary = 29,
+    Channel = 30,
+    DataStore = 31,
+    Specification = 32,
+    DataProduct = 33,
+    Team = 34,
+    Person = 35,
+    Decision = 36,
+    Document = 37,
+    DesignGraph = 38,
+    SystemGroup = 39,
 }
 impl EntityKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -160,6 +225,16 @@ impl EntityKind {
             Self::AlertPolicy => "ENTITY_KIND_ALERT_POLICY",
             Self::AlertNotificationTarget => "ENTITY_KIND_ALERT_NOTIFICATION_TARGET",
             Self::TypeLibrary => "ENTITY_KIND_TYPE_LIBRARY",
+            Self::Channel => "ENTITY_KIND_CHANNEL",
+            Self::DataStore => "ENTITY_KIND_DATA_STORE",
+            Self::Specification => "ENTITY_KIND_SPECIFICATION",
+            Self::DataProduct => "ENTITY_KIND_DATA_PRODUCT",
+            Self::Team => "ENTITY_KIND_TEAM",
+            Self::Person => "ENTITY_KIND_PERSON",
+            Self::Decision => "ENTITY_KIND_DECISION",
+            Self::Document => "ENTITY_KIND_DOCUMENT",
+            Self::DesignGraph => "ENTITY_KIND_DESIGN_GRAPH",
+            Self::SystemGroup => "ENTITY_KIND_SYSTEM_GROUP",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -195,15 +270,109 @@ impl EntityKind {
             "ENTITY_KIND_ALERT_POLICY" => Some(Self::AlertPolicy),
             "ENTITY_KIND_ALERT_NOTIFICATION_TARGET" => Some(Self::AlertNotificationTarget),
             "ENTITY_KIND_TYPE_LIBRARY" => Some(Self::TypeLibrary),
+            "ENTITY_KIND_CHANNEL" => Some(Self::Channel),
+            "ENTITY_KIND_DATA_STORE" => Some(Self::DataStore),
+            "ENTITY_KIND_SPECIFICATION" => Some(Self::Specification),
+            "ENTITY_KIND_DATA_PRODUCT" => Some(Self::DataProduct),
+            "ENTITY_KIND_TEAM" => Some(Self::Team),
+            "ENTITY_KIND_PERSON" => Some(Self::Person),
+            "ENTITY_KIND_DECISION" => Some(Self::Decision),
+            "ENTITY_KIND_DOCUMENT" => Some(Self::Document),
+            "ENTITY_KIND_DESIGN_GRAPH" => Some(Self::DesignGraph),
+            "ENTITY_KIND_SYSTEM_GROUP" => Some(Self::SystemGroup),
             _ => None,
         }
     }
+}
+/// One typed edge message per type kind. An Edge is a Ref + free-form doc +
+/// a typed annotation list (repeated google.protobuf.Any). Edges are used
+/// wherever a slice or storyboard endpoint may want to carry design data
+/// attached to the connection itself: field mappings, conditions under
+/// which an event is emitted, projection rules, validation, etc. Different
+/// tools can attach their own annotation types without conflicting.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EventEdge {
+    #[prost(message, optional, tag="1")]
+    pub event: ::core::option::Option<EventRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommandEdge {
+    #[prost(message, optional, tag="1")]
+    pub command: ::core::option::Option<CommandRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReadModelEdge {
+    #[prost(message, optional, tag="1")]
+    pub read_model: ::core::option::Option<ReadModelRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProcessorEdge {
+    #[prost(message, optional, tag="1")]
+    pub processor: ::core::option::Option<ProcessorRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UiEdge {
+    #[prost(message, optional, tag="1")]
+    pub ui: ::core::option::Option<UiRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PersonaEdge {
+    #[prost(message, optional, tag="1")]
+    pub persona: ::core::option::Option<PersonaRef>,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+}
+/// Shared catalog strings. They live in their own file so Schema business
+/// declarations can use them without importing the decision-document graph.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogTitle {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
 }
 /// Generic reference to any type definition. Used by FieldSpec when a payload
 /// field references another type and the kind is unknown ahead of time.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeRef {
-    #[prost(oneof="type_ref::Ref", tags="1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof="type_ref::Ref", tags="1, 2, 3, 4, 5, 6, 7, 8")]
     pub r#ref: ::core::option::Option<type_ref::Ref>,
 }
 /// Nested message and enum types in `TypeRef`.
@@ -224,6 +393,12 @@ pub mod type_ref {
         Persona(super::PersonaRef),
         #[prost(message, tag="7")]
         Swimlane(super::SwimlaneRef),
+        /// A field whose type is a named top-level Schema entity (one with
+        /// `id` set), distinct from the Decision #33 Any-bytes nominal-typing
+        /// route: this is a structural ref the impact/reference graph can
+        /// walk, not just a type_url+bytes equality check.
+        #[prost(message, tag="8")]
+        Schema(super::SchemaRef),
     }
 }
 /// A field's type: a CLOSED vocabulary (the oneof is the finite, checkable
@@ -351,6 +526,81 @@ pub struct Schema {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// Unset, true, and false are distinct. Unset is not false.
+    #[prost(bool, optional, tag="7")]
+    pub aggregate_root: ::core::option::Option<bool>,
+    #[prost(message, repeated, tag="8")]
+    pub identifiers: ::prost::alloc::vec::Vec<BusinessIdentifier>,
+    #[prost(message, repeated, tag="9")]
+    pub property_relationships: ::prost::alloc::vec::Vec<BusinessPropertyRelationship>,
+}
+/// One step of a property path. `repeated` must match the FieldSpec it names.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PropertySegment {
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub repeated: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PropertyPath {
+    #[prost(message, repeated, tag="1")]
+    pub segments: ::prost::alloc::vec::Vec<PropertySegment>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BusinessIdentifier {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub property: ::core::option::Option<PropertyPath>,
+    #[prost(enumeration="BusinessIdentifierRole", tag="3")]
+    pub role: i32,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BusinessPropertyRelationship {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub source: ::core::option::Option<PropertyPath>,
+    #[prost(message, optional, tag="3")]
+    pub target_entity: ::core::option::Option<SchemaRef>,
+    #[prost(message, optional, tag="4")]
+    pub target_property: ::core::option::Option<PropertyPath>,
+    #[prost(message, optional, tag="5")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BusinessIdentifierRole {
+    Unspecified = 0,
+    Primary = 1,
+    Alternate = 2,
+}
+impl BusinessIdentifierRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED",
+            Self::Primary => "BUSINESS_IDENTIFIER_ROLE_PRIMARY",
+            Self::Alternate => "BUSINESS_IDENTIFIER_ROLE_ALTERNATE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUSINESS_IDENTIFIER_ROLE_PRIMARY" => Some(Self::Primary),
+            "BUSINESS_IDENTIFIER_ROLE_ALTERNATE" => Some(Self::Alternate),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -489,6 +739,8 @@ pub mod swimlane {
             pub doc: ::prost::alloc::string::String,
             #[prost(message, repeated, tag="3")]
             pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+            #[prost(message, optional, tag="4")]
+            pub connection_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::ConnectionId>,
         }
     }
 }
@@ -646,6 +898,8 @@ pub mod ui {
         pub doc: ::prost::alloc::string::String,
         #[prost(message, repeated, tag="3")]
         pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+        #[prost(message, optional, tag="4")]
+        pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -728,504 +982,6 @@ pub struct Persona {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// The bounded context itself, as data (Decision #27): one per namespace,
-/// identified BY the namespace (id.slug == id.namespace). Carries the
-/// context charter -- what this boundary owns, its links and metadata.
-/// Event models are curations within it; this is the root document.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct BoundedContext {
-    /// convention: slug == namespace, making it unique per context
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="5")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The mapping from solution to problem: which subdomains this context
-    /// solves (Decision #29). Usually one; several is a monolith confessing.
-    /// Cross-namespace by nature (subdomains live in the domain's namespace)
-    /// and legal: strategic mapping is knowledge, not behavioral coupling.
-    #[prost(message, repeated, tag="6")]
-    pub realizes: ::prost::alloc::vec::Vec<SubdomainRef>,
-    /// The agreement behind each seam (Decision #30): declared by the
-    /// DOWNSTREAM context about its upstream. The seam itself stays derived
-    /// (event -> subscription view); this records who moves when the
-    /// upstream wants a breaking change.
-    #[prost(message, repeated, tag="7")]
-    pub relationships: ::prost::alloc::vec::Vec<bounded_context::ContextRelationship>,
-}
-/// Nested message and enum types in `BoundedContext`.
-pub mod bounded_context {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ContextRelationship {
-        #[prost(message, optional, tag="1")]
-        pub upstream: ::core::option::Option<super::BoundedContextRef>,
-        #[prost(enumeration="context_relationship::Intent", tag="2")]
-        pub intent: i32,
-        /// the agreement's body: who negotiated what
-        #[prost(string, tag="3")]
-        pub doc: ::prost::alloc::string::String,
-        #[prost(message, repeated, tag="4")]
-        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    }
-    /// Nested message and enum types in `ContextRelationship`.
-    pub mod context_relationship {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-        #[repr(i32)]
-        pub enum Intent {
-            Unspecified = 0,
-            /// downstream has a voice in upstream planning
-            CustomerSupplier = 1,
-            /// downstream takes what it gets
-            Conformist = 2,
-            /// the two succeed or fail together
-            Partnership = 3,
-            /// deliberate non-integration, on record
-            SeparateWays = 4,
-        }
-        impl Intent {
-            /// String value of the enum field names used in the ProtoBuf definition.
-            ///
-            /// The values are not transformed in any way and thus are considered stable
-            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-            pub fn as_str_name(&self) -> &'static str {
-                match self {
-                    Self::Unspecified => "INTENT_UNSPECIFIED",
-                    Self::CustomerSupplier => "INTENT_CUSTOMER_SUPPLIER",
-                    Self::Conformist => "INTENT_CONFORMIST",
-                    Self::Partnership => "INTENT_PARTNERSHIP",
-                    Self::SeparateWays => "INTENT_SEPARATE_WAYS",
-                }
-            }
-            /// Creates an enum from field names used in the ProtoBuf definition.
-            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-                match value {
-                    "INTENT_UNSPECIFIED" => Some(Self::Unspecified),
-                    "INTENT_CUSTOMER_SUPPLIER" => Some(Self::CustomerSupplier),
-                    "INTENT_CONFORMIST" => Some(Self::Conformist),
-                    "INTENT_PARTNERSHIP" => Some(Self::Partnership),
-                    "INTENT_SEPARATE_WAYS" => Some(Self::SeparateWays),
-                    _ => None,
-                }
-            }
-        }
-    }
-}
-/// The business itself -- the container word. Usually exactly one. Pure
-/// knowledge: no behavior, no slices, no time.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Domain {
-    /// convention: slug == namespace of the problem space
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    /// the pitch-deck sentence
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="5")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The codebase/project this domain is mapped from. Optional during
-    /// the migration window; when set, it is what makes a multi-project
-    /// store unambiguous (two Domains in the same Project, two Domains in
-    /// different Projects can share a namespace prefix without colliding
-    /// identity). Surfaced via validator rules -- see DOMAIN_MISSING_PROJECT.
-    #[prost(message, optional, tag="6")]
-    pub project: ::core::option::Option<ProjectRef>,
-}
-/// The codebase / repository / customer the model is being mapped FROM.
-/// In a multi-project store (e.g. one server holding several unrelated
-/// products at once), Project is the outermost grouping:
-/// every Domain belongs to one Project, and entity namespaces are scoped
-/// inside that Project's tree. Convention: id.slug == id.namespace, same
-/// rule as Domain -- the namespace IS the project identity.
-///
-/// Cross-project write enforcement:
-///    - Domain entities: PutEntity and BatchMutate reject a write where
-///      Domain.project.id.namespace differs from the Domain's own namespace
-///      (FAILED_PRECONDITION). This is the only boundary where a project
-///      association is directly expressed on the entity.
-///    - All other entity kinds (Event, Command, Slice, etc.) carry no project
-///      field; their project membership is derivable only via the
-///      namespace -> BoundedContext -> Subdomain -> Domain -> Project chain,
-///      which cannot be checked atomically at write time without a full graph
-///      traversal. The accepted risk is that a write to a foreign namespace
-///      is not refused at the mutation boundary. Validators (PROJECT_SLUG_MISMATCH,
-///      DOMAIN_MISSING_PROJECT, BC_PROJECT_COLLISION) surface hygiene violations
-///      post-write; a storage-layer rework is required for general enforcement.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Project {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// Optional human-readable upstream repo url / handle, e.g.
-    /// "github.com/acme/storefront". Free-form.
-    #[prost(string, tag="4")]
-    pub source_ref: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProjectRef {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Term {
-    /// namespace = bounded context, slug = the word
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// e.g. "review"
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    /// definition in this context's language
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub embodied_by: ::prost::alloc::vec::Vec<EntityRef>,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Ambiguity {
-    /// problem-space namespace, e.g. marketplace/review-collision
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(enumeration="ambiguity::Kind", tag="2")]
-    pub kind: i32,
-    #[prost(message, repeated, tag="3")]
-    pub terms: ::prost::alloc::vec::Vec<TermRef>,
-    #[prost(enumeration="ambiguity::Ruling", tag="4")]
-    pub ruling: i32,
-    #[prost(string, tag="5")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// Nested message and enum types in `Ambiguity`.
-pub mod ambiguity {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Kind {
-        Unspecified = 0,
-        Homonym = 1,
-        Synonym = 2,
-    }
-    impl Kind {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "KIND_UNSPECIFIED",
-                Self::Homonym => "KIND_HOMONYM",
-                Self::Synonym => "KIND_SYNONYM",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
-                "KIND_HOMONYM" => Some(Self::Homonym),
-                "KIND_SYNONYM" => Some(Self::Synonym),
-                _ => None,
-            }
-        }
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Ruling {
-        Unspecified = 0,
-        Deliberate = 1,
-        Rename = 2,
-        Merge = 3,
-    }
-    impl Ruling {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "RULING_UNSPECIFIED",
-                Self::Deliberate => "RULING_DELIBERATE",
-                Self::Rename => "RULING_RENAME",
-                Self::Merge => "RULING_MERGE",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "RULING_UNSPECIFIED" => Some(Self::Unspecified),
-                "RULING_DELIBERATE" => Some(Self::Deliberate),
-                "RULING_RENAME" => Some(Self::Rename),
-                "RULING_MERGE" => Some(Self::Merge),
-                _ => None,
-            }
-        }
-    }
-}
-/// One problem the business must be good at. Discovered, not designed -- it
-/// exists whether or not software does. The classification is the entire
-/// point: it is a budget document disguised as architecture (who builds it,
-/// build vs buy, what quality bar, rewrite vs tolerate).
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Subdomain {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="4")]
-    pub domain: ::core::option::Option<DomainRef>,
-    #[prost(enumeration="subdomain::Classification", tag="5")]
-    pub classification: i32,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// Nested message and enum types in `Subdomain`.
-pub mod subdomain {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Classification {
-        Unspecified = 0,
-        /// where you win or lose; best people; never outsource
-        Core = 1,
-        /// necessary and bespoke; built cheaply
-        Supporting = 2,
-        /// a solved problem; buy, never build
-        Generic = 3,
-    }
-    impl Classification {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "CLASSIFICATION_UNSPECIFIED",
-                Self::Core => "CLASSIFICATION_CORE",
-                Self::Supporting => "CLASSIFICATION_SUPPORTING",
-                Self::Generic => "CLASSIFICATION_GENERIC",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "CLASSIFICATION_UNSPECIFIED" => Some(Self::Unspecified),
-                "CLASSIFICATION_CORE" => Some(Self::Core),
-                "CLASSIFICATION_SUPPORTING" => Some(Self::Supporting),
-                "CLASSIFICATION_GENERIC" => Some(Self::Generic),
-                _ => None,
-            }
-        }
-    }
-}
-/// A Component is a living implementation unit: the deployable thing that
-/// hosts processors, serves UIs, projects read models, exposes APIs, and owns
-/// its technology choices -- including the messaging it relies on (Kafka
-/// topics, NATS subjects, webhooks). This is where those facts are
-/// documented. Members are a curated listing (same pattern as EventModel:
-/// flat keyspace stays canonical, the component only points). Grouping is
-/// implementation intent and never affects model-semantics validation.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Component {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    /// responsibilities, APIs exposed, tech relied on
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// e.g. "kafka", "nats", "grpc", "webhook"
-    #[prost(string, repeated, tag="4")]
-    pub tech: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// what it hosts (processors, UIs, read models, ...)
-    #[prost(message, repeated, tag="5")]
-    pub members: ::prost::alloc::vec::Vec<EntityRef>,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// An ExternalSystem is a living third-party boundary: the APIs and webhooks
-/// it exposes, the tech used to integrate with it. ReadModels with an
-/// ExternalSource point here, so every external feed shares one documented
-/// source of truth about the system behind it.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExternalSystem {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    /// what it is, the APIs/webhooks it exposes
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// e.g. "webhook", "rest", "kafka"
-    #[prost(string, repeated, tag="4")]
-    pub tech: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// A Tracker is a project-management overlay: a denormalized list of
-/// pointers into the model, each carrying delivery status. It integrates
-/// with the model without living inside it -- flipping a status never
-/// mutates a design entity, any entity kind can be tracked (slices, read
-/// models, components, whole storyboards), and several trackers can overlay
-/// the same model (per team, per milestone) without touching each other.
-/// "What needs work?" = ListEntities(kind=TRACKER) + read the items.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Tracker {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub items: ::prost::alloc::vec::Vec<tracker::Item>,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// Nested message and enum types in `Tracker`.
-pub mod tracker {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Item {
-        /// the model entity this status is ABOUT
-        #[prost(message, optional, tag="1")]
-        pub subject: ::core::option::Option<super::EntityRef>,
-        #[prost(enumeration="super::TrackStatus", tag="2")]
-        pub status: i32,
-        /// e.g. "blocked on payment SDK upgrade"
-        #[prost(string, tag="3")]
-        pub doc: ::prost::alloc::string::String,
-        #[prost(message, repeated, tag="4")]
-        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    }
-}
-/// Delivery status of a tracked item. Lives ONLY in Trackers -- design
-/// entities never carry process state (Decision #25).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum TrackStatus {
-    Unspecified = 0,
-    Todo = 1,
-    InProgress = 2,
-    Review = 3,
-    Blocked = 4,
-    Done = 5,
-}
-impl TrackStatus {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "TRACK_STATUS_UNSPECIFIED",
-            Self::Todo => "TRACK_STATUS_TODO",
-            Self::InProgress => "TRACK_STATUS_IN_PROGRESS",
-            Self::Review => "TRACK_STATUS_REVIEW",
-            Self::Blocked => "TRACK_STATUS_BLOCKED",
-            Self::Done => "TRACK_STATUS_DONE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "TRACK_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
-            "TRACK_STATUS_TODO" => Some(Self::Todo),
-            "TRACK_STATUS_IN_PROGRESS" => Some(Self::InProgress),
-            "TRACK_STATUS_REVIEW" => Some(Self::Review),
-            "TRACK_STATUS_BLOCKED" => Some(Self::Blocked),
-            "TRACK_STATUS_DONE" => Some(Self::Done),
-            _ => None,
-        }
-    }
-}
-/// One typed edge message per type kind. An Edge is a Ref + free-form doc +
-/// a typed annotation list (repeated google.protobuf.Any). Edges are used
-/// wherever a slice or storyboard endpoint may want to carry design data
-/// attached to the connection itself: field mappings, conditions under
-/// which an event is emitted, projection rules, validation, etc. Different
-/// tools can attach their own annotation types without conflicting.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct EventEdge {
-    #[prost(message, optional, tag="1")]
-    pub event: ::core::option::Option<EventRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CommandEdge {
-    #[prost(message, optional, tag="1")]
-    pub command: ::core::option::Option<CommandRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadModelEdge {
-    #[prost(message, optional, tag="1")]
-    pub read_model: ::core::option::Option<ReadModelRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ProcessorEdge {
-    #[prost(message, optional, tag="1")]
-    pub processor: ::core::option::Option<ProcessorRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct UiEdge {
-    #[prost(message, optional, tag="1")]
-    pub ui: ::core::option::Option<UiRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PersonaEdge {
-    #[prost(message, optional, tag="1")]
-    pub persona: ::core::option::Option<PersonaRef>,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="3")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
 /// Concrete instance of a typed payload, used in Given / When / Then sections
 /// and in storyboard traces.
@@ -1336,13 +1092,22 @@ pub struct ReadModelScenario {
     #[prost(message, repeated, tag="6")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
+/// The outcome of an AutomationScenario in which the automation issues no
+/// command. doc says why (e.g. "still within backoff"). Wrapped so it can
+/// participate in a oneof.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NoCommand {
+    #[prost(string, tag="1")]
+    pub doc: ::prost::alloc::string::String,
+}
 /// Scenario for an AutomationSlice.
 ///    Given: read model state(s) the processor is observing.
 ///    When : the trigger condition (free-form doc; e.g. "threshold exceeded",
 ///           "every Monday 09:00", "row count > 100").
-///    Then : at most one command issued. Unset = "do nothing" (a valid
-///           outcome that should be documented explicitly for at least one
-///           scenario when relevant).
+///    Then : exactly one outcome, stated explicitly: the command issued
+///           (`then`), or `no_command` when the automation does not fire.
+///           Leaving both unset is an error, so a deliberate "does nothing"
+///           reads differently from a missing outcome.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AutomationScenario {
     #[prost(string, tag="1")]
@@ -1355,12 +1120,22 @@ pub struct AutomationScenario {
     pub given: ::prost::alloc::vec::Vec<ReadModelExample>,
     #[prost(string, tag="5")]
     pub when_doc: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="6")]
-    pub then: ::core::option::Option<CommandExample>,
     /// Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
     /// Each entry is an Any whose type_url identifies the annotation's schema.
     #[prost(message, repeated, tag="7")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(oneof="automation_scenario::Outcome", tags="6, 8")]
+    pub outcome: ::core::option::Option<automation_scenario::Outcome>,
+}
+/// Nested message and enum types in `AutomationScenario`.
+pub mod automation_scenario {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="6")]
+        Then(super::CommandExample),
+        #[prost(message, tag="8")]
+        NoCommand(super::NoCommand),
+    }
 }
 /// Explanation for why an entity is intentionally disconnected from the
 /// model's slice graph (no command slice produces it, no read-model slice
@@ -1389,17 +1164,15 @@ pub struct MixedSurfaceAnnotation {
     #[prost(string, tag="1")]
     pub doc: ::prost::alloc::string::String,
 }
-/// Decision #34. The "at most one automation per read model" rule is
-/// a useful default -- different automations usually consume
-/// differently-shaped data, and splitting RMs per consumer keeps the
-/// coupling explicit. But sometimes one RM legitimately serves
-/// several consumers: a captured-payment row read by the ledger
-/// recorder and the refund processor and the treasury UI carries the
-/// same data; forcing a clone per consumer just multiplies the same
-/// sticky on the board. Declare the multi-consumer case explicitly
-/// with SharedConsumersAnnotation; the validator's
-/// READ_MODEL_MULTIPLE_AUTOMATIONS rule downgrades from Error to
-/// Info when this annotation is present and its doc is non-empty.
+/// Decision #34. Read models split by shape, not by consumer: a
+/// captured-payment row read by the ledger recorder, the refund
+/// processor and the treasury UI is one read model, and a clone per
+/// consumer just multiplies the same sticky on the board
+/// (READ_MODEL_DUPLICATE_SHAPE warns about such clones). This
+/// annotation names the consumers of a shared read model; the
+/// validator reports READ_MODEL_SHARED_CONSUMERS instead of
+/// READ_MODEL_MULTIPLE_AUTOMATIONS, both Info, and an empty doc is an
+/// Error.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SharedConsumersAnnotation {
     /// Free-form explanation naming the consumers and why they share
@@ -1631,6 +1404,182 @@ pub struct FailureModeAnnotation {
     /// "auto-reconnect with backoff".
     #[prost(string, tag="3")]
     pub recovery: ::prost::alloc::string::String,
+}
+/// Declares that a field's value domain is the same concept as every other
+/// field carrying an identical tag, without requiring either field to adopt
+/// a shared top-level Schema or Enumeration entity. A cheap way to record
+/// intentional reuse the moment an author notices it -- e.g. two different
+/// RPCs' request filters that both constrain the same conceptual enum --
+/// without first doing the heavier refactor of extracting a named type.
+/// Purely descriptive: like FailureModeAnnotation, no validator rule keys
+/// off this message today.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainTagAnnotation {
+    /// Free-form, author-chosen. Two fields carrying the same tag (compared
+    /// as exact string equality) are declared the same domain concept.
+    /// Namespace by convention to avoid collisions, e.g. "invoice-source" or
+    /// "acme.billing.currency-code".
+    #[prost(string, tag="1")]
+    pub tag: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelProvider {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelVersion {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ToolName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ToolKindText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentModel {
+    #[prost(message, optional, tag="1")]
+    pub provider: ::core::option::Option<ModelProvider>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<ModelName>,
+    #[prost(message, optional, tag="3")]
+    pub version: ::core::option::Option<ModelVersion>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentTool {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<ToolName>,
+    #[prost(message, optional, tag="2")]
+    pub r#type: ::core::option::Option<ToolKindText>,
+    #[prost(message, optional, tag="3")]
+    pub description: ::core::option::Option<AgentDescription>,
+    #[prost(message, optional, tag="4")]
+    pub icon: ::core::option::Option<AgentIcon>,
+    #[prost(message, optional, tag="5")]
+    pub url: ::core::option::Option<AgentUrl>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AgentAnnotation {
+    #[prost(message, optional, tag="1")]
+    pub model: ::core::option::Option<AgentModel>,
+    #[prost(message, repeated, tag="2")]
+    pub tools: ::prost::alloc::vec::Vec<AgentTool>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentDescription {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentIcon {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentUrl {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+/// Declares an invariant over the event model that carries it: a write that
+/// would add a forbidden finding to the model's own validation is refused
+/// before anything applies. A forbidden finding that was already there does
+/// not refuse the write. Only an EventModel may carry it, so only
+/// writers of the model's namespace can add, change or remove it. See
+/// docs/explanation/invariant-gates.md.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InvariantAnnotation {
+    /// Required. Names the invariant in refusals; unique among the carrier's
+    /// invariants.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// Optional. Why the invariant exists, for the writer who trips it.
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    /// Model rule codes the carrier must never report, e.g. "MEMBER_NOT_FOUND".
+    #[prost(string, repeated, tag="3")]
+    pub forbidden_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Any model finding at or above this severity violates the invariant.
+    /// Unspecified forbids nothing by severity.
+    #[prost(enumeration="invariant_annotation::Severity", tag="4")]
+    pub forbidden_severity: i32,
+    /// What a write does when the invariant cannot be evaluated.
+    #[prost(enumeration="invariant_annotation::Unevaluable", tag="5")]
+    pub on_unevaluable: i32,
+}
+/// Nested message and enum types in `InvariantAnnotation`.
+pub mod invariant_annotation {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Severity {
+        Unspecified = 0,
+        Warning = 1,
+        Error = 2,
+    }
+    impl Severity {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SEVERITY_UNSPECIFIED",
+                Self::Warning => "SEVERITY_WARNING",
+                Self::Error => "SEVERITY_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+                "SEVERITY_WARNING" => Some(Self::Warning),
+                "SEVERITY_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Unevaluable {
+        /// Treated as UNEVALUABLE_REFUSE.
+        Unspecified = 0,
+        /// Refuse the write: an invariant that cannot be checked is not held.
+        Refuse = 1,
+        /// Let the write through and report the invariant as unevaluated.
+        Advise = 2,
+    }
+    impl Unevaluable {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNEVALUABLE_UNSPECIFIED",
+                Self::Refuse => "UNEVALUABLE_REFUSE",
+                Self::Advise => "UNEVALUABLE_ADVISE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNEVALUABLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "UNEVALUABLE_REFUSE" => Some(Self::Refuse),
+                "UNEVALUABLE_ADVISE" => Some(Self::Advise),
+                _ => None,
+            }
+        }
+    }
 }
 /// Command slice: Command -> Event(s)
 ///
@@ -2023,6 +1972,102 @@ pub struct EventModel {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TypeLibraryRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// A tenant-owned set of protobuf definitions, stored as source text and
+/// compiled by the server on demand. `id.slug` is the package prefix the
+/// library owns: every file's `package` must equal it or start with it
+/// followed by a dot, and no two live libraries in the same namespace and
+/// branch may own overlapping prefixes.
+///
+/// The source is the only stored form. The compiled descriptors are derived
+/// state the server rebuilds whenever it needs them.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TypeLibrary {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub files: ::prost::alloc::vec::Vec<ProtoSourceFile>,
+    /// Libraries whose files these files may import, in the same namespace.
+    #[prost(message, repeated, tag="5")]
+    pub dependencies: ::prost::alloc::vec::Vec<TypeLibraryRef>,
+    #[prost(message, optional, tag="6")]
+    pub provenance: ::core::option::Option<TypeLibraryProvenance>,
+    #[prost(message, repeated, tag="7")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="8")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtoSourceFile {
+    /// Relative import path, e.g. "acme/orders/v1/orders.proto".
+    #[prost(string, tag="1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub content: ::prost::alloc::string::String,
+}
+/// Where the source text came from. A record only: the server never fetches
+/// anything it names. Remote origins are pulled client-side and arrive as
+/// `TypeLibrary.files`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TypeLibraryProvenance {
+    #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
+    pub source: ::core::option::Option<type_library_provenance::Source>,
+}
+/// Nested message and enum types in `TypeLibraryProvenance`.
+pub mod type_library_provenance {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct InlineSource {
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct BufModuleSnapshot {
+        #[prost(string, tag="1")]
+        pub remote: ::prost::alloc::string::String,
+        #[prost(string, tag="2")]
+        pub owner: ::prost::alloc::string::String,
+        #[prost(string, tag="3")]
+        pub module: ::prost::alloc::string::String,
+        #[prost(string, tag="4")]
+        pub commit: ::prost::alloc::string::String,
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct GitSnapshot {
+        #[prost(string, tag="1")]
+        pub repository_url: ::prost::alloc::string::String,
+        #[prost(string, tag="2")]
+        pub r#ref: ::prost::alloc::string::String,
+        #[prost(string, tag="3")]
+        pub commit: ::prost::alloc::string::String,
+        #[prost(string, tag="4")]
+        pub subdirectory: ::prost::alloc::string::String,
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Source {
+        #[prost(message, tag="1")]
+        Inline(InlineSource),
+        #[prost(message, tag="2")]
+        BufModule(BufModuleSnapshot),
+        #[prost(message, tag="3")]
+        Git(GitSnapshot),
+    }
+}
+/// Field paths are diagnostics only; references survive collection reordering.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionRef {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<EntityRef>,
+    #[prost(message, optional, tag="2")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, tag="3")]
+    pub owner_uid: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ComponentRef {
@@ -2590,20 +2635,91 @@ impl Severity {
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryRef {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+pub struct ProtocolName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
 }
-/// A tenant-owned set of protobuf definitions, stored as source text and
-/// compiled by the server on demand. `id.slug` is the package prefix the
-/// library owns: every file's `package` must equal it or start with it
-/// followed by a dot, and no two live libraries in the same namespace and
-/// branch may own overlapping prefixes.
-///
-/// The source is the only stored form. The compiled descriptors are derived
-/// state the server rebuilds whenever it needs them.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TechnologyName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ParameterName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PolicyText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RegionCode {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PositiveDuration {
+    #[prost(uint64, tag="1")]
+    pub seconds: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StringValues {
+    #[prost(string, repeated, tag="1")]
+    pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TypeLibrary {
+pub struct RegionCodes {
+    #[prost(message, repeated, tag="1")]
+    pub values: ::prost::alloc::vec::Vec<RegionCode>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddressParameter {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<ParameterName>,
+    #[prost(string, optional, tag="2")]
+    pub description: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="3")]
+    pub allowed_values: ::core::option::Option<StringValues>,
+    #[prost(string, optional, tag="4")]
+    pub default: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag="5")]
+    pub examples: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelAddress {
+    #[prost(string, tag="1")]
+    pub template: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="2")]
+    pub parameters: ::prost::alloc::vec::Vec<AddressParameter>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelBinding {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub observation: ::core::option::Option<ConnectionRef>,
+    #[prost(map="string, string", tag="3")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(string, tag="4")]
+    pub doc: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelLink {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="ChannelLinkKind", tag="2")]
+    pub kind: i32,
+    #[prost(message, optional, tag="3")]
+    pub target: ::core::option::Option<ChannelRef>,
+    #[prost(map="string, string", tag="4")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Channel {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
     #[prost(string, tag="2")]
@@ -2611,68 +2727,2903 @@ pub struct TypeLibrary {
     #[prost(string, tag="3")]
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="4")]
-    pub files: ::prost::alloc::vec::Vec<ProtoSourceFile>,
-    /// Libraries whose files these files may import, in the same namespace.
-    #[prost(message, repeated, tag="5")]
-    pub dependencies: ::prost::alloc::vec::Vec<TypeLibraryRef>,
-    #[prost(message, optional, tag="6")]
-    pub provenance: ::core::option::Option<TypeLibraryProvenance>,
-    #[prost(message, repeated, tag="7")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="8")]
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="6")]
+    pub address: ::core::option::Option<ChannelAddress>,
+    #[prost(message, repeated, tag="7")]
+    pub protocols: ::prost::alloc::vec::Vec<ProtocolName>,
+    #[prost(enumeration="channel::DeliveryGuarantee", optional, tag="8")]
+    pub delivery_guarantee: ::core::option::Option<i32>,
+    #[prost(message, repeated, tag="11")]
+    pub bindings: ::prost::alloc::vec::Vec<ChannelBinding>,
+    #[prost(message, repeated, tag="12")]
+    pub links: ::prost::alloc::vec::Vec<ChannelLink>,
+    #[prost(oneof="channel::Broker", tags="9, 10")]
+    pub broker: ::core::option::Option<channel::Broker>,
+}
+/// Nested message and enum types in `Channel`.
+pub mod channel {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum DeliveryGuarantee {
+        Unspecified = 0,
+        AtMostOnce = 1,
+        AtLeastOnce = 2,
+        ExactlyOnce = 3,
+    }
+    impl DeliveryGuarantee {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "DELIVERY_GUARANTEE_UNSPECIFIED",
+                Self::AtMostOnce => "DELIVERY_GUARANTEE_AT_MOST_ONCE",
+                Self::AtLeastOnce => "DELIVERY_GUARANTEE_AT_LEAST_ONCE",
+                Self::ExactlyOnce => "DELIVERY_GUARANTEE_EXACTLY_ONCE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "DELIVERY_GUARANTEE_UNSPECIFIED" => Some(Self::Unspecified),
+                "DELIVERY_GUARANTEE_AT_MOST_ONCE" => Some(Self::AtMostOnce),
+                "DELIVERY_GUARANTEE_AT_LEAST_ONCE" => Some(Self::AtLeastOnce),
+                "DELIVERY_GUARANTEE_EXACTLY_ONCE" => Some(Self::ExactlyOnce),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Broker {
+        #[prost(message, tag="9")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="10")]
+        ExternalSystem(super::ExternalSystemRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoreClass {
+    #[prost(oneof="store_class::Kind", tags="1, 2")]
+    pub kind: ::core::option::Option<store_class::Kind>,
+}
+/// Nested message and enum types in `StoreClass`.
+pub mod store_class {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Known {
+        Unspecified = 0,
+        Database = 1,
+        Cache = 2,
+        ObjectStore = 3,
+        SearchIndex = 4,
+        Warehouse = 5,
+        ExternalService = 6,
+    }
+    impl Known {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KNOWN_UNSPECIFIED",
+                Self::Database => "KNOWN_DATABASE",
+                Self::Cache => "KNOWN_CACHE",
+                Self::ObjectStore => "KNOWN_OBJECT_STORE",
+                Self::SearchIndex => "KNOWN_SEARCH_INDEX",
+                Self::Warehouse => "KNOWN_WAREHOUSE",
+                Self::ExternalService => "KNOWN_EXTERNAL_SERVICE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KNOWN_UNSPECIFIED" => Some(Self::Unspecified),
+                "KNOWN_DATABASE" => Some(Self::Database),
+                "KNOWN_CACHE" => Some(Self::Cache),
+                "KNOWN_OBJECT_STORE" => Some(Self::ObjectStore),
+                "KNOWN_SEARCH_INDEX" => Some(Self::SearchIndex),
+                "KNOWN_WAREHOUSE" => Some(Self::Warehouse),
+                "KNOWN_EXTERNAL_SERVICE" => Some(Self::ExternalService),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(enumeration="Known", tag="1")]
+        Known(i32),
+        #[prost(string, tag="2")]
+        Other(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResidencyPolicy {
+    #[prost(message, optional, tag="1")]
+    pub policy: ::core::option::Option<PolicyText>,
+    #[prost(message, optional, tag="2")]
+    pub regions: ::core::option::Option<RegionCodes>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RetentionPolicy {
+    #[prost(message, optional, tag="1")]
+    pub policy: ::core::option::Option<PolicyText>,
+    #[prost(message, optional, tag="2")]
+    pub duration: ::core::option::Option<PositiveDuration>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadModelAttachment {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub read_model: ::core::option::Option<ReadModelRef>,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataStore {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="6")]
+    pub store_class: ::core::option::Option<StoreClass>,
+    #[prost(message, optional, tag="7")]
+    pub technology: ::core::option::Option<TechnologyName>,
+    #[prost(string, optional, tag="8")]
+    pub purpose: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, optional, tag="9")]
+    pub authoritative: ::core::option::Option<bool>,
+    #[prost(enumeration="data_store::AccessMode", optional, tag="10")]
+    pub access_mode: ::core::option::Option<i32>,
+    #[prost(enumeration="data_store::Classification", optional, tag="11")]
+    pub classification: ::core::option::Option<i32>,
+    #[prost(message, optional, tag="12")]
+    pub residency: ::core::option::Option<ResidencyPolicy>,
+    #[prost(message, optional, tag="13")]
+    pub retention: ::core::option::Option<RetentionPolicy>,
+    #[prost(message, repeated, tag="14")]
+    pub attachments: ::prost::alloc::vec::Vec<ReadModelAttachment>,
+}
+/// Nested message and enum types in `DataStore`.
+pub mod data_store {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum AccessMode {
+        Unspecified = 0,
+        Read = 1,
+        Write = 2,
+        ReadWrite = 3,
+        AppendOnly = 4,
+    }
+    impl AccessMode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ACCESS_MODE_UNSPECIFIED",
+                Self::Read => "ACCESS_MODE_READ",
+                Self::Write => "ACCESS_MODE_WRITE",
+                Self::ReadWrite => "ACCESS_MODE_READ_WRITE",
+                Self::AppendOnly => "ACCESS_MODE_APPEND_ONLY",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ACCESS_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ACCESS_MODE_READ" => Some(Self::Read),
+                "ACCESS_MODE_WRITE" => Some(Self::Write),
+                "ACCESS_MODE_READ_WRITE" => Some(Self::ReadWrite),
+                "ACCESS_MODE_APPEND_ONLY" => Some(Self::AppendOnly),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Classification {
+        Unspecified = 0,
+        Public = 1,
+        Internal = 2,
+        Confidential = 3,
+        Regulated = 4,
+    }
+    impl Classification {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "CLASSIFICATION_UNSPECIFIED",
+                Self::Public => "CLASSIFICATION_PUBLIC",
+                Self::Internal => "CLASSIFICATION_INTERNAL",
+                Self::Confidential => "CLASSIFICATION_CONFIDENTIAL",
+                Self::Regulated => "CLASSIFICATION_REGULATED",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "CLASSIFICATION_UNSPECIFIED" => Some(Self::Unspecified),
+                "CLASSIFICATION_PUBLIC" => Some(Self::Public),
+                "CLASSIFICATION_INTERNAL" => Some(Self::Internal),
+                "CLASSIFICATION_CONFIDENTIAL" => Some(Self::Confidential),
+                "CLASSIFICATION_REGULATED" => Some(Self::Regulated),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ChannelLinkKind {
+    Unspecified = 0,
+    Composes = 1,
+    RoutesTo = 2,
+}
+impl ChannelLinkKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CHANNEL_LINK_KIND_UNSPECIFIED",
+            Self::Composes => "CHANNEL_LINK_KIND_COMPOSES",
+            Self::RoutesTo => "CHANNEL_LINK_KIND_ROUTES_TO",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CHANNEL_LINK_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "CHANNEL_LINK_KIND_COMPOSES" => Some(Self::Composes),
+            "CHANNEL_LINK_KIND_ROUTES_TO" => Some(Self::RoutesTo),
+            _ => None,
+        }
+    }
+}
+/// Shared delivery mode for independent message-to-channel declarations.
+/// Absence of the optional field is distinct from UNSPECIFIED: writers must
+/// not store 0, and readers must not invent PUSH when the field is missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ClaimDeliveryMode {
+    Unspecified = 0,
+    Push = 1,
+    Pull = 2,
+    PushPull = 3,
+}
+impl ClaimDeliveryMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CLAIM_DELIVERY_MODE_UNSPECIFIED",
+            Self::Push => "CLAIM_DELIVERY_MODE_PUSH",
+            Self::Pull => "CLAIM_DELIVERY_MODE_PULL",
+            Self::PushPull => "CLAIM_DELIVERY_MODE_PUSH_PULL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CLAIM_DELIVERY_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CLAIM_DELIVERY_MODE_PUSH" => Some(Self::Push),
+            "CLAIM_DELIVERY_MODE_PULL" => Some(Self::Pull),
+            "CLAIM_DELIVERY_MODE_PUSH_PULL" => Some(Self::PushPull),
+            _ => None,
+        }
+    }
+}
+/// Each Channel inverse record retains its independently declared authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ChannelMessageAuthority {
+    Unspecified = 0,
+    SpecificationDeclaration = 1,
+    ClaimRoute = 2,
+    OperationBinding = 3,
+}
+impl ChannelMessageAuthority {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CHANNEL_MESSAGE_AUTHORITY_UNSPECIFIED",
+            Self::SpecificationDeclaration => "CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION",
+            Self::ClaimRoute => "CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE",
+            Self::OperationBinding => "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CHANNEL_MESSAGE_AUTHORITY_UNSPECIFIED" => Some(Self::Unspecified),
+            "CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION" => Some(Self::SpecificationDeclaration),
+            "CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE" => Some(Self::ClaimRoute),
+            "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING" => Some(Self::OperationBinding),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractMemberId {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MemberName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContentDigest {
+    #[prost(string, tag="1")]
+    pub sha256: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArtifactPath {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MediaType {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FormatVersion {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QualifiedProtoName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractFormat {
+    #[prost(oneof="contract_format::Kind", tags="1, 2")]
+    pub kind: ::core::option::Option<contract_format::Kind>,
+}
+/// Nested message and enum types in `ContractFormat`.
+pub mod contract_format {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Known {
+        Unspecified = 0,
+        Openapi = 1,
+        Asyncapi = 2,
+        Graphql = 3,
+        JsonSchema = 4,
+        Avro = 5,
+        Protobuf = 6,
+    }
+    impl Known {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KNOWN_UNSPECIFIED",
+                Self::Openapi => "KNOWN_OPENAPI",
+                Self::Asyncapi => "KNOWN_ASYNCAPI",
+                Self::Graphql => "KNOWN_GRAPHQL",
+                Self::JsonSchema => "KNOWN_JSON_SCHEMA",
+                Self::Avro => "KNOWN_AVRO",
+                Self::Protobuf => "KNOWN_PROTOBUF",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KNOWN_UNSPECIFIED" => Some(Self::Unspecified),
+                "KNOWN_OPENAPI" => Some(Self::Openapi),
+                "KNOWN_ASYNCAPI" => Some(Self::Asyncapi),
+                "KNOWN_GRAPHQL" => Some(Self::Graphql),
+                "KNOWN_JSON_SCHEMA" => Some(Self::JsonSchema),
+                "KNOWN_AVRO" => Some(Self::Avro),
+                "KNOWN_PROTOBUF" => Some(Self::Protobuf),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(enumeration="Known", tag="1")]
+        Known(i32),
+        #[prost(string, tag="2")]
+        Other(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpaqueTypeSelector {
+    #[prost(string, tag="1")]
+    pub syntax: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractMemberRef {
+    #[prost(message, optional, tag="1")]
+    pub specification: ::core::option::Option<SpecificationRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(enumeration="ContractMemberKind", tag="3")]
+    pub kind: i32,
+    #[prost(message, optional, tag="4")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="5")]
+    pub expected_digest: ::core::option::Option<ContentDigest>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractTypeRef {
+    #[prost(message, optional, tag="1")]
+    pub schema: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="2")]
+    pub expected_artifact_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="3")]
+    pub expected_digest: ::core::option::Option<ContentDigest>,
+    #[prost(message, optional, tag="4")]
+    pub expected_selector: ::core::option::Option<OpaqueTypeSelector>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractArtifact {
+    #[prost(message, optional, tag="1")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<MemberName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub path: ::core::option::Option<ArtifactPath>,
+    #[prost(message, optional, tag="5")]
+    pub format: ::core::option::Option<ContractFormat>,
+    #[prost(message, optional, tag="6")]
+    pub format_version: ::core::option::Option<FormatVersion>,
+    #[prost(message, optional, tag="7")]
+    pub media_type: ::core::option::Option<MediaType>,
+    #[prost(string, tag="8")]
+    pub content: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="9")]
+    pub digest: ::core::option::Option<ContentDigest>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LocalArtifactSelection {
+    #[prost(message, optional, tag="1")]
+    pub artifact_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="2")]
+    pub expected_digest: ::core::option::Option<ContentDigest>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SchemaDefinition {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub selector: ::core::option::Option<OpaqueTypeSelector>,
+    #[prost(oneof="schema_definition::Target", tags="2, 3")]
+    pub target: ::core::option::Option<schema_definition::Target>,
+}
+/// Nested message and enum types in `SchemaDefinition`.
+pub mod schema_definition {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="2")]
+        Artifact(super::LocalArtifactSelection),
+        #[prost(message, tag="3")]
+        Schema(super::SchemaRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractSchema {
+    #[prost(message, optional, tag="1")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<MemberName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub definition: ::core::option::Option<SchemaDefinition>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TypeLibraryTypeRef {
+    #[prost(message, optional, tag="1")]
+    pub library: ::core::option::Option<TypeLibraryRef>,
+    #[prost(message, optional, tag="2")]
+    pub message: ::core::option::Option<QualifiedProtoName>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnvironmentName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SchemaBinding {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="schema_binding::Role", tag="2")]
+    pub role: i32,
+    #[prost(string, optional, tag="7")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="8")]
+    pub environments: ::prost::alloc::vec::Vec<EnvironmentName>,
+    #[prost(bool, optional, tag="9")]
+    pub is_default: ::core::option::Option<bool>,
+    #[prost(oneof="schema_binding::Type", tags="3, 4, 5, 6")]
+    pub r#type: ::core::option::Option<schema_binding::Type>,
+}
+/// Nested message and enum types in `SchemaBinding`.
+pub mod schema_binding {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Role {
+        Unspecified = 0,
+        Payload = 1,
+        Headers = 2,
+    }
+    impl Role {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ROLE_UNSPECIFIED",
+                Self::Payload => "ROLE_PAYLOAD",
+                Self::Headers => "ROLE_HEADERS",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ROLE_PAYLOAD" => Some(Self::Payload),
+                "ROLE_HEADERS" => Some(Self::Headers),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Type {
+        #[prost(message, tag="3")]
+        LocalSchema(super::ContractMemberId),
+        #[prost(message, tag="4")]
+        ContractType(super::ContractTypeRef),
+        #[prost(message, tag="5")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="6")]
+        LibraryType(super::TypeLibraryTypeRef),
+    }
+}
+/// Independent declaration that a returned message is carried by an exact
+/// channel. This is not a Component or Domain claim and not an operation binding.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MessageChannelDeclaration {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="3")]
+    pub channel: ::core::option::Option<ChannelRef>,
+    #[prost(map="string, string", tag="4")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(enumeration="ClaimDeliveryMode", optional, tag="5")]
+    pub delivery_mode: ::core::option::Option<i32>,
+    #[prost(string, optional, tag="6")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MessageReadModelMapping {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub read_model: ::core::option::Option<ReadModelRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContractMessage {
+    #[prost(message, optional, tag="1")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<MemberName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub schemas: ::prost::alloc::vec::Vec<SchemaBinding>,
+    #[prost(message, optional, tag="5")]
+    pub mapping: ::core::option::Option<MessageReadModelMapping>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OperationMessage {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub message_id: ::core::option::Option<ContractMemberId>,
+    #[prost(enumeration="operation_message::Role", tag="3")]
+    pub role: i32,
+    #[prost(string, optional, tag="4")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Nested message and enum types in `OperationMessage`.
+pub mod operation_message {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Role {
+        Unspecified = 0,
+        Request = 1,
+        Response = 2,
+        Notification = 3,
+    }
+    impl Role {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ROLE_UNSPECIFIED",
+                Self::Request => "ROLE_REQUEST",
+                Self::Response => "ROLE_RESPONSE",
+                Self::Notification => "ROLE_NOTIFICATION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ROLE_REQUEST" => Some(Self::Request),
+                "ROLE_RESPONSE" => Some(Self::Response),
+                "ROLE_NOTIFICATION" => Some(Self::Notification),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HttpOperationBinding {
+    #[prost(string, tag="1")]
+    pub method: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint32, repeated, tag="3")]
+    pub response_status_codes: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RpcOperationBinding {
+    #[prost(string, tag="1")]
+    pub service: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub method: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChannelOperationBinding {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub channel: ::core::option::Option<ChannelRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GraphqlOperationBinding {
+    #[prost(enumeration="graphql_operation_binding::Kind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub field: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `GraphqlOperationBinding`.
+pub mod graphql_operation_binding {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Query = 1,
+        Mutation = 2,
+        Subscription = 3,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Query => "KIND_QUERY",
+                Self::Mutation => "KIND_MUTATION",
+                Self::Subscription => "KIND_SUBSCRIPTION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_QUERY" => Some(Self::Query),
+                "KIND_MUTATION" => Some(Self::Mutation),
+                "KIND_SUBSCRIPTION" => Some(Self::Subscription),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OtherOperationBinding {
+    #[prost(message, optional, tag="1")]
+    pub protocol: ::core::option::Option<ProtocolName>,
+    #[prost(string, tag="2")]
+    pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OperationBinding {
+    #[prost(oneof="operation_binding::Kind", tags="1, 2, 3, 4, 5")]
+    pub kind: ::core::option::Option<operation_binding::Kind>,
+}
+/// Nested message and enum types in `OperationBinding`.
+pub mod operation_binding {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(message, tag="1")]
+        Http(super::HttpOperationBinding),
+        #[prost(message, tag="2")]
+        Rpc(super::RpcOperationBinding),
+        #[prost(message, tag="3")]
+        Channel(super::ChannelOperationBinding),
+        #[prost(message, tag="4")]
+        Graphql(super::GraphqlOperationBinding),
+        #[prost(message, tag="5")]
+        Other(super::OtherOperationBinding),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContractOperation {
+    #[prost(message, optional, tag="1")]
+    pub member_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<MemberName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub binding: ::core::option::Option<OperationBinding>,
+    #[prost(message, repeated, tag="5")]
+    pub messages: ::prost::alloc::vec::Vec<OperationMessage>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderTarget {
+    #[prost(oneof="provider_target::Target", tags="1, 2")]
+    pub target: ::core::option::Option<provider_target::Target>,
+}
+/// Nested message and enum types in `ProviderTarget`.
+pub mod provider_target {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="2")]
+        ExternalSystem(super::ExternalSystemRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderExposure {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub provider: ::core::option::Option<ProviderTarget>,
+    #[prost(message, optional, tag="3")]
+    pub operation_id: ::core::option::Option<ContractMemberId>,
+    #[prost(string, optional, tag="4")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ApiUsage {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub caller: ::core::option::Option<ProviderTarget>,
+    #[prost(message, optional, tag="3")]
+    pub operation_id: ::core::option::Option<ContractMemberId>,
+    #[prost(message, optional, tag="4")]
+    pub exposure_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, optional, tag="5")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContractDependency {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, optional, tag="4")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="contract_dependency::Target", tags="2, 3")]
+    pub target: ::core::option::Option<contract_dependency::Target>,
+}
+/// Nested message and enum types in `ContractDependency`.
+pub mod contract_dependency {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="2")]
+        Specification(super::SpecificationRef),
+        #[prost(message, tag="3")]
+        TypeLibrary(super::TypeLibraryRef),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Specification {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="6")]
+    pub artifacts: ::prost::alloc::vec::Vec<ContractArtifact>,
+    #[prost(message, repeated, tag="7")]
+    pub schemas: ::prost::alloc::vec::Vec<ContractSchema>,
+    #[prost(message, repeated, tag="8")]
+    pub messages: ::prost::alloc::vec::Vec<ContractMessage>,
+    #[prost(message, repeated, tag="9")]
+    pub operations: ::prost::alloc::vec::Vec<ContractOperation>,
+    #[prost(message, repeated, tag="10")]
+    pub exposures: ::prost::alloc::vec::Vec<ProviderExposure>,
+    #[prost(message, repeated, tag="11")]
+    pub usages: ::prost::alloc::vec::Vec<ApiUsage>,
+    #[prost(message, repeated, tag="12")]
+    pub dependencies: ::prost::alloc::vec::Vec<ContractDependency>,
+    #[prost(message, repeated, tag="13")]
+    pub message_channels: ::prost::alloc::vec::Vec<MessageChannelDeclaration>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ContractMemberKind {
+    Unspecified = 0,
+    Artifact = 1,
+    Schema = 2,
+    Message = 3,
+    Operation = 4,
+}
+impl ContractMemberKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CONTRACT_MEMBER_KIND_UNSPECIFIED",
+            Self::Artifact => "CONTRACT_MEMBER_KIND_ARTIFACT",
+            Self::Schema => "CONTRACT_MEMBER_KIND_SCHEMA",
+            Self::Message => "CONTRACT_MEMBER_KIND_MESSAGE",
+            Self::Operation => "CONTRACT_MEMBER_KIND_OPERATION",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CONTRACT_MEMBER_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "CONTRACT_MEMBER_KIND_ARTIFACT" => Some(Self::Artifact),
+            "CONTRACT_MEMBER_KIND_SCHEMA" => Some(Self::Schema),
+            "CONTRACT_MEMBER_KIND_MESSAGE" => Some(Self::Message),
+            "CONTRACT_MEMBER_KIND_OPERATION" => Some(Self::Operation),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MessageClaims {
+    #[prost(message, repeated, tag="1")]
+    pub claims: ::prost::alloc::vec::Vec<MessageClaim>,
+    #[prost(message, repeated, tag="2")]
+    pub routes: ::prost::alloc::vec::Vec<ClaimRoute>,
+    #[prost(message, repeated, tag="3")]
+    pub triggers: ::prost::alloc::vec::Vec<ClaimTrigger>,
+    #[prost(message, repeated, tag="4")]
+    pub field_selections: ::prost::alloc::vec::Vec<ClaimFieldSelection>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MessageClaim {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="CommunicationDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="3")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="4")]
+    pub group: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClaimRoute {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub channel: ::core::option::Option<ChannelRef>,
+    #[prost(map="string, string", tag="4")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(enumeration="ClaimDeliveryMode", optional, tag="5")]
+    pub delivery_mode: ::core::option::Option<i32>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClaimTrigger {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="4")]
+    pub condition: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldPath {
+    #[prost(string, repeated, tag="1")]
+    pub segments: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClaimFieldSelector {
+    #[prost(oneof="claim_field_selector::Selector", tags="1, 2")]
+    pub selector: ::core::option::Option<claim_field_selector::Selector>,
+}
+/// Nested message and enum types in `ClaimFieldSelector`.
+pub mod claim_field_selector {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selector {
+        #[prost(message, tag="1")]
+        Path(super::FieldPath),
+        #[prost(message, tag="2")]
+        Opaque(super::OpaqueTypeSelector),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClaimFieldSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<ConnectionRef>,
+    #[prost(message, repeated, tag="4")]
+    pub selectors: ::prost::alloc::vec::Vec<ClaimFieldSelector>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CommunicationDirection {
+    Unspecified = 0,
+    Send = 1,
+    Receive = 2,
+}
+impl CommunicationDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "COMMUNICATION_DIRECTION_UNSPECIFIED",
+            Self::Send => "COMMUNICATION_DIRECTION_SEND",
+            Self::Receive => "COMMUNICATION_DIRECTION_RECEIVE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "COMMUNICATION_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "COMMUNICATION_DIRECTION_SEND" => Some(Self::Send),
+            "COMMUNICATION_DIRECTION_RECEIVE" => Some(Self::Receive),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupMember {
+    #[prost(oneof="system_group_member::Target", tags="1, 2, 3, 4, 5, 6")]
+    pub target: ::core::option::Option<system_group_member::Target>,
+}
+/// Nested message and enum types in `SystemGroupMember`.
+pub mod system_group_member {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        SystemGroup(super::SystemGroupRef),
+        #[prost(message, tag="2")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="3")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="4")]
+        DataStore(super::DataStoreRef),
+        #[prost(message, tag="5")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="6")]
+        DesignGraph(super::DesignGraphRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupMembership {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub member: ::core::option::Option<SystemGroupMember>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupRelationship {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<SystemGroupRef>,
+    /// optional; omission never erases the authored edge
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemActorTarget {
+    #[prost(oneof="system_actor_target::Target", tags="1, 2, 3, 4")]
+    pub target: ::core::option::Option<system_actor_target::Target>,
+}
+/// Nested message and enum types in `SystemActorTarget`.
+pub mod system_actor_target {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        Persona(super::PersonaRef),
+        #[prost(message, tag="2")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="3")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="4")]
+        SystemGroup(super::SystemGroupRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemActorLink {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<SystemActorTarget>,
+    #[prost(enumeration="SystemActorDirection", tag="3")]
+    pub direction: i32,
+    /// optional; presence is authored
+    #[prost(message, optional, tag="4")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+/// An abstract grouping of exact architectural entities. It is neither a
+/// deployable Component nor a third-party ExternalSystem. Membership is a
+/// curation claim made by the group: no ownership, deployment, exclusivity,
+/// permission or runtime meaning.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemGroup {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(enumeration="SystemGroupScope", tag="6")]
+    pub scope: i32,
+    #[prost(message, repeated, tag="7")]
+    pub members: ::prost::alloc::vec::Vec<SystemGroupMembership>,
+    #[prost(message, repeated, tag="8")]
+    pub relationships: ::prost::alloc::vec::Vec<SystemGroupRelationship>,
+    #[prost(message, repeated, tag="9")]
+    pub actors: ::prost::alloc::vec::Vec<SystemActorLink>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainMember {
+    #[prost(oneof="domain_member::Target", tags="1, 2, 3, 4, 5, 6, 7")]
+    pub target: ::core::option::Option<domain_member::Target>,
+}
+/// Nested message and enum types in `DomainMember`.
+pub mod domain_member {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        Domain(super::DomainRef),
+        #[prost(message, tag="2")]
+        SystemGroup(super::SystemGroupRef),
+        #[prost(message, tag="3")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="4")]
+        DataProduct(super::DataProductRef),
+        #[prost(message, tag="5")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="6")]
+        DesignGraph(super::DesignGraphRef),
+        #[prost(message, tag="7")]
+        ExternalSystem(super::ExternalSystemRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainMembership {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub member: ::core::option::Option<DomainMember>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+/// Descriptive classification of a group. It grants no ownership and does not
+/// restrict which authorized members a group may list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SystemGroupScope {
+    Unspecified = 0,
+    Internal = 1,
+    External = 2,
+}
+impl SystemGroupScope {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SYSTEM_GROUP_SCOPE_UNSPECIFIED",
+            Self::Internal => "SYSTEM_GROUP_SCOPE_INTERNAL",
+            Self::External => "SYSTEM_GROUP_SCOPE_EXTERNAL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SYSTEM_GROUP_SCOPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SYSTEM_GROUP_SCOPE_INTERNAL" => Some(Self::Internal),
+            "SYSTEM_GROUP_SCOPE_EXTERNAL" => Some(Self::External),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SystemActorDirection {
+    Unspecified = 0,
+    /// actor toward the group
+    Inbound = 1,
+    /// group toward the actor
+    Outbound = 2,
+}
+impl SystemActorDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SYSTEM_ACTOR_DIRECTION_UNSPECIFIED",
+            Self::Inbound => "SYSTEM_ACTOR_DIRECTION_INBOUND",
+            Self::Outbound => "SYSTEM_ACTOR_DIRECTION_OUTBOUND",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SYSTEM_ACTOR_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "SYSTEM_ACTOR_DIRECTION_INBOUND" => Some(Self::Inbound),
+            "SYSTEM_ACTOR_DIRECTION_OUTBOUND" => Some(Self::Outbound),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryEvidence {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<DocumentRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub content_digest: ::core::option::Option<ContentDigest>,
+    #[prost(string, tag="4")]
+    pub locator: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub quote: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsagePolicy {
+    #[prost(enumeration="GlossaryUsage", tag="1")]
+    pub usage: i32,
+    #[prost(message, optional, tag="2")]
+    pub preferred_term: ::core::option::Option<TermRef>,
+    #[prost(string, tag="3")]
+    pub rationale: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub effective_from: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="5")]
+    pub effective_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryUsagePeriod {
+    #[prost(message, optional, tag="1")]
+    pub valid_from: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="2")]
+    pub valid_until: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GlossaryReview {
+    #[prost(enumeration="GlossaryReviewDisposition", tag="1")]
+    pub disposition: i32,
+    #[prost(string, tag="2")]
+    pub actor: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub reviewed_at: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub content_digest: ::core::option::Option<ContentDigest>,
+    #[prost(string, tag="5")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub reason: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GlossaryEntry {
+    #[prost(message, repeated, tag="1")]
+    pub evidence: ::prost::alloc::vec::Vec<GlossaryEvidence>,
+    #[prost(string, tag="2")]
+    pub generation_revision: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub next_review_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="5")]
+    pub policy: ::core::option::Option<GlossaryUsagePolicy>,
+    #[prost(message, optional, tag="6")]
+    pub review: ::core::option::Option<GlossaryReview>,
+    #[prost(message, optional, tag="7")]
+    pub usage_period: ::core::option::Option<GlossaryUsagePeriod>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryUsage {
+    Unspecified = 0,
+    Allowed = 1,
+    Deprecated = 2,
+    Prohibited = 3,
+}
+impl GlossaryUsage {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_USAGE_UNSPECIFIED",
+            Self::Allowed => "GLOSSARY_USAGE_ALLOWED",
+            Self::Deprecated => "GLOSSARY_USAGE_DEPRECATED",
+            Self::Prohibited => "GLOSSARY_USAGE_PROHIBITED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_USAGE_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_USAGE_ALLOWED" => Some(Self::Allowed),
+            "GLOSSARY_USAGE_DEPRECATED" => Some(Self::Deprecated),
+            "GLOSSARY_USAGE_PROHIBITED" => Some(Self::Prohibited),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum GlossaryReviewDisposition {
+    Unspecified = 0,
+    Accepted = 1,
+    Rejected = 2,
+    NeedsChanges = 3,
+}
+impl GlossaryReviewDisposition {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED",
+            Self::Accepted => "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED",
+            Self::Rejected => "GLOSSARY_REVIEW_DISPOSITION_REJECTED",
+            Self::NeedsChanges => "GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GLOSSARY_REVIEW_DISPOSITION_UNSPECIFIED" => Some(Self::Unspecified),
+            "GLOSSARY_REVIEW_DISPOSITION_ACCEPTED" => Some(Self::Accepted),
+            "GLOSSARY_REVIEW_DISPOSITION_REJECTED" => Some(Self::Rejected),
+            "GLOSSARY_REVIEW_DISPOSITION_NEEDS_CHANGES" => Some(Self::NeedsChanges),
+            _ => None,
+        }
+    }
+}
+/// The bounded context itself, as data (Decision #27): one per namespace,
+/// identified BY the namespace (id.slug == id.namespace). Carries the
+/// context charter -- what this boundary owns, its links and metadata.
+/// Event models are curations within it; this is the root document.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BoundedContext {
+    /// convention: slug == namespace, making it unique per context
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The mapping from solution to problem: which subdomains this context
+    /// solves (Decision #29). Usually one; several is a monolith confessing.
+    /// Cross-namespace by nature (subdomains live in the domain's namespace)
+    /// and legal: strategic mapping is knowledge, not behavioral coupling.
+    #[prost(message, repeated, tag="6")]
+    pub realizes: ::prost::alloc::vec::Vec<SubdomainRef>,
+    /// The agreement behind each seam (Decision #30): declared by the
+    /// DOWNSTREAM context about its upstream. The seam itself stays derived
+    /// (event -> subscription view); this records who moves when the
+    /// upstream wants a breaking change.
+    #[prost(message, repeated, tag="7")]
+    pub relationships: ::prost::alloc::vec::Vec<bounded_context::ContextRelationship>,
+}
+/// Nested message and enum types in `BoundedContext`.
+pub mod bounded_context {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ContextRelationship {
+        #[prost(message, optional, tag="1")]
+        pub upstream: ::core::option::Option<super::BoundedContextRef>,
+        #[prost(enumeration="context_relationship::Intent", tag="2")]
+        pub intent: i32,
+        /// the agreement's body: who negotiated what
+        #[prost(string, tag="3")]
+        pub doc: ::prost::alloc::string::String,
+        #[prost(message, repeated, tag="4")]
+        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    }
+    /// Nested message and enum types in `ContextRelationship`.
+    pub mod context_relationship {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+        #[repr(i32)]
+        pub enum Intent {
+            Unspecified = 0,
+            /// downstream has a voice in upstream planning
+            CustomerSupplier = 1,
+            /// downstream takes what it gets
+            Conformist = 2,
+            /// the two succeed or fail together
+            Partnership = 3,
+            /// deliberate non-integration, on record
+            SeparateWays = 4,
+        }
+        impl Intent {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            ///
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    Self::Unspecified => "INTENT_UNSPECIFIED",
+                    Self::CustomerSupplier => "INTENT_CUSTOMER_SUPPLIER",
+                    Self::Conformist => "INTENT_CONFORMIST",
+                    Self::Partnership => "INTENT_PARTNERSHIP",
+                    Self::SeparateWays => "INTENT_SEPARATE_WAYS",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "INTENT_UNSPECIFIED" => Some(Self::Unspecified),
+                    "INTENT_CUSTOMER_SUPPLIER" => Some(Self::CustomerSupplier),
+                    "INTENT_CONFORMIST" => Some(Self::Conformist),
+                    "INTENT_PARTNERSHIP" => Some(Self::Partnership),
+                    "INTENT_SEPARATE_WAYS" => Some(Self::SeparateWays),
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+/// The business itself -- the container word. Usually exactly one. Pure
+/// knowledge: no behavior, no slices, no time.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Domain {
+    /// convention: slug == namespace of the problem space
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// the pitch-deck sentence
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The codebase/project this domain is mapped from. Optional during
+    /// the migration window; when set, it is what makes a multi-project
+    /// store unambiguous (two Domains in the same Project, two Domains in
+    /// different Projects can share a namespace prefix without colliding
+    /// identity). Surfaced via validator rules -- see DOMAIN_MISSING_PROJECT.
+    #[prost(message, optional, tag="6")]
+    pub project: ::core::option::Option<ProjectRef>,
+    #[prost(message, optional, tag="7")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
+    #[prost(message, repeated, tag="8")]
+    pub members: ::prost::alloc::vec::Vec<DomainMembership>,
+}
+/// The codebase / repository / customer the model is being mapped FROM.
+/// In a multi-project store (e.g. one server holding several unrelated
+/// products at once), Project is the outermost grouping:
+/// every Domain belongs to one Project, and entity namespaces are scoped
+/// inside that Project's tree. Convention: id.slug == id.namespace, same
+/// rule as Domain -- the namespace IS the project identity.
+///
+/// Cross-project write enforcement:
+///    - Domain entities: PutEntity and BatchMutate reject a write where
+///      Domain.project.id.namespace differs from the Domain's own namespace
+///      (FAILED_PRECONDITION). This is the only boundary where a project
+///      association is directly expressed on the entity.
+///    - All other entity kinds (Event, Command, Slice, etc.) carry no project
+///      field; their project membership is derivable only via the
+///      namespace -> BoundedContext -> Subdomain -> Domain -> Project chain,
+///      which cannot be checked atomically at write time without a full graph
+///      traversal. The accepted risk is that a write to a foreign namespace
+///      is not refused at the mutation boundary. Validators (PROJECT_SLUG_MISMATCH,
+///      DOMAIN_MISSING_PROJECT, BC_PROJECT_COLLISION) surface hygiene violations
+///      post-write; a storage-layer rework is required for general enforcement.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Project {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// Optional human-readable upstream repo url / handle, e.g.
+    /// "github.com/acme/storefront". Free-form.
+    #[prost(string, tag="4")]
+    pub source_ref: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProtoSourceFile {
-    /// Relative import path, e.g. "acme/orders/v1/orders.proto".
+pub struct ProjectRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Term {
+    /// namespace = bounded context, slug = the word
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// e.g. "review"
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// definition in this context's language
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub embodied_by: ::prost::alloc::vec::Vec<EntityRef>,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="7")]
+    pub owning_domain: ::core::option::Option<DomainRef>,
+    #[prost(message, optional, tag="8")]
+    pub glossary: ::core::option::Option<GlossaryEntry>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Ambiguity {
+    /// problem-space namespace, e.g. marketplace/review-collision
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(enumeration="ambiguity::Kind", tag="2")]
+    pub kind: i32,
+    #[prost(message, repeated, tag="3")]
+    pub terms: ::prost::alloc::vec::Vec<TermRef>,
+    #[prost(enumeration="ambiguity::Ruling", tag="4")]
+    pub ruling: i32,
+    #[prost(string, tag="5")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// Nested message and enum types in `Ambiguity`.
+pub mod ambiguity {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Homonym = 1,
+        Synonym = 2,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Homonym => "KIND_HOMONYM",
+                Self::Synonym => "KIND_SYNONYM",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_HOMONYM" => Some(Self::Homonym),
+                "KIND_SYNONYM" => Some(Self::Synonym),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Ruling {
+        Unspecified = 0,
+        Deliberate = 1,
+        Rename = 2,
+        Merge = 3,
+    }
+    impl Ruling {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "RULING_UNSPECIFIED",
+                Self::Deliberate => "RULING_DELIBERATE",
+                Self::Rename => "RULING_RENAME",
+                Self::Merge => "RULING_MERGE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "RULING_UNSPECIFIED" => Some(Self::Unspecified),
+                "RULING_DELIBERATE" => Some(Self::Deliberate),
+                "RULING_RENAME" => Some(Self::Rename),
+                "RULING_MERGE" => Some(Self::Merge),
+                _ => None,
+            }
+        }
+    }
+}
+/// One problem the business must be good at. Discovered, not designed -- it
+/// exists whether or not software does. The classification is the entire
+/// point: it is a budget document disguised as architecture (who builds it,
+/// build vs buy, what quality bar, rewrite vs tolerate).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Subdomain {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub domain: ::core::option::Option<DomainRef>,
+    #[prost(enumeration="subdomain::Classification", tag="5")]
+    pub classification: i32,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// Nested message and enum types in `Subdomain`.
+pub mod subdomain {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Classification {
+        Unspecified = 0,
+        /// where you win or lose; best people; never outsource
+        Core = 1,
+        /// necessary and bespoke; built cheaply
+        Supporting = 2,
+        /// a solved problem; buy, never build
+        Generic = 3,
+    }
+    impl Classification {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "CLASSIFICATION_UNSPECIFIED",
+                Self::Core => "CLASSIFICATION_CORE",
+                Self::Supporting => "CLASSIFICATION_SUPPORTING",
+                Self::Generic => "CLASSIFICATION_GENERIC",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "CLASSIFICATION_UNSPECIFIED" => Some(Self::Unspecified),
+                "CLASSIFICATION_CORE" => Some(Self::Core),
+                "CLASSIFICATION_SUPPORTING" => Some(Self::Supporting),
+                "CLASSIFICATION_GENERIC" => Some(Self::Generic),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataPortId {
     #[prost(string, tag="1")]
-    pub path: ::prost::alloc::string::String,
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PortName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataPortRef {
+    #[prost(message, optional, tag="1")]
+    pub product: ::core::option::Option<DataProductRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(enumeration="DataPortDirection", tag="3")]
+    pub direction: i32,
+    #[prost(message, optional, tag="4")]
+    pub port_id: ::core::option::Option<DataPortId>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InputDataSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(oneof="input_data_selection::Target", tags="2, 3")]
+    pub target: ::core::option::Option<input_data_selection::Target>,
+}
+/// Nested message and enum types in `InputDataSelection`.
+pub mod input_data_selection {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="2")]
+        ReadModel(super::ReadModelRef),
+        #[prost(message, tag="3")]
+        Event(super::EventRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputDataSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub read_model: ::core::option::Option<ReadModelRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputContract {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(oneof="output_contract::Type", tags="2, 3, 4")]
+    pub r#type: ::core::option::Option<output_contract::Type>,
+}
+/// Nested message and enum types in `OutputContract`.
+pub mod output_contract {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Type {
+        #[prost(message, tag="2")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="3")]
+        ContractType(super::ContractTypeRef),
+        #[prost(message, tag="4")]
+        LibraryType(super::TypeLibraryTypeRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoreAccess {
+    #[prost(message, optional, tag="1")]
+    pub store: ::core::option::Option<DataStoreRef>,
+    #[prost(message, optional, tag="2")]
+    pub attachment: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChannelAccess {
+    #[prost(message, optional, tag="1")]
+    pub channel: ::core::option::Option<ChannelRef>,
+    #[prost(message, optional, tag="2")]
+    pub binding: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub observation: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OperationAccess {
+    #[prost(message, optional, tag="1")]
+    pub operation: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="2")]
+    pub response: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub provider_exposure: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputAccess {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, optional, tag="5")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="output_access::Selection", tags="2, 3, 4")]
+    pub selection: ::core::option::Option<output_access::Selection>,
+}
+/// Nested message and enum types in `OutputAccess`.
+pub mod output_access {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="2")]
+        Store(super::StoreAccess),
+        #[prost(message, tag="3")]
+        Channel(super::ChannelAccess),
+        #[prost(message, tag="4")]
+        Operation(super::OperationAccess),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LineageInput {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub input_port_id: ::core::option::Option<DataPortId>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeclaredLineage {
+    #[prost(message, repeated, tag="1")]
+    pub inputs: ::prost::alloc::vec::Vec<LineageInput>,
+    #[prost(string, optional, tag="2")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataInputPort {
+    #[prost(message, optional, tag="1")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<PortName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub data: ::core::option::Option<InputDataSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataOutputPort {
+    #[prost(message, optional, tag="1")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<PortName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub data: ::core::option::Option<OutputDataSelection>,
+    #[prost(message, optional, tag="5")]
+    pub contract: ::core::option::Option<OutputContract>,
+    #[prost(message, repeated, tag="6")]
+    pub access: ::prost::alloc::vec::Vec<OutputAccess>,
+    #[prost(message, optional, tag="7")]
+    pub derived_from: ::core::option::Option<DeclaredLineage>,
+}
+/// Exact output-contract pin for a descriptive resource association.
+/// It has no connection id of its own: the parent association is the
+/// occurrence, and this pin is part of that occurrence's fingerprint.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProductResourceContract {
+    #[prost(oneof="product_resource_contract::Type", tags="1, 2, 3")]
+    pub r#type: ::core::option::Option<product_resource_contract::Type>,
+}
+/// Nested message and enum types in `ProductResourceContract`.
+pub mod product_resource_contract {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Type {
+        #[prost(message, tag="1")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="2")]
+        ContractType(super::ContractTypeRef),
+        #[prost(message, tag="3")]
+        LibraryType(super::TypeLibraryTypeRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProductResourceAssociation {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="DataPortDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="10")]
+    pub contract: ::core::option::Option<ProductResourceContract>,
+    #[prost(string, optional, tag="11")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="product_resource_association::Target", tags="3, 4, 5, 6, 7, 8, 9")]
+    pub target: ::core::option::Option<product_resource_association::Target>,
+}
+/// Nested message and enum types in `ProductResourceAssociation`.
+pub mod product_resource_association {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="3")]
+        Event(super::EventRef),
+        #[prost(message, tag="4")]
+        Command(super::CommandRef),
+        #[prost(message, tag="5")]
+        Message(super::ContractMemberRef),
+        #[prost(message, tag="6")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="7")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="8")]
+        Channel(super::ChannelRef),
+        #[prost(message, tag="9")]
+        DataStore(super::DataStoreRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StorageAccessClaim {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub store: ::core::option::Option<DataStoreRef>,
+    #[prost(enumeration="StorageDirection", tag="3")]
+    pub direction: i32,
+    #[prost(message, optional, tag="4")]
+    pub attachment: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="5")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProduct {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, optional, tag="6")]
+    pub purpose: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="7")]
+    pub inputs: ::prost::alloc::vec::Vec<DataInputPort>,
+    #[prost(message, repeated, tag="8")]
+    pub outputs: ::prost::alloc::vec::Vec<DataOutputPort>,
+    #[prost(message, repeated, tag="10")]
+    pub resource_associations: ::prost::alloc::vec::Vec<ProductResourceAssociation>,
+    #[prost(message, repeated, tag="9")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DataPortDirection {
+    Unspecified = 0,
+    Input = 1,
+    Output = 2,
+}
+impl DataPortDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DATA_PORT_DIRECTION_UNSPECIFIED",
+            Self::Input => "DATA_PORT_DIRECTION_INPUT",
+            Self::Output => "DATA_PORT_DIRECTION_OUTPUT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DATA_PORT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "DATA_PORT_DIRECTION_INPUT" => Some(Self::Input),
+            "DATA_PORT_DIRECTION_OUTPUT" => Some(Self::Output),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StorageDirection {
+    Unspecified = 0,
+    Read = 1,
+    Write = 2,
+}
+impl StorageDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STORAGE_DIRECTION_UNSPECIFIED",
+            Self::Read => "STORAGE_DIRECTION_READ",
+            Self::Write => "STORAGE_DIRECTION_WRITE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STORAGE_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "STORAGE_DIRECTION_READ" => Some(Self::Read),
+            "STORAGE_DIRECTION_WRITE" => Some(Self::Write),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LocalValueId {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExternalDocumentLink {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AnchorFragment {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogSubject {
+    #[prost(oneof="catalog_subject::Selection", tags="1, 2, 3, 4")]
+    pub selection: ::core::option::Option<catalog_subject::Selection>,
+}
+/// Nested message and enum types in `CatalogSubject`.
+pub mod catalog_subject {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        Entity(super::EntityRef),
+        #[prost(message, tag="2")]
+        Connection(super::ConnectionRef),
+        #[prost(message, tag="3")]
+        Member(super::ContractMemberRef),
+        #[prost(message, tag="4")]
+        Port(super::DataPortRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SubjectAssociation {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub subject: ::core::option::Option<CatalogSubject>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionOption {
+    #[prost(message, optional, tag="1")]
+    pub option_id: ::core::option::Option<LocalValueId>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="3")]
+    pub description: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionConsequence {
+    #[prost(enumeration="decision_consequence::Kind", tag="1")]
+    pub kind: i32,
+    #[prost(message, optional, tag="2")]
+    pub text: ::core::option::Option<CatalogText>,
+}
+/// Nested message and enum types in `DecisionConsequence`.
+pub mod decision_consequence {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Benefit = 1,
+        Cost = 2,
+        Risk = 3,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Benefit => "KIND_BENEFIT",
+                Self::Cost => "KIND_COST",
+                Self::Risk => "KIND_RISK",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_BENEFIT" => Some(Self::Benefit),
+                "KIND_COST" => Some(Self::Cost),
+                "KIND_RISK" => Some(Self::Risk),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionReplacement {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub decision: ::core::option::Option<DecisionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RelatedDecision {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub decision: ::core::option::Option<DecisionRef>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionMaker {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+    #[prost(oneof="decision_maker::Assignee", tags="2, 3")]
+    pub assignee: ::core::option::Option<decision_maker::Assignee>,
+}
+/// Nested message and enum types in `DecisionMaker`.
+pub mod decision_maker {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Assignee {
+        #[prost(message, tag="2")]
+        Person(super::PersonRef),
+        #[prost(message, tag="3")]
+        Team(super::TeamRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionAmendment {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub decision: ::core::option::Option<DecisionRef>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentAnchorRef {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<DocumentRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub anchor_id: ::core::option::Option<LocalValueId>,
+    #[prost(message, optional, tag="4")]
+    pub expected_digest: ::core::option::Option<ContentDigest>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentSelection {
+    #[prost(oneof="document_selection::Selection", tags="1, 2")]
+    pub selection: ::core::option::Option<document_selection::Selection>,
+}
+/// Nested message and enum types in `DocumentSelection`.
+pub mod document_selection {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        Document(super::DocumentRef),
+        #[prost(message, tag="2")]
+        Anchor(super::DocumentAnchorRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SupportingDocument {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub document: ::core::option::Option<DocumentSelection>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decision {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="6")]
+    pub subjects: ::prost::alloc::vec::Vec<SubjectAssociation>,
+    #[prost(enumeration="DecisionStatus", tag="7")]
+    pub status: i32,
+    #[prost(message, optional, tag="8")]
+    pub context: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="9")]
+    pub rationale: ::core::option::Option<CatalogText>,
+    #[prost(message, repeated, tag="10")]
+    pub options: ::prost::alloc::vec::Vec<DecisionOption>,
+    #[prost(message, optional, tag="11")]
+    pub selected_option: ::core::option::Option<LocalValueId>,
+    #[prost(message, repeated, tag="12")]
+    pub consequences: ::prost::alloc::vec::Vec<DecisionConsequence>,
+    #[prost(message, optional, tag="13")]
+    pub replaced_by: ::core::option::Option<DecisionReplacement>,
+    #[prost(message, repeated, tag="14")]
+    pub related_decisions: ::prost::alloc::vec::Vec<RelatedDecision>,
+    #[prost(message, repeated, tag="15")]
+    pub documents: ::prost::alloc::vec::Vec<SupportingDocument>,
+    #[prost(message, optional, tag="16")]
+    pub authored_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="17")]
+    pub decided_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, repeated, tag="18")]
+    pub decision_makers: ::prost::alloc::vec::Vec<DecisionMaker>,
+    #[prost(message, repeated, tag="19")]
+    pub amends: ::prost::alloc::vec::Vec<DecisionAmendment>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RetainedDocumentText {
+    #[prost(message, optional, tag="1")]
+    pub media_type: ::core::option::Option<MediaType>,
     #[prost(string, tag="2")]
     pub content: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub digest: ::core::option::Option<ContentDigest>,
 }
-/// Where the source text came from. A record only: the server never fetches
-/// anything it names. Remote origins are pulled client-side and arrive as
-/// `TypeLibrary.files`.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryProvenance {
-    #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
-    pub source: ::core::option::Option<type_library_provenance::Source>,
+pub struct RetainedContent {
+    #[prost(message, optional, tag="1")]
+    pub media_type: ::core::option::Option<MediaType>,
+    #[prost(bytes="vec", tag="2")]
+    pub content: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="3")]
+    pub digest: ::core::option::Option<ContentDigest>,
 }
-/// Nested message and enum types in `TypeLibraryProvenance`.
-pub mod type_library_provenance {
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct InlineSource {
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct BufModuleSnapshot {
-        #[prost(string, tag="1")]
-        pub remote: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub owner: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub module: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub commit: ::prost::alloc::string::String,
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct GitSnapshot {
-        #[prost(string, tag="1")]
-        pub repository_url: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub r#ref: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub commit: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub subdirectory: ::prost::alloc::string::String,
-    }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LogicalFilename {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RelatedContent {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub document: ::core::option::Option<DocumentSelection>,
+    #[prost(enumeration="RelatedContentRole", tag="3")]
+    pub role: i32,
+    #[prost(message, optional, tag="4")]
+    pub label: ::core::option::Option<CatalogTitle>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentAnchor {
+    #[prost(message, optional, tag="1")]
+    pub anchor_id: ::core::option::Option<LocalValueId>,
+    #[prost(message, optional, tag="2")]
+    pub fragment: ::core::option::Option<AnchorFragment>,
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentNavigation {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub document: ::core::option::Option<DocumentSelection>,
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Document {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="6")]
+    pub subjects: ::prost::alloc::vec::Vec<SubjectAssociation>,
+    #[prost(message, repeated, tag="9")]
+    pub anchors: ::prost::alloc::vec::Vec<DocumentAnchor>,
+    #[prost(message, repeated, tag="10")]
+    pub navigation: ::prost::alloc::vec::Vec<DocumentNavigation>,
+    #[prost(enumeration="DocumentPurpose", optional, tag="11")]
+    pub purpose: ::core::option::Option<i32>,
+    #[prost(message, optional, tag="12")]
+    pub filename: ::core::option::Option<LogicalFilename>,
+    #[prost(message, repeated, tag="14")]
+    pub related_content: ::prost::alloc::vec::Vec<RelatedContent>,
+    #[prost(oneof="document::Body", tags="7, 8, 13")]
+    pub body: ::core::option::Option<document::Body>,
+}
+/// Nested message and enum types in `Document`.
+pub mod document {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Source {
+    pub enum Body {
+        #[prost(message, tag="7")]
+        Retained(super::RetainedDocumentText),
+        #[prost(message, tag="8")]
+        Link(super::ExternalDocumentLink),
+        #[prost(message, tag="13")]
+        RetainedContent(super::RetainedContent),
+    }
+}
+/// Marks a navigation Document as a category container. At most one per
+/// Document; membership is declared only through explicit navigation edges.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentCollectionAnnotation {
+    #[prost(message, optional, tag="1")]
+    pub category: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub description: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DecisionStatus {
+    Unspecified = 0,
+    Proposed = 1,
+    Accepted = 2,
+    Rejected = 3,
+    Withdrawn = 4,
+    Superseded = 5,
+}
+impl DecisionStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DECISION_STATUS_UNSPECIFIED",
+            Self::Proposed => "DECISION_STATUS_PROPOSED",
+            Self::Accepted => "DECISION_STATUS_ACCEPTED",
+            Self::Rejected => "DECISION_STATUS_REJECTED",
+            Self::Withdrawn => "DECISION_STATUS_WITHDRAWN",
+            Self::Superseded => "DECISION_STATUS_SUPERSEDED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DECISION_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "DECISION_STATUS_PROPOSED" => Some(Self::Proposed),
+            "DECISION_STATUS_ACCEPTED" => Some(Self::Accepted),
+            "DECISION_STATUS_REJECTED" => Some(Self::Rejected),
+            "DECISION_STATUS_WITHDRAWN" => Some(Self::Withdrawn),
+            "DECISION_STATUS_SUPERSEDED" => Some(Self::Superseded),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DocumentPurpose {
+    Unspecified = 0,
+    General = 1,
+    Example = 2,
+    Diagram = 3,
+    Attachment = 4,
+    Changelog = 5,
+}
+impl DocumentPurpose {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DOCUMENT_PURPOSE_UNSPECIFIED",
+            Self::General => "DOCUMENT_PURPOSE_GENERAL",
+            Self::Example => "DOCUMENT_PURPOSE_EXAMPLE",
+            Self::Diagram => "DOCUMENT_PURPOSE_DIAGRAM",
+            Self::Attachment => "DOCUMENT_PURPOSE_ATTACHMENT",
+            Self::Changelog => "DOCUMENT_PURPOSE_CHANGELOG",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DOCUMENT_PURPOSE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DOCUMENT_PURPOSE_GENERAL" => Some(Self::General),
+            "DOCUMENT_PURPOSE_EXAMPLE" => Some(Self::Example),
+            "DOCUMENT_PURPOSE_DIAGRAM" => Some(Self::Diagram),
+            "DOCUMENT_PURPOSE_ATTACHMENT" => Some(Self::Attachment),
+            "DOCUMENT_PURPOSE_CHANGELOG" => Some(Self::Changelog),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RelatedContentRole {
+    Unspecified = 0,
+    Example = 1,
+    Diagram = 2,
+    Attachment = 3,
+    Changelog = 4,
+}
+impl RelatedContentRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "RELATED_CONTENT_ROLE_UNSPECIFIED",
+            Self::Example => "RELATED_CONTENT_ROLE_EXAMPLE",
+            Self::Diagram => "RELATED_CONTENT_ROLE_DIAGRAM",
+            Self::Attachment => "RELATED_CONTENT_ROLE_ATTACHMENT",
+            Self::Changelog => "RELATED_CONTENT_ROLE_CHANGELOG",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RELATED_CONTENT_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "RELATED_CONTENT_ROLE_EXAMPLE" => Some(Self::Example),
+            "RELATED_CONTENT_ROLE_DIAGRAM" => Some(Self::Diagram),
+            "RELATED_CONTENT_ROLE_ATTACHMENT" => Some(Self::Attachment),
+            "RELATED_CONTENT_ROLE_CHANGELOG" => Some(Self::Changelog),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArchitecturalEndpoint {
+    #[prost(oneof="architectural_endpoint::Target", tags="1, 2")]
+    pub target: ::core::option::Option<architectural_endpoint::Target>,
+}
+/// Nested message and enum types in `ArchitecturalEndpoint`.
+pub mod architectural_endpoint {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
         #[prost(message, tag="1")]
-        Inline(InlineSource),
+        Component(super::ComponentRef),
         #[prost(message, tag="2")]
-        BufModule(BufModuleSnapshot),
+        ExternalSystem(super::ExternalSystemRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArchitecturalRelationship {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<ArchitecturalEndpoint>,
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommunicationDeclaration {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="CommunicationDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="3")]
+    pub peer: ::core::option::Option<ArchitecturalEndpoint>,
+    #[prost(message, optional, tag="4")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="5")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="6")]
+    pub condition: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="7")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UiHosting {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub ui: ::core::option::Option<UiRef>,
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+/// A Component is a living implementation unit: the deployable thing that
+/// hosts processors, serves UIs, projects read models, exposes APIs, and owns
+/// its technology choices -- including the messaging it relies on (Kafka
+/// topics, NATS subjects, webhooks). This is where those facts are
+/// documented. Members are a curated listing (same pattern as EventModel:
+/// flat keyspace stays canonical, the component only points). Grouping is
+/// implementation intent and never affects model-semantics validation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Component {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// responsibilities, APIs exposed, tech relied on
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// e.g. "kafka", "nats", "grpc", "webhook"
+    #[prost(string, repeated, tag="4")]
+    pub tech: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// what it hosts (processors, UIs, read models, ...)
+    #[prost(message, repeated, tag="5")]
+    pub members: ::prost::alloc::vec::Vec<EntityRef>,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="8")]
+    pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
+    #[prost(message, repeated, tag="9")]
+    pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, repeated, tag="10")]
+    pub ui_hostings: ::prost::alloc::vec::Vec<UiHosting>,
+    #[prost(message, optional, tag="11")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
+    #[prost(message, repeated, tag="12")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
+}
+/// An ExternalSystem is a living third-party boundary: the APIs and webhooks
+/// it exposes, the tech used to integrate with it. ReadModels with an
+/// ExternalSource point here, so every external feed shares one documented
+/// source of truth about the system behind it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExternalSystem {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// what it is, the APIs/webhooks it exposes
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// e.g. "webhook", "rest", "kafka"
+    #[prost(string, repeated, tag="4")]
+    pub tech: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="7")]
+    pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
+    #[prost(message, repeated, tag="8")]
+    pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, optional, tag="9")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
+    #[prost(message, repeated, tag="10")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
+}
+/// A Tracker is a project-management overlay: a denormalized list of
+/// pointers into the model, each carrying delivery status. It integrates
+/// with the model without living inside it -- flipping a status never
+/// mutates a design entity, any entity kind can be tracked (slices, read
+/// models, components, whole storyboards), and several trackers can overlay
+/// the same model (per team, per milestone) without touching each other.
+/// "What needs work?" = ListEntities(kind=TRACKER) + read the items.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Tracker {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub items: ::prost::alloc::vec::Vec<tracker::Item>,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// Nested message and enum types in `Tracker`.
+pub mod tracker {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Item {
+        /// the model entity this status is ABOUT
+        #[prost(message, optional, tag="1")]
+        pub subject: ::core::option::Option<super::EntityRef>,
+        #[prost(enumeration="super::TrackStatus", tag="2")]
+        pub status: i32,
+        /// e.g. "blocked on payment SDK upgrade"
+        #[prost(string, tag="3")]
+        pub doc: ::prost::alloc::string::String,
+        #[prost(message, repeated, tag="4")]
+        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    }
+}
+/// Delivery status of a tracked item. Lives ONLY in Trackers -- design
+/// entities never carry process state (Decision #25).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TrackStatus {
+    Unspecified = 0,
+    Todo = 1,
+    InProgress = 2,
+    Review = 3,
+    Blocked = 4,
+    Done = 5,
+}
+impl TrackStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TRACK_STATUS_UNSPECIFIED",
+            Self::Todo => "TRACK_STATUS_TODO",
+            Self::InProgress => "TRACK_STATUS_IN_PROGRESS",
+            Self::Review => "TRACK_STATUS_REVIEW",
+            Self::Blocked => "TRACK_STATUS_BLOCKED",
+            Self::Done => "TRACK_STATUS_DONE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TRACK_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "TRACK_STATUS_TODO" => Some(Self::Todo),
+            "TRACK_STATUS_IN_PROGRESS" => Some(Self::InProgress),
+            "TRACK_STATUS_REVIEW" => Some(Self::Review),
+            "TRACK_STATUS_BLOCKED" => Some(Self::Blocked),
+            "TRACK_STATUS_DONE" => Some(Self::Done),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectoryDisplayName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectoryRoleText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EmailAddress {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContactUrl {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectoryProvider {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpaqueDirectoryKey {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChatContact {
+    #[prost(message, optional, tag="1")]
+    pub service: ::core::option::Option<DirectoryProvider>,
+    #[prost(message, optional, tag="2")]
+    pub handle: ::core::option::Option<OpaqueDirectoryKey>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExternalDirectoryPointer {
+    #[prost(message, optional, tag="1")]
+    pub provider: ::core::option::Option<DirectoryProvider>,
+    #[prost(message, optional, tag="2")]
+    pub key: ::core::option::Option<OpaqueDirectoryKey>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ContactPoint {
+    #[prost(string, optional, tag="4")]
+    pub label: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="contact_point::Channel", tags="1, 2, 3")]
+    pub channel: ::core::option::Option<contact_point::Channel>,
+}
+/// Nested message and enum types in `ContactPoint`.
+pub mod contact_point {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Channel {
+        #[prost(message, tag="1")]
+        Email(super::EmailAddress),
+        #[prost(message, tag="2")]
+        Web(super::ContactUrl),
         #[prost(message, tag="3")]
-        Git(GitSnapshot),
+        Chat(super::ChatContact),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResponsibilitySubject {
+    #[prost(oneof="responsibility_subject::Selection", tags="1, 2, 3, 4")]
+    pub selection: ::core::option::Option<responsibility_subject::Selection>,
+}
+/// Nested message and enum types in `ResponsibilitySubject`.
+pub mod responsibility_subject {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        Entity(super::EntityRef),
+        #[prost(message, tag="2")]
+        Connection(super::ConnectionRef),
+        #[prost(message, tag="3")]
+        Member(super::ContractMemberRef),
+        #[prost(message, tag="4")]
+        Port(super::DataPortRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Responsibility {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="ResponsibilityKind", tag="2")]
+    pub kind: i32,
+    #[prost(message, optional, tag="3")]
+    pub subject: ::core::option::Option<ResponsibilitySubject>,
+    #[prost(string, optional, tag="4")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TeamMember {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub person: ::core::option::Option<PersonRef>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Team {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<DirectoryDisplayName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="6")]
+    pub contacts: ::prost::alloc::vec::Vec<ContactPoint>,
+    #[prost(message, repeated, tag="7")]
+    pub responsibilities: ::prost::alloc::vec::Vec<Responsibility>,
+    #[prost(string, optional, tag="8")]
+    pub purpose: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="9")]
+    pub members: ::prost::alloc::vec::Vec<TeamMember>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Person {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<DirectoryDisplayName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, repeated, tag="6")]
+    pub contacts: ::prost::alloc::vec::Vec<ContactPoint>,
+    #[prost(message, repeated, tag="7")]
+    pub responsibilities: ::prost::alloc::vec::Vec<Responsibility>,
+    #[prost(message, optional, tag="8")]
+    pub role: ::core::option::Option<DirectoryRoleText>,
+    #[prost(message, optional, tag="9")]
+    pub directory_pointer: ::core::option::Option<ExternalDirectoryPointer>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ResponsibilityKind {
+    Unspecified = 0,
+    Owner = 1,
+    Maintainer = 2,
+    Steward = 3,
+    Contact = 4,
+}
+impl ResponsibilityKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "RESPONSIBILITY_KIND_UNSPECIFIED",
+            Self::Owner => "RESPONSIBILITY_KIND_OWNER",
+            Self::Maintainer => "RESPONSIBILITY_KIND_MAINTAINER",
+            Self::Steward => "RESPONSIBILITY_KIND_STEWARD",
+            Self::Contact => "RESPONSIBILITY_KIND_CONTACT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RESPONSIBILITY_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "RESPONSIBILITY_KIND_OWNER" => Some(Self::Owner),
+            "RESPONSIBILITY_KIND_MAINTAINER" => Some(Self::Maintainer),
+            "RESPONSIBILITY_KIND_STEWARD" => Some(Self::Steward),
+            "RESPONSIBILITY_KIND_CONTACT" => Some(Self::Contact),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyActor {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyCustomStep {
+    #[prost(message, optional, tag="1")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(string, tag="3")]
+    pub icon: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub url: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="5")]
+    pub properties: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyExternalSystem {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(string, tag="3")]
+    pub url: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyStepTarget {
+    #[prost(oneof="topology_step_target::Selection", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    pub selection: ::core::option::Option<topology_step_target::Selection>,
+}
+/// Nested message and enum types in `TopologyStepTarget`.
+pub mod topology_step_target {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        CatalogMessage(super::CatalogSubject),
+        #[prost(message, tag="2")]
+        Component(super::EntityRef),
+        #[prost(message, tag="3")]
+        Channel(super::EntityRef),
+        #[prost(message, tag="4")]
+        DataStore(super::EntityRef),
+        #[prost(message, tag="5")]
+        DataProduct(super::EntityRef),
+        #[prost(message, tag="6")]
+        Subflow(super::DesignGraphRef),
+        #[prost(message, tag="7")]
+        Actor(super::TopologyActor),
+        #[prost(message, tag="8")]
+        Custom(super::TopologyCustomStep),
+        #[prost(message, tag="9")]
+        ExternalSystem(super::TopologyExternalSystem),
+        #[prost(message, tag="10")]
+        SystemGroup(super::SystemGroupRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyTransition {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="3")]
+    pub target_step_id: ::core::option::Option<LocalValueId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyStep {
+    #[prost(message, optional, tag="1")]
+    pub step_id: ::core::option::Option<LocalValueId>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="3")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<TopologyStepTarget>,
+    #[prost(message, repeated, tag="5")]
+    pub transitions: ::prost::alloc::vec::Vec<TopologyTransition>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DesignGraph {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="DesignGraphProfile", tag="4")]
+    pub profile: i32,
+    #[prost(message, repeated, tag="5")]
+    pub steps: ::prost::alloc::vec::Vec<TopologyStep>,
+    #[prost(message, repeated, tag="6")]
+    pub entry_steps: ::prost::alloc::vec::Vec<LocalValueId>,
+    #[prost(message, repeated, tag="7")]
+    pub subjects: ::prost::alloc::vec::Vec<SubjectAssociation>,
+    #[prost(message, optional, tag="8")]
+    pub layout_document: ::core::option::Option<DocumentRef>,
+    #[prost(message, repeated, tag="9")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="10")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DesignGraphProfile {
+    Unspecified = 0,
+    Flow = 1,
+    Diagram = 2,
+}
+impl DesignGraphProfile {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DESIGN_GRAPH_PROFILE_UNSPECIFIED",
+            Self::Flow => "DESIGN_GRAPH_PROFILE_FLOW",
+            Self::Diagram => "DESIGN_GRAPH_PROFILE_DIAGRAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DESIGN_GRAPH_PROFILE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DESIGN_GRAPH_PROFILE_FLOW" => Some(Self::Flow),
+            "DESIGN_GRAPH_PROFILE_DIAGRAM" => Some(Self::Diagram),
+            _ => None,
+        }
     }
 }
 // =============================================================================
@@ -3041,20 +5992,16 @@ pub mod type_library_provenance {
 //      the same namespace. The inline `repeated FieldSpec fields`
 //      these entities once carried is reserved.
 //
-// 34. ONE RM CAN HAVE MANY CONSUMERS WHEN DECLARED. The
-//      at-most-one-automation-per-RM heuristic is right by default:
-//      different automations usually want differently-shaped data,
-//      and per-consumer RMs keep the coupling visible. But when
-//      several consumers genuinely share the same data -- the
-//      captured-payment row read by the ledger recorder, the refund
-//      processor, and the treasury UI -- splitting into clones makes
-//      the board lie. Declare the multi-consumer case with
-//      SharedConsumersAnnotation (Any in the RM's metadata,
-//      non-empty doc) and the validator downgrades
-//      READ_MODEL_MULTIPLE_AUTOMATIONS from Error to Info. Without
-//      the annotation the heuristic still fires; with it, the board
-//      renders one RM sticky with labeled outgoing edges per
-//      consumer.
+// 34. READ MODELS SPLIT BY SHAPE, NOT BY CONSUMER. Consumers that
+//      read the same data -- the captured-payment row read by the
+//      ledger recorder, the refund processor, and the treasury UI --
+//      share one RM; splitting into clones makes the board lie, and
+//      READ_MODEL_DUPLICATE_SHAPE warns when two RMs in a namespace
+//      have the same key, fields and source events. Split only when a
+//      consumer needs a different shape. Name the consumers with
+//      SharedConsumersAnnotation (Any in the RM's metadata, non-empty
+//      doc); the board renders one RM sticky with labeled outgoing
+//      edges per consumer.
 //
 // 35. SCREENS ARE COMPOSITION, NOT MOMENTS.
 //      Some user surfaces -- a checkout page, a changeset review view -- are
@@ -3167,7 +6114,7 @@ pub mod type_library_provenance {
 pub struct Entity {
     #[prost(message, optional, tag="29")]
     pub system: ::core::option::Option<super::super::r#type::v1alpha1::SystemMeta>,
-    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30")]
+    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40")]
     pub kind: ::core::option::Option<entity::Kind>,
 }
 /// Nested message and enum types in `Entity`.
@@ -3232,6 +6179,26 @@ pub mod entity {
         AlertNotificationTarget(super::AlertNotificationTarget),
         #[prost(message, tag="30")]
         TypeLibrary(super::TypeLibrary),
+        #[prost(message, tag="31")]
+        Channel(super::Channel),
+        #[prost(message, tag="32")]
+        DataStore(super::DataStore),
+        #[prost(message, tag="33")]
+        Specification(super::Specification),
+        #[prost(message, tag="34")]
+        DataProduct(super::DataProduct),
+        #[prost(message, tag="35")]
+        Team(super::Team),
+        #[prost(message, tag="36")]
+        Person(super::Person),
+        #[prost(message, tag="37")]
+        Decision(super::Decision),
+        #[prost(message, tag="38")]
+        Document(super::Document),
+        #[prost(message, tag="39")]
+        DesignGraph(super::DesignGraph),
+        #[prost(message, tag="40")]
+        SystemGroup(super::SystemGroup),
     }
 }
 // @@protoc_insertion_point(module)

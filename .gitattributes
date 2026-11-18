@@ -1,0 +1,4 @@
+rsworkspace/crates/trogon-atlas-semconv/src/semconv/** linguist-generated=true
+rsworkspace/crates/trogon-atlas-proto/src/gen/** linguist-generated=true
+rsworkspace/crates/trogon-atlas-authzed/src/gen/** linguist-generated=true
+*.binpb binary

@@ -336,11 +336,14 @@ impl NatsStore {
         mode: MigrationMode,
         conflicts: ConflictResolution,
     ) -> StoreResult<LegacyFieldsReport> {
-        let report = migrate_legacy_rows(&self.kv, &self.branches_kv, mode, conflicts).await?;
-        if mode == MigrationMode::Apply && report.remaining() == 0 {
-            write_schema_marker(&self.kv).await?;
-        }
-        Ok(report)
+        self.source_guarded(async {
+            let report = migrate_legacy_rows(&self.kv, &self.branches_kv, mode, conflicts).await?;
+            if mode == MigrationMode::Apply && report.remaining() == 0 {
+                write_schema_marker(&self.kv).await?;
+            }
+            Ok(report)
+        })
+        .await
     }
 }
 

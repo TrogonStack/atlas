@@ -152,6 +152,19 @@ impl TranscodePool {
             .map_err(TranscodeError::ToJson)
     }
 
+    /// Byte length of [`message_to_json`](Self::message_to_json)'s output,
+    /// counted without keeping it.
+    pub fn message_json_len<M: Message>(
+        &self,
+        full_name: &str,
+        msg: &M,
+    ) -> Result<usize, TranscodeError> {
+        let mut count = ByteCount(0);
+        serde_json::to_writer_pretty(&mut count, &self.to_dynamic(full_name, msg)?)
+            .map_err(TranscodeError::ToJson)?;
+        Ok(count.0)
+    }
+
     /// JSON value of any proto message, by fully-qualified name. Object
     /// comparison ignores key order, so nondeterministic proto map encodings
     /// compare equal.
@@ -226,6 +239,24 @@ pub fn message_to_json<M: Message>(full_name: &str, msg: &M) -> Result<String, T
     TranscodePool::builtin()?.message_to_json(full_name, msg)
 }
 
+/// [`TranscodePool::message_json_len`] over the built-in types.
+pub fn message_json_len<M: Message>(full_name: &str, msg: &M) -> Result<usize, TranscodeError> {
+    TranscodePool::builtin()?.message_json_len(full_name, msg)
+}
+
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Render an entity as pretty proto3 JSON.
 pub fn entity_to_json(entity: &Entity) -> Result<String, TranscodeError> {
     message_to_json(ENTITY_MESSAGE, entity)
@@ -267,6 +298,10 @@ mod tests {
         let back: pb::Entity =
             message_from_json("trogonatlas.eventmodel.v1alpha1.Entity", &json).unwrap();
         assert_eq!(entity, back);
+        assert_eq!(
+            message_json_len("trogonatlas.eventmodel.v1alpha1.Entity", &entity).unwrap(),
+            json.len()
+        );
     }
 
     #[test]

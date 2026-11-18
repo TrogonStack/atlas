@@ -1,10 +1,10 @@
-// The studio's five-view shell for a single EventModel page. A caller may
+// The studio's six-view shell for a single EventModel page. A caller may
 // still omit the model for direct debugging, but the top-level router no
 // longer exposes the old whole-store query route.
 import { useHotkey } from '@tanstack/react-hotkeys';
 import { ReactFlowProvider } from '@xyflow/react';
 import { parseAsArrayOf, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ConflictInspector } from '@/components/ConflictInspector';
 import { Board, type SelectedEdge, type Selection } from '@/components/canvas/Board';
 import { BoardTopRightHost } from '@/components/canvas/BoardTopRight';
@@ -12,33 +12,66 @@ import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { PlanBoard } from '@/components/canvas/PlanBoard';
 import { ScreensBoard } from '@/components/canvas/ScreensBoard';
 import { SequenceBoard } from '@/components/canvas/SequenceBoard';
+import { SliceBoard } from '@/components/canvas/SliceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
+import { StateMachineBoard } from '@/components/canvas/StateMachineBoard';
+import { WaterfallBoard } from '@/components/canvas/WaterfallBoard';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Inspector } from '@/components/Inspector';
+import { HistoryPanel } from '@/components/HistoryPanel';
+import { Inspector, type InspectorTab } from '@/components/Inspector';
 import { IssuesProvider } from '@/components/IssuesProvider';
 import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
 import { MultiInspector } from '@/components/MultiInspector';
 import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
+import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { ValidationInspector } from '@/components/ValidationInspector';
 import { ValidationSummary } from '@/components/ValidationSummary';
 import { api, type BranchDiffEntry, type ServerInfo } from '@/lib/api';
 import { branchStatusLookup, useBranchParam } from '@/lib/branch';
+import { useStudioFeatureFlags } from '@/lib/feature-flags';
 import { EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import type { BoardEdgeData } from '@/lib/layout';
-import { buildModel, entityKey, type Model } from '@/lib/model';
+import { buildModel, entityKey, hasStreamEvents, type Model } from '@/lib/model';
+import { hasLifecycles } from '@/lib/statemachine';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
+import { activeSnapshot, type SnapshotStamp } from '@/lib/snapshot';
 import { invalidateEntityHomes } from '@/lib/useEntityHomes';
 import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
 /** Stable identity for an edge across layout rebuilds (occurrence ids shift). */
 function edgeIdentity(data: BoardEdgeData): string {
+  if (data.connectionId?.value && data.slice?.uid) {
+    return `${data.slice.key}\0${data.slice.uid}\0${data.connectionId.value}`;
+  }
   return `${data.source.key}\0${data.relation}\0${data.target.key}`;
 }
 
-const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain'] as const;
+// The 3D views load on first use, their WebGL check included, so the Board's
+// bundle carries only the tab. The `@/` path matters: the saved-board build
+// swaps this module for a stub by its resolved path.
+const ThreeView = lazy(() => import('@/components/canvas/ThreeView').then((m) => ({ default: m.ThreeView })));
+
+const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain', 'waterfall', 'states', 'lanes', 'towers'] as const;
+type View = (typeof VIEWS)[number];
+const VIEW_LABELS: Record<View, string> = {
+  board: 'Board',
+  sequence: 'Sequence',
+  slice: 'Slice',
+  ui: 'UI',
+  plan: 'Plan',
+  domain: 'Domain',
+  waterfall: 'Waterfall',
+  states: 'State machine',
+  lanes: 'Lane mesh',
+  towers: 'Stream towers',
+};
+function isView(value: unknown): value is View {
+  return (VIEWS as readonly unknown[]).includes(value);
+}
 
 // URL query-state parsers (nuqs). Params are cleared when they equal the
 // default, so a pristine board view keeps a clean URL.
@@ -66,6 +99,18 @@ export interface ModelShellProps {
    * realtime subscription is not started and the badge stays offline.
    */
   onRefetch?: () => void;
+  /** Set when the board is a saved snapshot; the top bar then shows when it was taken. */
+  snapshot?: SnapshotStamp;
+  /** Saves the board as one HTML file; omitted where there is no single board to save. */
+  onExportHtml?: () => Promise<void>;
+  /** Namespace the History drawer lists. Unscoped shells fall back to a single picked namespace. */
+  historyNamespace?: string;
+  /** Baseline changeset the board is read as of; the top bar then marks it read only. */
+  asOf?: string;
+  /** The as-of board is missing entities, so the top bar warns that it is partial. */
+  asOfIncomplete?: boolean;
+  /** Moves the board to a past changeset, or back to live with `undefined`. Omit where the board cannot rewind. */
+  onAsOfChange?: (changesetId: string | undefined) => void;
 }
 
 // The empty model is structurally invariant and small; hoisted out of
@@ -78,11 +123,19 @@ export function ModelShell({
   backHref,
   issues = EMPTY_ISSUE_INDEX,
   onRefetch,
+  snapshot,
+  onExportHtml,
+  historyNamespace: historyNamespaceProp,
+  asOf,
+  asOfIncomplete,
+  onAsOfChange,
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
+  const [featureFlags, setFeatureFlag] = useStudioFeatureFlags();
   const scoped = Boolean(modelProp);
   const [branch, setBranch] = useBranchParam();
+  const [missingBranch, setMissingBranch] = useState<string>();
   const [branchDiffEntries, setBranchDiffEntries] = useState<BranchDiffEntry[]>([]);
   const branchLookup = useMemo(() => branchStatusLookup(branchDiffEntries), [branchDiffEntries]);
   // ?ns= is owned by this shell only in non-scoped mode; scoped mode is
@@ -127,8 +180,15 @@ export function ModelShell({
   const [view, setView] = useQueryState('view', viewParser);
   const [error, setError] = useState<string>();
   const [validationOpen, setValidationOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('details');
   const validationPanelId = useId();
   const validationTrigger = useRef<HTMLButtonElement>(null);
+  const historyTrigger = useRef<HTMLButtonElement>(null);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    historyTrigger.current?.focus();
+  }, []);
   const closeValidation = useCallback(() => {
     setValidationOpen(false);
     validationTrigger.current?.focus();
@@ -165,6 +225,8 @@ export function ModelShell({
   const selectEntity = useCallback(
     (key: string | undefined, occId?: string, additive?: boolean, instanceUid?: string, momentKey?: string) => {
       setValidationOpen(false);
+      setHistoryOpen(false);
+      setInspectorTab('details');
       setSelections((prev) => {
         if (!key) return [];
         const entry: Selection = { type: 'entity', key, occId, instanceUid, momentKey };
@@ -185,6 +247,7 @@ export function ModelShell({
   );
   const selectEdge = useCallback((edge: SelectedEdge, additive?: boolean) => {
     setValidationOpen(false);
+    setHistoryOpen(false);
     setSelections((prev) => {
       const entry: Selection = { type: 'edge', id: edge.id, data: edge.data };
       if (!additive) {
@@ -206,6 +269,10 @@ export function ModelShell({
   useHotkey('Escape', () => {
     if (validationOpen) {
       closeValidation();
+      return;
+    }
+    if (historyOpen) {
+      closeHistory();
       return;
     }
     setSelections((prev) => (prev.length === 0 ? prev : []));
@@ -360,6 +427,25 @@ export function ModelShell({
     return () => branchDiffAbortRef.current?.abort();
   }, [branch, loadBranchDiff]);
 
+  // A merged or deleted branch can outlive its URL. Fall back to baseline so
+  // neither the board nor a copied fix prompt targets a branch that is gone.
+  const setBranchRef = useRef(setBranch);
+  setBranchRef.current = setBranch;
+  useEffect(() => {
+    if (!branch) return;
+    const ctrl = new AbortController();
+    api
+      .branches({ signal: ctrl.signal })
+      .then((res) => {
+        if (ctrl.signal.aborted) return;
+        if ((res.branches ?? []).some((b) => b.name === branch)) return;
+        setMissingBranch(branch);
+        setBranchRef.current(undefined);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [branch]);
+
   // Scoped shells own the model via the caller. When ?branch= changes the
   // badges update above, but the caller's model must also reload so the
   // board shows the branch overlay rather than a stale baseline snapshot.
@@ -459,21 +545,23 @@ export function ModelShell({
   }, [model, selectAndFocus, focusParam, setFocusParam]);
 
   // A view with nothing to draw is not offered: an EM without UI screens
-  // (or slices for the plan, or knowledge entities for the domain chart)
-  // would put an empty canvas behind a clickable tab. Board and sequence
-  // always show: they are the model itself.
+  // (or slices for the slice view, plan, and waterfall, or knowledge entities
+  // for the domain chart) would put an empty canvas behind a clickable tab.
+  // Board and sequence always show: they are the model itself.
+  const hasSlices = model.entities.some(
+    (e) =>
+      e.kind === 'commandSlice' || e.kind === 'readModelSlice' || e.kind === 'automationSlice' || e.kind === 'uiSlice',
+  );
   const availableViews = VIEWS.filter((v) => {
     if (v === 'ui') return model.entities.some((e) => e.kind === 'ui');
-    if (v === 'plan')
-      return model.entities.some(
-        (e) =>
-          e.kind === 'commandSlice' ||
-          e.kind === 'readModelSlice' ||
-          e.kind === 'automationSlice' ||
-          e.kind === 'uiSlice',
-      );
+    if (v === 'slice') return model.slices.length > 0;
+    if (v === 'plan' || v === 'waterfall') return hasSlices;
     if (v === 'domain')
       return model.entities.some((e) => e.kind === 'domain' || e.kind === 'subdomain' || e.kind === 'boundedContext');
+    // A saved board is one inlined runtime file without three.js, so it has no 3D views.
+    if (v === 'lanes') return featureFlags.laneMesh && !snapshot && model.slices.length > 0;
+    if (v === 'towers') return featureFlags.streamTowers && !snapshot && hasStreamEvents(model);
+    if (v === 'states') return featureFlags.stateMachine && hasLifecycles(model);
     return true;
   });
   // Deep links to a hidden view (?view=ui on a UI-less EM) render the
@@ -500,6 +588,10 @@ export function ModelShell({
       : undefined;
   const soleEdge = resolvedCount === 1 && selectedEdges.length === 1 ? selectedEdges[0] : undefined;
   const [reviewOpen, setReviewOpen] = useState(false);
+  // A saved snapshot has no server behind it, so there is no history to list.
+  const historyNamespace = activeSnapshot()
+    ? undefined
+    : (historyNamespaceProp ?? (namespaces.length === 1 ? namespaces[0] : undefined));
 
   return (
     <div className="flex h-screen flex-col">
@@ -510,17 +602,46 @@ export function ModelShell({
         onRefresh={() => (scoped ? onRefetch?.() : refresh(namespaces))}
         scopedTitle={scopedTitle}
         backHref={backHref}
+        snapshot={snapshot}
+        onExportHtml={onExportHtml}
+        featureFlags={featureFlags}
+        onFeatureFlagChange={setFeatureFlag}
         branch={branch}
         onSelectBranch={(next) => {
+          setMissingBranch(undefined);
           setBranch(next);
           setReviewOpen(false);
           setValidationOpen(false);
         }}
         onOpenBranchReview={() => {
           setValidationOpen(false);
+          setHistoryOpen(false);
           setReviewOpen(true);
         }}
+        historyTriggerRef={historyTrigger}
+        onOpenHistory={
+          historyNamespace
+            ? () => {
+                setValidationOpen(false);
+                setReviewOpen(false);
+                setHistoryOpen(true);
+              }
+            : undefined
+        }
+        asOf={asOf}
+        asOfIncomplete={asOfIncomplete}
+        onExitAsOf={() => onAsOfChange?.(undefined)}
       />
+      {missingBranch ? (
+        <output className="flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-xs text-amber-900">
+          <span className="min-w-0 truncate">
+            Branch <span className="font-mono">{missingBranch}</span> no longer exists; showing baseline.
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setMissingBranch(undefined)}>
+            Dismiss
+          </Button>
+        </output>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         {scoped ? null : (
           <Sidebar
@@ -546,31 +667,28 @@ export function ModelShell({
                 triggerRef={validationTrigger}
                 onToggle={() => {
                   setReviewOpen(false);
+                  setHistoryOpen(false);
                   setValidationOpen((open) => !open);
                 }}
               />
             }
+            switcher={
+              <Tabs
+                value={activeView}
+                onValueChange={(next) => {
+                  if (isView(next)) setView(next);
+                }}
+              >
+                <TabsList aria-label="Model view" className="shadow-sm">
+                  {availableViews.map((v) => (
+                    <TabsTab key={v} value={v}>
+                      {VIEW_LABELS[v]}
+                    </TabsTab>
+                  ))}
+                </TabsList>
+              </Tabs>
+            }
           >
-            <div className="absolute left-2 top-2 z-10 flex overflow-hidden rounded-md border border-border bg-card text-xs shadow-sm">
-              {availableViews.map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1.5 font-medium capitalize ${activeView === v ? 'bg-foreground text-background' : 'hover:bg-accent'}`}
-                >
-                  {v === 'board'
-                    ? 'Board'
-                    : v === 'sequence'
-                      ? 'Sequence'
-                      : v === 'ui'
-                        ? 'UI'
-                        : v === 'plan'
-                          ? 'Plan'
-                          : 'Domain'}
-                </button>
-              ))}
-            </div>
             <IssuesProvider issues={issues}>
               <ReactFlowProvider>
                 {activeView === 'board' ? (
@@ -595,6 +713,10 @@ export function ModelShell({
                       branchStatusLookup={branchLookup}
                     />
                   </ErrorBoundary>
+                ) : activeView === 'slice' ? (
+                  <ErrorBoundary>
+                    <SliceBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
                 ) : activeView === 'ui' ? (
                   <ErrorBoundary>
                     <ScreensBoard
@@ -609,9 +731,30 @@ export function ModelShell({
                   <ErrorBoundary>
                     <PlanBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
-                ) : (
+                ) : activeView === 'domain' ? (
                   <ErrorBoundary>
                     <DomainChartBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : activeView === 'waterfall' ? (
+                  <ErrorBoundary>
+                    <WaterfallBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : activeView === 'states' ? (
+                  <ErrorBoundary>
+                    <StateMachineBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : (
+                  <ErrorBoundary>
+                    <Suspense fallback={null}>
+                      <ThreeView
+                        view={activeView}
+                        model={model}
+                        selections={selections}
+                        onSelect={selectEntity}
+                        onSelectEdge={selectEdge}
+                        focus={focusReq}
+                      />
+                    </Suspense>
                   </ErrorBoundary>
                 )}
               </ReactFlowProvider>
@@ -628,17 +771,39 @@ export function ModelShell({
             onSelect={(subject) => {
               closeValidation();
               selectAndFocus(entityKey(subject.kind, subject.id));
+              // Must come after selectAndFocus: it calls selectEntity, which resets
+              // the tab to 'details'; both setInspectorTab calls are batched, so the
+              // one issued last wins and lands the drawer on 'validation'.
+              setInspectorTab('validation');
             }}
           />
         ) : reviewOpen && branch ? (
           <ConflictInspector branch={branch} entries={branchDiffEntries} onClose={() => setReviewOpen(false)} />
+        ) : historyOpen && historyNamespace ? (
+          <HistoryPanel
+            key={`${historyNamespace}\0${branch ?? ''}`}
+            namespace={historyNamespace}
+            branch={branch}
+            model={model}
+            onViewAsOf={onAsOfChange}
+            onClose={closeHistory}
+            onSelect={(key) => {
+              selectAndFocus(key);
+              // After selectAndFocus, which resets the tab to 'details'; the
+              // batched update issued last wins, as for validation above.
+              setInspectorTab('history');
+            }}
+          />
         ) : soleEntity ? (
           <Inspector
             model={model}
             entity={soleEntity}
+            asOf={asOf}
             instanceUid={soleSelection?.instanceUid}
             momentKey={soleSelection?.momentKey}
             issues={issues}
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
             onClose={() => selectEntity(undefined)}
             onSelect={selectAndFocus}
           />

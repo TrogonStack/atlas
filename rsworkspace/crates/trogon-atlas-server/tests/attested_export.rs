@@ -1,0 +1,1187 @@
+//! In-process gRPC integration tests for `ExportAttestedModel`: a bundle
+//! names one state, verifies offline, fails verification once any normative
+//! field changes, and is refused or marked when it cannot cover its scope.
+//!
+//! The store is shared across tests in this file, so every test writes into
+//! its own namespace.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::Arc;
+
+use tokio::net::TcpListener;
+use tonic::{metadata::MetadataValue, transport::Channel};
+use trogon_atlas_core::{
+    attested_bundle::{
+        self, Authenticity, BundleError, Completeness, IncompleteReason, UnresolvedCause,
+    },
+    attested_signing::{SigningKey, TrustedKeys},
+};
+use trogon_atlas_proto as pb;
+use trogon_atlas_proto::{
+    event_model_service_client::EventModelServiceClient,
+    event_model_service_server::EventModelServiceServer,
+};
+use trogon_atlas_server::{
+    attested_signing::SigningKeySource, metrics::ServerMetrics, service::EventModelServiceImpl,
+};
+
+async fn start_server(snapshot_cap: Option<usize>) -> String {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut svc =
+        EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
+    serve(svc).await
+}
+
+async fn serve(svc: EventModelServiceImpl) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let grpc = EventModelServiceServer::new(svc);
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(grpc)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    format!("http://{addr}")
+}
+
+async fn client(endpoint: &str) -> EventModelServiceClient<Channel> {
+    EventModelServiceClient::connect(endpoint.to_string())
+        .await
+        .unwrap()
+}
+
+fn id(ns: &str, slug: &str) -> pb::Id {
+    pb::Id {
+        namespace: ns.into(),
+        slug: slug.into(),
+        version: 1,
+    }
+}
+
+fn event(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Event(pb::Event {
+            id: Some(id(ns, slug)),
+            title: format!("{slug} happened"),
+            ..Default::default()
+        })),
+    }
+}
+
+fn event_model(ns: &str, slug: &str, title: &str, members: &[&str]) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: title.into(),
+            members: members
+                .iter()
+                .map(|m| pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(id(ns, m)),
+                })
+                .collect(),
+            ..Default::default()
+        })),
+    }
+}
+
+fn event_model_version(
+    ns: &str,
+    slug: &str,
+    version: u64,
+    title: &str,
+    members: &[&str],
+) -> pb::Entity {
+    let mut entity = event_model(ns, slug, title, members);
+    let Some(pb::entity::Kind::EventModel(model)) = entity.kind.as_mut() else {
+        unreachable!();
+    };
+    model.id.as_mut().unwrap().version = version;
+    entity
+}
+
+fn type_library(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id(ns, slug)),
+            title: "Types".into(),
+            files: vec![pb::ProtoSourceFile {
+                path: "types.proto".into(),
+                content: format!("syntax = \"proto3\"; package {slug}.v1; message Value {{}}"),
+            }],
+            ..Default::default()
+        })),
+    }
+}
+
+fn put_req(entity: pb::Entity) -> pb::PutEntityRequest {
+    pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(entity),
+        create_only: false,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+    }
+}
+
+async fn put(c: &mut EventModelServiceClient<Channel>, entity: pb::Entity) {
+    c.put_entity(put_req(entity)).await.unwrap();
+}
+
+async fn put_many(c: &mut EventModelServiceClient<Channel>, entities: Vec<pb::Entity>) {
+    for chunk in entities.chunks(1_000) {
+        c.batch_mutate(pb::BatchMutateRequest {
+            ops: chunk
+                .iter()
+                .cloned()
+                .map(|entity| pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(put_req(entity))),
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+}
+
+fn export_req(ns: &str, slug: &str) -> pb::ExportAttestedModelRequest {
+    pb::ExportAttestedModelRequest {
+        id: Some(id(ns, slug)),
+        as_of_changeset: String::new(),
+        allow_incomplete: false,
+    }
+}
+
+async fn export(
+    c: &mut EventModelServiceClient<Channel>,
+    req: pb::ExportAttestedModelRequest,
+) -> pb::AttestedModelBundle {
+    c.export_attested_model(req)
+        .await
+        .unwrap()
+        .into_inner()
+        .bundle
+        .unwrap()
+}
+
+async fn newest_changeset(c: &mut EventModelServiceClient<Channel>, namespace: &str) -> String {
+    c.list_changesets(pb::ListChangesetsRequest {
+        page_token: String::new(),
+        page_size: 100,
+        branch: String::new(),
+        namespace: namespace.to_string(),
+    })
+    .await
+    .unwrap()
+    .into_inner()
+    .changesets
+    .into_iter()
+    .find(|changeset| changeset.branch.is_empty())
+    .unwrap()
+    .id
+}
+
+fn entry_slugs(bundle: &pb::AttestedModelBundle) -> Vec<String> {
+    bundle
+        .entries
+        .iter()
+        .map(|e| {
+            e.entity
+                .as_ref()
+                .and_then(|r| r.id.as_ref())
+                .unwrap()
+                .slug
+                .clone()
+        })
+        .collect()
+}
+
+fn mentions(issues: &[pb::ValidationIssue], slug: &str) -> bool {
+    issues.iter().any(|i| {
+        i.subject
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .is_some_and(|id| id.slug == slug)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn complete_export_verifies_and_names_the_current_state() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-current";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let boundary = newest_changeset(&mut c, ns).await;
+
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+
+    let verified = attested_bundle::verify(&bundle).unwrap();
+    assert_eq!(verified.completeness, Completeness::Complete);
+    assert_eq!(verified.digest.to_hex(), bundle.bundle_digest);
+    assert_eq!(bundle.format, attested_bundle::BUNDLE_FORMAT);
+    assert_eq!(verified.authenticity, Authenticity::Unsigned);
+    let state = bundle.state.as_ref().unwrap();
+    assert_eq!(state.mode(), pb::attested_state::Mode::Current);
+    assert!(state.baseline_changeset_id.as_str() >= boundary.as_str());
+    assert_eq!(state.branch_changeset_id, "");
+    let scope = bundle.scope.as_ref().unwrap();
+    assert_eq!(scope.event_model_id, Some(id(ns, "checkout")));
+    assert!(scope.lens.as_ref().unwrap().unrestricted);
+    assert_eq!(entry_slugs(&bundle), ["placed", "checkout"]);
+    assert!(bundle.manifests.contains("Checkout"));
+    let validation = bundle.validation.as_ref().unwrap();
+    assert_eq!(
+        validation.rule_catalog.as_ref().unwrap().digest,
+        attested_bundle::rule_catalog_digest(
+            &c.list_validation_rules(pb::ListValidationRulesRequest {})
+                .await
+                .unwrap()
+                .into_inner()
+                .rules
+        )
+        .unwrap()
+        .to_hex()
+    );
+
+    let json = attested_bundle::bundle_to_json(&bundle).unwrap();
+    let reread = attested_bundle::bundle_from_json(&json).unwrap();
+    assert_eq!(attested_bundle::verify(&reread).unwrap(), verified);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_any_normative_field_fails_verification() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-tamper";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+    assert!(
+        !bundle.validation.as_ref().unwrap().issues.is_empty(),
+        "the fixture needs a finding to tamper with"
+    );
+
+    type Tamper = fn(&mut pb::AttestedModelBundle);
+    let tampers: [(&str, Tamper); 8] = [
+        ("manifests", |b| b.manifests.push_str("# edited\n")),
+        ("external manifests", |b| {
+            b.external_manifests.push_str("# edited\n");
+        }),
+        ("finding", |b| {
+            b.validation.as_mut().unwrap().issues[0].message = "nothing to see".into();
+        }),
+        ("dropped finding", |b| {
+            b.validation.as_mut().unwrap().issues.remove(0);
+        }),
+        ("coverage evidence", |b| {
+            let coverage = b.validation.as_mut().unwrap().coverage.as_mut().unwrap();
+            coverage.checks[0].subjects_examined += 1;
+        }),
+        ("entry", |b| {
+            b.entries[0].content_hash = "0".repeat(64);
+        }),
+        ("scope", |b| {
+            b.scope.as_mut().unwrap().branch = "elsewhere".into();
+        }),
+        ("rule catalogue", |b| {
+            let catalog = b
+                .validation
+                .as_mut()
+                .unwrap()
+                .rule_catalog
+                .as_mut()
+                .unwrap();
+            catalog.server_version = "0.0.0-older".into();
+        }),
+    ];
+    for (field, tamper) in tampers {
+        let mut tampered = bundle.clone();
+        tamper(&mut tampered);
+        assert!(
+            matches!(
+                attested_bundle::verify(&tampered),
+                Err(BundleError::DigestMismatch { .. })
+            ),
+            "editing the {field} must fail the digest"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn incomplete_export_is_refused_unless_explicitly_allowed() {
+    let endpoint = start_server(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event(ns, "shipped")).await;
+    put(
+        &mut c,
+        event_model(ns, "checkout", "Checkout", &["placed", "shipped"]),
+    )
+    .await;
+
+    let refused = c
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let bundle = export(&mut c, allowed).await;
+    let verified = attested_bundle::verify(&bundle).unwrap();
+    let Completeness::Incomplete(reasons) = verified.completeness else {
+        panic!("a capped export must be marked incomplete");
+    };
+    assert!(reasons.contains(&IncompleteReason::SnapshotTruncated));
+    assert!(reasons.contains(&IncompleteReason::ValidationIncomplete));
+    assert!(reasons.contains(&IncompleteReason::UnresolvedEntities));
+    assert!(
+        verified
+            .unresolved
+            .iter()
+            .any(|u| u.cause == UnresolvedCause::Missing),
+        "{:?}",
+        verified.unresolved
+    );
+
+    let mut relabelled = bundle.clone();
+    relabelled.completeness = Some(Completeness::Complete.to_proto());
+    attested_bundle::seal(&mut relabelled).unwrap();
+    assert!(matches!(
+        attested_bundle::verify(&relabelled),
+        Err(BundleError::FalseComplete(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn historical_export_describes_the_state_right_after_the_changeset() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c, ns).await;
+    put(&mut c, event_model(ns, "checkout", "After", &["placed"])).await;
+
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = then.clone();
+    let historical = export(&mut c, req.clone()).await;
+    attested_bundle::verify(&historical).unwrap();
+    let state = historical.state.as_ref().unwrap();
+    assert_eq!(state.mode(), pb::attested_state::Mode::Historical);
+    assert_eq!(state.baseline_changeset_id, then);
+    assert!(historical.manifests.contains("Before"));
+    assert!(!historical.manifests.contains("After"));
+
+    let current = export(&mut c, export_req(ns, "checkout")).await;
+    assert!(current.manifests.contains("After"));
+    assert_ne!(current.bundle_digest, historical.bundle_digest);
+
+    let mut on_branch = tonic::Request::new(req);
+    on_branch.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from("feature").unwrap(),
+    );
+    let refused = c.export_attested_model(on_branch).await.unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn versionless_historical_export_resolves_within_the_requested_snapshot() {
+    let endpoint = start_server(Some(0)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-versionless";
+    put(&mut c, event(ns, "placed")).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &["placed"]),
+    )
+    .await;
+    let then = newest_changeset(&mut c, ns).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 2, "After", &["placed"]),
+    )
+    .await;
+
+    let mut req = export_req(ns, "checkout");
+    req.id.as_mut().unwrap().version = 0;
+    req.as_of_changeset = then;
+    req.allow_incomplete = true;
+    let historical = export(&mut c, req).await;
+
+    let scope = historical.scope.as_ref().unwrap();
+    assert_eq!(scope.event_model_id.as_ref().unwrap().version, 1);
+    assert!(historical.manifests.contains("Before"));
+    assert!(!historical.manifests.contains("After"));
+    assert!(entry_slugs(&historical).contains(&"placed".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capped_versionless_refill_filters_the_requested_model_before_the_cap() {
+    let endpoint = start_server(Some(0)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-refill-cap";
+    let fillers = (0..5_000)
+        .map(|index| event_model(ns, &format!("a-{index:04}"), "Filler", &[]))
+        .collect();
+    put_many(&mut c, fillers).await;
+
+    let mut warm_req = export_req(ns, "a-0000");
+    warm_req.id.as_mut().unwrap().version = 0;
+    warm_req.allow_incomplete = true;
+    export(&mut c, warm_req).await;
+
+    put(&mut c, event_model(ns, "z-target", "Target", &[])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let mut current_req = export_req(ns, "z-target");
+    current_req.id.as_mut().unwrap().version = 0;
+    current_req.allow_incomplete = true;
+    let current = export(&mut c, current_req).await;
+    assert_eq!(
+        current.scope.as_ref().unwrap().event_model_id,
+        Some(id(ns, "z-target"))
+    );
+    assert!(current.manifests.contains("Target"));
+
+    let mut historical_req = export_req(ns, "z-target");
+    historical_req.id.as_mut().unwrap().version = 0;
+    historical_req.as_of_changeset = then;
+    historical_req.allow_incomplete = true;
+    let historical = export(&mut c, historical_req).await;
+    assert_eq!(
+        historical.scope.as_ref().unwrap().event_model_id,
+        Some(id(ns, "z-target"))
+    );
+    assert!(historical.manifests.contains("Target"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unrelated_type_library_changes_do_not_taint_historical_exports() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-types";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    put(&mut c, type_library("attested-unrelated-types", "shared")).await;
+
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = then;
+    let historical = export(&mut c, req).await;
+
+    assert_eq!(reasons_of(&historical), Vec::<IncompleteReason>::new());
+}
+
+fn model_entry(bundle: &pb::AttestedModelBundle) -> &pb::SnapshotEntry {
+    bundle
+        .entries
+        .iter()
+        .find(|e| e.entity.as_ref().unwrap().id.as_ref().unwrap().slug == "checkout")
+        .unwrap()
+}
+
+fn reasons_of(bundle: &pb::AttestedModelBundle) -> Vec<IncompleteReason> {
+    match attested_bundle::verify(bundle).unwrap().completeness {
+        Completeness::Complete => Vec::new(),
+        Completeness::Incomplete(reasons) => reasons,
+    }
+}
+
+/// A process whose cached snapshot predates another writer's commit must
+/// not attest the cached copy as current: it is carried, and marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_changed_underneath_a_cached_snapshot_is_marked_not_mixed() {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let reader =
+        serve(EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap())
+            .await;
+    let writer =
+        serve(EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap()).await;
+    let mut r = client(&reader).await;
+    let mut w = client(&writer).await;
+    let ns = "attested-underneath";
+    put(&mut w, event(ns, "placed")).await;
+    put(&mut w, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let before = export(&mut r, allowed.clone()).await;
+    assert!(before.manifests.contains("Before"));
+
+    put(&mut w, event_model(ns, "checkout", "After", &["placed"])).await;
+
+    let refused = r
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+    assert!(
+        failure.message.contains("REASON_CONCURRENT_WRITE"),
+        "{refused:?}"
+    );
+
+    let marked = export(&mut r, allowed).await;
+    let verified = attested_bundle::verify(&marked).unwrap();
+    let reasons = reasons_of(&marked);
+    assert!(reasons.contains(&IncompleteReason::ConcurrentWrite));
+    assert!(reasons.contains(&IncompleteReason::UnresolvedEntities));
+    let model_key = &model_entry(&marked).key;
+    assert!(
+        verified
+            .unresolved
+            .iter()
+            .any(|u| &u.key == model_key && u.cause == UnresolvedCause::Changed),
+        "{:?}",
+        verified.unresolved
+    );
+    assert_eq!(
+        model_entry(&marked).content_hash,
+        model_entry(&before).content_hash,
+        "the bundle carries the snapshot's copy, not the live one"
+    );
+    assert!(marked.manifests.contains("Before"));
+    assert!(!marked.manifests.contains("After"));
+}
+
+/// A replica's cache is not refreshed by the writer's commits, so a
+/// historical export rewound from it cannot show the cache holds the
+/// changeset it names. It is marked rather than sealed as complete.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_historical_export_is_marked_boundary_unverified() {
+    let config = trogon_atlas_testsupport::shared().await.store_config();
+    let mut replica_config = config.clone();
+    replica_config.role = trogon_atlas_core::WriterRole::Standby;
+    let writer_store = trogon_atlas_store::NatsStore::connect_with(config)
+        .await
+        .unwrap();
+    let replica_store = trogon_atlas_store::NatsStore::connect_with(replica_config)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if trogon_atlas_store::Store::is_writer(&writer_store) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(trogon_atlas_store::Store::is_writer(&writer_store));
+    assert!(!trogon_atlas_store::Store::is_writer(&replica_store));
+    let writer = serve(
+        EventModelServiceImpl::try_new(Arc::new(writer_store), ServerMetrics::default()).unwrap(),
+    )
+    .await;
+    let replica = serve(
+        EventModelServiceImpl::try_new(Arc::new(replica_store), ServerMetrics::default()).unwrap(),
+    )
+    .await;
+    let mut w = client(&writer).await;
+    let mut r = client(&replica).await;
+    let ns = "attested-replica-history";
+    put(&mut w, event(ns, "placed")).await;
+    put(&mut w, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let mut primed = export_req(ns, "checkout");
+    primed.allow_incomplete = true;
+    export(&mut r, primed).await;
+
+    put(&mut w, event_model(ns, "checkout", "After", &["placed"])).await;
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = newest_changeset(&mut w, ns).await;
+
+    let refused = r.export_attested_model(req.clone()).await.unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+    assert!(
+        failure.message.contains("REASON_BOUNDARY_UNVERIFIED"),
+        "{refused:?}"
+    );
+
+    req.allow_incomplete = true;
+    let marked = export(&mut r, req).await;
+    assert!(
+        reasons_of(&marked).contains(&IncompleteReason::BoundaryUnverified),
+        "{:?}",
+        reasons_of(&marked)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_model_version_underneath_a_cached_snapshot_is_marked() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-version-race";
+    put(&mut c, event(ns, "placed")).await;
+    let members = vec!["placed"; 2_000];
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &members),
+    )
+    .await;
+    let mut allowed = export_req(ns, "checkout");
+    allowed.id.as_mut().unwrap().version = 0;
+    allowed.allow_incomplete = true;
+    let read_version = |bundle: &pb::AttestedModelBundle| {
+        model_entry(bundle)
+            .entity
+            .as_ref()
+            .unwrap()
+            .id
+            .as_ref()
+            .unwrap()
+            .version
+    };
+
+    // Each round caches the current version, then writes the next one while
+    // an export of the cached snapshot is in flight. Whichever way a round
+    // falls, a complete bundle must be the version its boundary names; the
+    // rounds repeat until one export reads the older version as the newer
+    // one lands, which must be marked.
+    let mut landed = vec![(newest_changeset(&mut c, ns).await, 1)];
+    let mut marked = false;
+    for version in 2..=40 {
+        export(&mut c, allowed.clone()).await;
+        let exporting = {
+            let endpoint = endpoint.clone();
+            let allowed = allowed.clone();
+            tokio::spawn(async move {
+                let mut reader = client(&endpoint).await;
+                export(&mut reader, allowed).await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        put(
+            &mut c,
+            event_model_version(ns, "checkout", version, &format!("v{version}"), &members),
+        )
+        .await;
+        landed.push((newest_changeset(&mut c, ns).await, version));
+        let raced = exporting.await.unwrap();
+        let reasons = reasons_of(&raced);
+        if reasons.is_empty() {
+            let boundary = &raced.state.as_ref().unwrap().baseline_changeset_id;
+            let named = landed
+                .iter()
+                .rev()
+                .find(|(id, _)| id <= boundary)
+                .map(|(_, version)| *version);
+            assert_eq!(Some(read_version(&raced)), named, "complete at {boundary}");
+        } else if read_version(&raced) == version - 1 {
+            assert!(
+                reasons.contains(&IncompleteReason::ConcurrentWrite),
+                "{reasons:?}"
+            );
+            marked = true;
+            break;
+        }
+    }
+    assert!(
+        marked,
+        "no export read the older version as the newer one landed"
+    );
+}
+
+/// Exports racing a writer never lock it out and never mix states: a
+/// complete bundle is the revision its boundary names, and every bundle,
+/// partial or not, agrees with itself across entries, manifests and
+/// findings.
+#[tokio::test(flavor = "multi_thread")]
+async fn exports_racing_writes_never_mix_states() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-race";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "w0", &["placed"])).await;
+    let mut req = export_req(ns, "checkout");
+    req.allow_incomplete = true;
+    let mut bundles = vec![export(&mut c, req.clone()).await];
+
+    const WRITES: usize = 31;
+    let writer = {
+        let mut c = client(&endpoint).await;
+        tokio::spawn(async move {
+            for i in 1..=WRITES {
+                let members: &[&str] = if i % 2 == 0 { &["placed"] } else { &[] };
+                put(
+                    &mut c,
+                    event_model(ns, "checkout", &format!("w{i}"), members),
+                )
+                .await;
+            }
+        })
+    };
+    while !writer.is_finished() {
+        bundles.push(export(&mut c, req.clone()).await);
+    }
+    writer.await.unwrap();
+    bundles.push(export(&mut c, req.clone()).await);
+
+    let revisions = c
+        .get_entity_history(pb::GetEntityHistoryRequest {
+            r#ref: Some(pb::EntityRef {
+                kind: pb::EntityKind::EventModel as i32,
+                id: Some(id(ns, "checkout")),
+            }),
+            page_token: String::new(),
+            page_size: 100,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .revisions;
+    let mut saw_member = false;
+    let mut saw_empty = false;
+    for bundle in &bundles {
+        let reasons = reasons_of(bundle);
+        assert!(
+            reasons.iter().all(|r| matches!(
+                r,
+                IncompleteReason::ConcurrentWrite | IncompleteReason::UnresolvedEntities
+            )),
+            "only the race may make a bundle partial: {reasons:?}"
+        );
+        let entry = model_entry(bundle);
+        let landed_model = if reasons.is_empty() {
+            let boundary = &bundle.state.as_ref().unwrap().baseline_changeset_id;
+            let landed = revisions
+                .iter()
+                .filter(|r| r.changeset_id.as_str() <= boundary.as_str())
+                .max_by(|a, b| a.changeset_id.cmp(&b.changeset_id))
+                .expect("the boundary covers the model's first write");
+            landed.after.as_ref().unwrap()
+        } else {
+            assert!(reasons.contains(&IncompleteReason::ConcurrentWrite));
+            revisions
+                .iter()
+                .filter_map(|r| r.after.as_ref())
+                .find(|after| {
+                    trogon_atlas_core::entity_content_hash(after)
+                        .unwrap()
+                        .to_hex()
+                        == entry.content_hash
+                })
+                .expect("a partial bundle still carries a revision that existed")
+        };
+        assert_eq!(
+            entry.content_hash,
+            trogon_atlas_core::entity_content_hash(landed_model)
+                .unwrap()
+                .to_hex(),
+            "a complete bundle's model entry must be the revision its boundary names"
+        );
+        let Some(pb::entity::Kind::EventModel(em)) = landed_model.kind.as_ref() else {
+            panic!("model revision is not an EventModel");
+        };
+        assert!(bundle.manifests.contains(&em.title));
+        let has_member = !em.members.is_empty();
+        saw_member |= has_member;
+        saw_empty |= !has_member;
+        assert_eq!(
+            entry_slugs(bundle).contains(&"placed".to_string()),
+            has_member
+        );
+        assert_eq!(
+            mentions(&bundle.validation.as_ref().unwrap().issues, "placed"),
+            has_member,
+            "findings must come from the same state as the manifests"
+        );
+    }
+    assert!(
+        saw_member && saw_empty,
+        "the race must observe both shapes of the model"
+    );
+}
+
+fn signing_key_pem(seed: u8) -> String {
+    use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, EncodePrivateKey};
+    ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+        .to_pkcs8_pem(LineEnding::LF)
+        .unwrap()
+        .to_string()
+}
+
+async fn start_signing_server(source: SigningKeySource, snapshot_cap: Option<usize>) -> String {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
+        .unwrap()
+        .with_attested_signing_key(source);
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
+    serve(svc).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_server_seals_bundles_its_public_key_authenticates() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_file = dir.path().join("signing.pem");
+    std::fs::write(&key_file, signing_key_pem(7)).unwrap();
+    let signer = SigningKey::from_pkcs8_pem(&signing_key_pem(7)).unwrap();
+    let endpoint = start_signing_server(SigningKeySource::File(key_file), None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-signed";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+
+    assert_eq!(bundle.format, attested_bundle::SIGNED_BUNDLE_FORMAT);
+    assert_eq!(
+        attested_bundle::verify(&bundle).unwrap().authenticity,
+        Authenticity::SignatureUnchecked(signer.key_id())
+    );
+    let trusted = TrustedKeys::new([signer.trusted_key()]).unwrap();
+    let verified = attested_bundle::verify_trusted(&bundle, &trusted).unwrap();
+    assert_eq!(
+        verified.authenticity,
+        Authenticity::Authenticated(signer.key_id())
+    );
+    assert!(verified.completeness.is_complete());
+
+    let other = SigningKey::from_pkcs8_pem(&signing_key_pem(8)).unwrap();
+    assert!(matches!(
+        attested_bundle::verify_trusted(&bundle, &TrustedKeys::new([other.trusted_key()]).unwrap()),
+        Err(BundleError::UntrustedKey(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signed_incomplete_export_stays_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_file = dir.path().join("signing.pem");
+    std::fs::write(&key_file, signing_key_pem(9)).unwrap();
+    let signer = SigningKey::from_pkcs8_pem(&signing_key_pem(9)).unwrap();
+    let endpoint = start_signing_server(SigningKeySource::File(key_file), Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-signed-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event(ns, "shipped")).await;
+    put(
+        &mut c,
+        event_model(ns, "checkout", "Checkout", &["placed", "shipped"]),
+    )
+    .await;
+
+    let refused = c
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let bundle = export(&mut c, allowed).await;
+    let trusted = TrustedKeys::new([signer.trusted_key()]).unwrap();
+    let verified = attested_bundle::verify_trusted(&bundle, &trusted).unwrap();
+    assert_eq!(
+        verified.authenticity,
+        Authenticity::Authenticated(signer.key_id())
+    );
+    let Completeness::Incomplete(reasons) = verified.completeness else {
+        panic!("signing must not turn a capped export complete");
+    };
+    assert!(reasons.contains(&IncompleteReason::SnapshotTruncated));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_key_that_cannot_be_loaded_fails_the_export_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let malformed = dir.path().join("malformed.pem");
+    std::fs::write(&malformed, "not a key").unwrap();
+    for (source, kind) in [
+        (
+            SigningKeySource::File(dir.path().join("absent.pem")),
+            "file",
+        ),
+        (SigningKeySource::File(malformed), "file"),
+        (
+            SigningKeySource::EnvVar("TROGON_ATLAS_TEST_SIGNING_KEY_NEVER_SET".parse().unwrap()),
+            "env",
+        ),
+    ] {
+        let endpoint = start_signing_server(source, None).await;
+        let mut c = client(&endpoint).await;
+        let ns = "attested-signing-unavailable";
+        put(&mut c, event(ns, "placed")).await;
+        put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+
+        let mut req = export_req(ns, "checkout");
+        req.allow_incomplete = true;
+        let refused = c.export_attested_model(req).await.unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+        let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+        assert_eq!(failure.code.unwrap().as_str(), "SIGNING_KEY_UNAVAILABLE");
+        assert_eq!(
+            failure.category,
+            trogon_atlas_client::failure::FailureCategory::Precondition
+        );
+        let info = tonic_types::StatusExt::get_details_error_info(&refused).unwrap();
+        assert_eq!(info.metadata.get("source").map(String::as_str), Some(kind));
+        assert!(!refused.message().contains("absent.pem"), "{refused:?}");
+    }
+}
+
+/// A write the export never reads still enters the snapshot it binds, so
+/// a complete bundle must not hold one newer than the changeset it names.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_complete_export_holds_no_write_after_its_changeset() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-race-unread";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let base = export(&mut c, export_req(ns, "checkout"))
+        .await
+        .state
+        .unwrap()
+        .snapshot_entity_count;
+    let mut req = export_req(ns, "checkout");
+    req.allow_incomplete = true;
+
+    let writer = {
+        let mut c = client(&endpoint).await;
+        tokio::spawn(async move {
+            let mut landed = Vec::new();
+            for i in 1..=63 {
+                put(&mut c, event(ns, &format!("unread{i}"))).await;
+                landed.push(newest_changeset(&mut c, ns).await);
+            }
+            landed
+        })
+    };
+    let mut bundles = Vec::new();
+    while !writer.is_finished() {
+        bundles.push(export(&mut c, req.clone()).await);
+    }
+    let landed = writer.await.unwrap();
+
+    for bundle in bundles.iter().filter(|b| reasons_of(b).is_empty()) {
+        let state = bundle.state.as_ref().unwrap();
+        let through = landed
+            .iter()
+            .filter(|id| id.as_str() <= state.baseline_changeset_id.as_str())
+            .count();
+        assert!(
+            state.snapshot_entity_count as usize <= base as usize + through,
+            "a complete bundle named {} but read {} entities",
+            state.baseline_changeset_id,
+            state.snapshot_entity_count
+        );
+    }
+}
+
+/// Races `writes` revisions of `slug` in `ns` on the baseline against
+/// repeated exports sent by `request`, and returns every bundle.
+async fn export_while_writing(
+    endpoint: &str,
+    ns: &'static str,
+    slug: &'static str,
+    request: impl Fn() -> tonic::Request<pb::ExportAttestedModelRequest>,
+) -> Vec<pb::AttestedModelBundle> {
+    let mut c = client(endpoint).await;
+    let writer = {
+        let mut c = client(endpoint).await;
+        tokio::spawn(async move {
+            for i in 1..=31 {
+                put(
+                    &mut c,
+                    event_model(ns, slug, &format!("live{i}"), &["placed"]),
+                )
+                .await;
+            }
+        })
+    };
+    let mut bundles = Vec::new();
+    while !writer.is_finished() {
+        bundles.push(
+            c.export_attested_model(request())
+                .await
+                .unwrap()
+                .into_inner()
+                .bundle
+                .unwrap(),
+        );
+    }
+    writer.await.unwrap();
+    bundles
+}
+
+/// A historical export is rewound from history, so live writes after its
+/// changeset cannot move it and must not mark it concurrent.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_writes_do_not_taint_a_historical_export() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-live";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let bundles = export_while_writing(&endpoint, ns, "checkout", || {
+        let mut req = export_req(ns, "checkout");
+        req.as_of_changeset = then.clone();
+        tonic::Request::new(req)
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert_eq!(reasons_of(bundle), Vec::<IncompleteReason>::new());
+        assert!(bundle.manifests.contains("Before"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn versionless_historical_export_excludes_versions_written_while_refilling() {
+    let endpoint = start_server(Some(0)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-refill-race";
+    put(&mut c, event(ns, "placed")).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &["placed"]),
+    )
+    .await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let mut writer = client(&endpoint).await;
+    let writes = tokio::spawn(async move {
+        for version in 2..=64 {
+            put(
+                &mut writer,
+                event_model_version(
+                    ns,
+                    "checkout",
+                    version,
+                    &format!("After {version}"),
+                    &["placed"],
+                ),
+            )
+            .await;
+        }
+    });
+
+    let mut observed = 0;
+    while !writes.is_finished() {
+        let mut req = export_req(ns, "checkout");
+        req.id.as_mut().unwrap().version = 0;
+        req.as_of_changeset = then.clone();
+        req.allow_incomplete = true;
+        let historical = export(&mut c, req).await;
+        observed += 1;
+        assert_eq!(
+            historical
+                .scope
+                .as_ref()
+                .unwrap()
+                .event_model_id
+                .as_ref()
+                .unwrap()
+                .version,
+            1
+        );
+        assert!(historical.manifests.contains("Before"));
+    }
+    writes.await.unwrap();
+    assert_ne!(observed, 0, "the race must produce at least one export");
+}
+
+/// Writes that land while a capped historical export runs drop the cached
+/// snapshot; the export must still report the cap of the load it rewound.
+#[tokio::test(flavor = "multi_thread")]
+async fn writes_racing_a_capped_historical_export_keep_it_truncated() {
+    let endpoint = start_server(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let bundles = export_while_writing(&endpoint, ns, "other", || {
+        let mut req = export_req(ns, "checkout");
+        req.as_of_changeset = then.clone();
+        req.allow_incomplete = true;
+        tonic::Request::new(req)
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert!(
+            reasons_of(bundle).contains(&IncompleteReason::SnapshotTruncated),
+            "{:?}",
+            reasons_of(bundle)
+        );
+    }
+}
+
+/// A baseline write to a key the branch overlays does not change what the
+/// branch shows, so it must not mark the branch export concurrent.
+#[tokio::test(flavor = "multi_thread")]
+async fn baseline_writes_under_a_branch_overlay_do_not_taint_the_branch_export() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-overlay";
+    let branch = "attested-overlay-feature";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Base", &["placed"])).await;
+    c.create_branch(pb::CreateBranchRequest {
+        name: branch.into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    for entity in [
+        event(ns, "placed"),
+        event_model(ns, "checkout", "Branch", &["placed"]),
+    ] {
+        let mut req = tonic::Request::new(put_req(entity));
+        req.metadata_mut().insert(
+            "x-trogon-atlas-branch",
+            MetadataValue::try_from(branch).unwrap(),
+        );
+        c.put_entity(req).await.unwrap();
+    }
+
+    let bundles = export_while_writing(&endpoint, ns, "checkout", || {
+        let mut req = tonic::Request::new(export_req(ns, "checkout"));
+        req.metadata_mut().insert(
+            "x-trogon-atlas-branch",
+            MetadataValue::try_from(branch).unwrap(),
+        );
+        req
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert_eq!(reasons_of(bundle), Vec::<IncompleteReason>::new());
+        assert!(bundle.manifests.contains("Branch"));
+    }
+}

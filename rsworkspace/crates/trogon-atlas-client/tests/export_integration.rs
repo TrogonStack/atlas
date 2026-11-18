@@ -9,17 +9,24 @@
 
 use std::sync::Arc;
 
+use serde::Deserialize as _;
 use tokio::net::TcpListener;
-use trogon_atlas_client::{client, export, manifest};
+use trogon_atlas_client::{apply, client, export, manifest};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
+    start_server_capped(usize::MAX).await
+}
+
+async fn start_server_capped(snapshot_cap: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(snapshot_cap);
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -310,6 +317,37 @@ async fn export_empty_namespace_errors() {
         panic!("expected empty namespace to error")
     };
     assert!(format!("{err:#}").contains("no entities"), "{err:#}");
+}
+
+#[tokio::test]
+async fn export_refuses_a_namespace_read_from_a_truncated_snapshot() {
+    let endpoint = start_server_capped(1).await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    for slug in ["a.event", "b.event"] {
+        client
+            .put_entity(put_req(
+                pb::Entity {
+                    system: None,
+                    kind: Some(pb::entity::Kind::Event(pb::Event {
+                        id: Some(pb::Id {
+                            namespace: "export-truncated".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        ..Default::default()
+                    })),
+                },
+                true,
+            ))
+            .await
+            .unwrap();
+    }
+
+    let Err(err) = export::fetch_namespace_entities(&mut client, "export-truncated").await else {
+        panic!("a namespace read from a cut snapshot must not look complete")
+    };
+    assert!(format!("{err:#}").contains("entity cap"), "{err:#}");
 }
 
 #[tokio::test]
@@ -625,9 +663,11 @@ async fn export_reports_skipped_label_for_every_entity_kind() {
             }),
         ),
         (
-            "bounded-context",
+            // The server rejects a context whose slug differs from its
+            // namespace, so this entry is matched by its kind prefix.
+            "bounded_context:",
             K::BoundedContext(pb::BoundedContext {
-                id: Some(id(ns, "bounded-context")),
+                id: Some(id(ns, ns)),
                 metadata: poisoned_metadata(),
                 ..Default::default()
             }),
@@ -755,4 +795,682 @@ async fn export_pages_through_more_than_one_page_of_entities() {
         usize::try_from(TOTAL).unwrap(),
         "{event_yaml}"
     );
+}
+
+// ExportEventModelManifests: a board rendered as manifests someone else can
+// apply. Pins what the board carries (its own closure, foreign entities it
+// references once, nothing it does not reach) and that the output loads
+// back with no drift.
+
+const BOARD_PAYMENTS: &str = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata: { namespace: board-pay, name: payments }
+spec: { title: Payments }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: board-pay, name: payment.captured }
+spec: { title: Payment captured, swimlane: payments }
+";
+
+const BOARD_SHOP: &str = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata: { namespace: board-src, name: buyer }
+spec: { title: Buyer }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata: { namespace: board-src, name: checkout }
+spec: { title: Checkout }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata: { namespace: board-src, name: order }
+spec: { title: Order }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: board-src, name: order.placed }
+spec:
+  title: Order placed
+  swimlane: order
+  metadata:
+    - '@type': type.googleapis.com/trogonatlas.annotation.v1alpha1.TagAnnotation
+      tags: ['context:shop']
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: board-src, name: not-on-the-board }
+spec: { title: Not on the board }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata: { namespace: board-src, name: place-order }
+spec: { title: Place order }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata: { namespace: board-src, name: place-order-slice }
+spec:
+  title: Place order
+  persona: buyer
+  ui: checkout
+  command: place-order
+  emittedEvents: [order.placed]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata: { namespace: board-src, name: paid-orders }
+spec:
+  title: Paid orders
+  sourceEvents: [board-pay/payment.captured]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata: { namespace: board-src, name: paid-orders-slice }
+spec:
+  title: Paid orders
+  readModel: paid-orders
+  sourceEvents: [board-pay/payment.captured]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata: { namespace: board-src, name: buy-flow }
+spec:
+  title: Buy flow
+  entry:
+    human:
+      persona: buyer
+      ui: checkout
+  slices:
+    - id: place-order-slice
+    - id: paid-orders-slice
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-src, name: shop }
+spec:
+  title: Shop
+  members:
+    - { kind: storyboard, id: buy-flow }
+";
+
+async fn seed(client: &mut client::Client, yaml: &str) {
+    let docs = manifest::parse_str(yaml, "seed").unwrap();
+    let plan = trogon_atlas_client::apply::plan(client, docs)
+        .await
+        .unwrap();
+    trogon_atlas_client::apply::apply(client, plan, false, None)
+        .await
+        .unwrap();
+}
+
+async fn export_board(
+    client: &mut client::Client,
+    namespace: &str,
+) -> Result<pb::ExportEventModelManifestsResponse, tonic::Status> {
+    client
+        .export_event_model_manifests(pb::ExportEventModelManifestsRequest {
+            id: Some(pb::Id {
+                namespace: namespace.into(),
+                slug: "shop".into(),
+                version: 1,
+            }),
+        })
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+fn doc_names(yaml: &str) -> std::collections::BTreeSet<String> {
+    manifest::parse_str(yaml, "export")
+        .unwrap()
+        .iter()
+        .map(|doc| format!("{}/{}", doc.id.namespace, doc.id.slug))
+        .collect()
+}
+
+#[tokio::test]
+async fn board_manifests_carry_the_board_and_load_back_without_drift() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    seed(&mut client, BOARD_PAYMENTS).await;
+    seed(&mut client, BOARD_SHOP).await;
+
+    let out = export_board(&mut client, "board-src").await.unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+
+    let own: std::collections::BTreeSet<String> = [
+        "buy-flow",
+        "buyer",
+        "checkout",
+        "order",
+        "order.placed",
+        "paid-orders",
+        "paid-orders-slice",
+        "place-order",
+        "place-order-slice",
+        "shop",
+    ]
+    .iter()
+    .map(|slug| format!("board-src/{slug}"))
+    .collect();
+    assert_eq!(
+        doc_names(&out.manifests),
+        own,
+        "an entity the board does not reach stays out"
+    );
+    assert_eq!(
+        doc_names(&out.external_manifests),
+        std::collections::BTreeSet::from(["board-pay/payment.captured".to_string()]),
+        "a foreign entity comes once, without its own swimlane",
+    );
+    assert!(
+        out.manifests.contains("TagAnnotation") && out.manifests.contains("context:shop"),
+        "annotations render as typed values:\n{}",
+        out.manifests
+    );
+
+    let mut docs = manifest::parse_str(&out.manifests, "own").unwrap();
+    docs.extend(manifest::parse_str(&out.external_manifests, "external").unwrap());
+    for change in trogon_atlas_client::apply::plan(&mut client, docs)
+        .await
+        .unwrap()
+    {
+        assert_eq!(
+            change.action,
+            trogon_atlas_client::apply::Action::Unchanged,
+            "{} drifted from the store it was exported from",
+            change.manifest.source
+        );
+    }
+
+    // Loading the board into another namespace reproduces it exactly.
+    let copy = out.manifests.replace("board-src", "board-dst");
+    seed(&mut client, &copy).await;
+    let copied = export_board(&mut client, "board-dst").await.unwrap();
+    assert_eq!(copied.manifests, copy);
+    assert_eq!(copied.external_manifests, out.external_manifests);
+}
+
+/// Write `model` and `external` into a board file the way Studio's Export
+/// HTML does, `<` escaped so the YAML cannot end the data block.
+fn write_board_html(dir: &std::path::Path, model: &str, external: &str) -> std::path::PathBuf {
+    let snapshot = serde_json::json!({ "manifests": { "model": model, "external": external } });
+    let data = snapshot.to_string().replace('<', "\\u003c");
+    let path = dir.join("shop.html");
+    std::fs::write(
+        &path,
+        format!("<script id=\"atlas-snapshot\" type=\"application/json\">{data}</script>"),
+    )
+    .unwrap();
+    path
+}
+
+#[tokio::test]
+async fn board_html_applies_into_a_fresh_namespace_and_checks_external_entities() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    seed(&mut client, BOARD_PAYMENTS).await;
+    seed(&mut client, BOARD_SHOP).await;
+    let out = export_board(&mut client, "board-src").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    let model = out.manifests.replace("board-src", "board-html");
+    let files = manifest::read_paths(&[write_board_html(
+        dir.path(),
+        &model,
+        &out.external_manifests,
+    )])
+    .unwrap();
+    apply::require_external(&mut client, files.external)
+        .await
+        .unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, files.documents.clone())
+        .await
+        .unwrap();
+    let plan = apply::plan(&mut client, resolved.manifests).await.unwrap();
+    assert!(plan.iter().all(|c| c.action == apply::Action::Create));
+    apply::apply(&mut client, plan, false, None).await.unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, files.documents)
+        .await
+        .unwrap();
+    for change in apply::plan(&mut client, resolved.manifests).await.unwrap() {
+        assert_eq!(
+            change.action,
+            apply::Action::Unchanged,
+            "{}",
+            change.manifest.source
+        );
+    }
+
+    // A target that lacks a foreign entity the board uses is refused before any write.
+    let gone = |yaml: &str| yaml.replace("board-pay", "board-gone");
+    let path = write_board_html(dir.path(), &gone(&model), &gone(&out.external_manifests));
+    let files = manifest::read_paths(&[path]).unwrap();
+    let err = apply::require_external(&mut client, files.external)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("event:board-gone/payment.captured"),
+        "{err:#}"
+    );
+
+    // The bundled copy is never written, so a spec this client cannot transcode
+    // must neither hide a missing entity nor block a present one.
+    let untyped = |ns: &str| {
+        format!(
+            "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: {{ namespace: {ns}, name: payment.captured }}
+spec:
+  title: Payment captured
+  metadata:
+    - '@type': type.googleapis.com/acme.payments.v1.Retired
+      note: gone
+"
+        )
+    };
+    let path = write_board_html(dir.path(), &model, &untyped("board-gone"));
+    let files = manifest::read_paths(&[path]).unwrap();
+    let err = apply::require_external(&mut client, files.external)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("missing external entities"),
+        "{err:#}"
+    );
+    let path = write_board_html(dir.path(), &model, &untyped("board-pay"));
+    let files = manifest::read_paths(&[path]).unwrap();
+    apply::require_external(&mut client, files.external)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn board_manifests_for_a_missing_event_model_are_not_found() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    let status = export_board(&mut client, "board-none").await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::NotFound);
+}
+
+async fn assert_board_namespace_types(foreign_proto_path: &str) {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    for (namespace, proto_path, field, json_field, value) in [
+        (
+            "board-types-local",
+            "shared/payload.proto",
+            "local_value",
+            "localValue",
+            "local payload",
+        ),
+        (
+            "board-types-foreign",
+            foreign_proto_path,
+            "foreign_value",
+            "foreignValue",
+            "foreign payload",
+        ),
+    ] {
+        let yaml = format!(
+            r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: {{ namespace: {namespace}, name: shared.payload }}
+spec:
+  title: Payload types
+  files:
+    - path: {proto_path}
+      content: |
+        syntax = "proto3";
+        package shared.payload;
+        message Payload {{ string {field} = 1; }}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: {{ namespace: {namespace}, name: payload }}
+spec:
+  title: Typed payload
+  schema:
+    "@type": type.googleapis.com/shared.payload.Payload
+    {json_field}: {value}
+"#
+        );
+        let documents = manifest::read_str(&yaml, "seed").unwrap();
+        let resolved = manifest::load_with_tenant_types(&mut client, documents)
+            .await
+            .unwrap();
+        let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+    seed(
+        &mut client,
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-types-local, name: shop }
+spec:
+  title: Payload board
+  members:
+    - { kind: event, id: payload }
+    - { kind: event, id: board-types-foreign/payload }
+",
+    )
+    .await;
+
+    let out = export_board(&mut client, "board-types-local")
+        .await
+        .unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    for (yaml, namespace, field, other_field, value) in [
+        (
+            &out.manifests,
+            "board-types-local",
+            "localValue",
+            "foreignValue",
+            "local payload",
+        ),
+        (
+            &out.external_manifests,
+            "board-types-foreign",
+            "foreignValue",
+            "localValue",
+            "foreign payload",
+        ),
+    ] {
+        let documents: Vec<serde_json::Value> = serde_norway::Deserializer::from_str(yaml)
+            .map(|doc| serde_json::Value::deserialize(doc).unwrap())
+            .collect();
+        let event = documents.iter().find(|doc| doc["kind"] == "Event").unwrap();
+        assert_eq!(event["metadata"]["namespace"], namespace);
+        let schema = &event["spec"]["schema"];
+        assert_eq!(
+            schema["@type"],
+            "type.googleapis.com/shared.payload.Payload"
+        );
+        assert_eq!(schema[field], value, "{yaml}");
+        assert!(schema.get(other_field).is_none(), "{yaml}");
+    }
+}
+
+#[tokio::test]
+async fn board_manifests_keep_same_filename_types_namespace_scoped() {
+    assert_board_namespace_types("shared/payload.proto").await;
+}
+
+#[tokio::test]
+async fn board_manifests_keep_same_package_types_namespace_scoped() {
+    assert_board_namespace_types("foreign/payload.proto").await;
+}
+
+#[tokio::test]
+async fn board_manifests_carry_metadata_only_tenant_types() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    let yaml = r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-annotations-src, name: board.annotations }
+spec:
+  title: Board annotations
+  files:
+    - path: board/annotations.proto
+      content: |
+        syntax = "proto3";
+        package board.annotations;
+        message Note { string text = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-annotations-src, name: shop }
+spec:
+  title: Annotated board
+  metadata:
+    - "@type": type.googleapis.com/board.annotations.Note
+      text: Board rationale
+"#;
+    let documents = manifest::read_str(yaml, "seed").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .unwrap();
+    let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+        .await
+        .unwrap();
+    trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+        .await
+        .unwrap();
+
+    let out = export_board(&mut client, "board-annotations-src")
+        .await
+        .unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    assert_eq!(out.external_manifests, "");
+    let copy = out
+        .manifests
+        .replace("board-annotations-src", "board-annotations-copy");
+    let documents = manifest::read_str(&copy, "export").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .expect("export must carry the library needed to decode tenant metadata");
+    assert!(resolved
+        .manifests
+        .iter()
+        .any(|doc| doc.kind == pb::EntityKind::TypeLibrary));
+    let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+        .await
+        .unwrap();
+    trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+        .await
+        .unwrap();
+    let copied = export_board(&mut client, "board-annotations-copy")
+        .await
+        .unwrap();
+    assert_eq!(copied.manifests, copy);
+}
+
+#[tokio::test]
+async fn board_manifests_carry_nested_tenant_metadata_types() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    let yaml = r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-nested-src, name: board.outer }
+spec:
+  title: Outer annotation
+  files:
+    - path: board/outer.proto
+      content: |
+        syntax = "proto3";
+        package board.outer;
+        import "google/protobuf/any.proto";
+        message Envelope { google.protobuf.Any detail = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-nested-src, name: board.inner }
+spec:
+  title: Inner annotation
+  files:
+    - path: board/inner.proto
+      content: |
+        syntax = "proto3";
+        package board.inner;
+        message Note { string text = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-nested-src, name: shop }
+spec:
+  title: Nested annotation board
+  metadata:
+    - "@type": type.googleapis.com/board.outer.Envelope
+      detail:
+        "@type": type.googleapis.com/board.inner.Note
+        text: Nested rationale
+"#;
+    let documents = manifest::read_str(yaml, "seed").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .unwrap();
+    for document in resolved.manifests {
+        let plan = trogon_atlas_client::apply::plan(&mut client, vec![document])
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+
+    let out = export_board(&mut client, "board-nested-src").await.unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    assert_eq!(out.external_manifests, "");
+    let copy = out
+        .manifests
+        .replace("board-nested-src", "board-nested-copy");
+    let documents = manifest::read_str(&copy, "export").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .expect("export must carry libraries used inside tenant Any payloads");
+    let libraries: std::collections::BTreeSet<_> = resolved
+        .manifests
+        .iter()
+        .filter(|doc| doc.kind == pb::EntityKind::TypeLibrary)
+        .map(|doc| doc.id.slug.as_str())
+        .collect();
+    assert_eq!(
+        libraries,
+        std::collections::BTreeSet::from(["board.inner", "board.outer"])
+    );
+    for document in resolved.manifests {
+        let plan = trogon_atlas_client::apply::plan(&mut client, vec![document])
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+    let copied = export_board(&mut client, "board-nested-copy")
+        .await
+        .unwrap();
+    assert_eq!(copied.manifests, copy);
+}
+
+#[tokio::test]
+async fn namespace_export_refuses_a_capped_listing_instead_of_returning_a_complete_artifact() {
+    async fn serve(service: EventModelServiceImpl) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(EventModelServiceServer::new(service))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        format!("http://{addr}")
+    }
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let full =
+        serve(EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap())
+            .await;
+    let mut complete = client::connect(&full, None, 30).await.unwrap();
+    for slug in ["first", "omitted"] {
+        complete
+            .put_entity(put_req(
+                pb::Entity {
+                    kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+                        id: Some(pb::Id {
+                            namespace: "export-groups".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        scope: pb::SystemGroupScope::Internal as i32,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                true,
+            ))
+            .await
+            .unwrap();
+    }
+    let complete_artifact = export::export_namespace(&mut complete, "export-groups")
+        .await
+        .unwrap();
+    assert_eq!(complete_artifact.skipped, [] as [String; 0]);
+    let yaml = &complete_artifact.files["system-group.yaml"];
+    assert!(yaml.contains("name: first"));
+    assert!(yaml.contains("name: omitted"));
+    let capped = serve(
+        EventModelServiceImpl::try_new(store, ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(1),
+    )
+    .await;
+    let mut partial = client::connect(&capped, None, 30).await.unwrap();
+    let snapshot = partial
+        .get_snapshot_id(pb::GetSnapshotIdRequest {
+            namespaces: vec!["export-groups".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(snapshot.truncated);
+    assert_eq!(snapshot.entity_count, 1);
+    assert_eq!(
+        partial
+            .get_entity(pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(pb::Id {
+                    namespace: "export-groups".into(),
+                    slug: "omitted".into(),
+                    version: 1
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .entity
+            .unwrap()
+            .kind
+            .unwrap(),
+        pb::entity::Kind::SystemGroup(pb::SystemGroup {
+            id: Some(pb::Id {
+                namespace: "export-groups".into(),
+                slug: "omitted".into(),
+                version: 1
+            }),
+            title: "omitted".into(),
+            scope: pb::SystemGroupScope::Internal as i32,
+            ..Default::default()
+        })
+    );
+    for layout in [export::ExportLayout::Single, export::ExportLayout::Slices] {
+        let result = match layout {
+            export::ExportLayout::Single => {
+                export::export_namespace(&mut partial, "export-groups").await
+            }
+            export::ExportLayout::Slices => {
+                export::export_namespace_slices(&mut partial, "export-groups").await
+            }
+        };
+        let Err(error) = result else {
+            panic!("a truncated entity listing must not become a complete namespace export")
+        };
+        assert!(format!("{error:#}").contains("entity cap"), "{error:#}");
+    }
 }

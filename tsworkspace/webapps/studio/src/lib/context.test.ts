@@ -226,6 +226,17 @@ describe('entityContext: GIVEN is rendered even when empty', () => {
     expect(ctx).toContain('- GIVEN nothing');
   });
 
+  it('states an automation scenario that issues no command', () => {
+    const model = sliceWithScenario('automationSlice', {
+      id: 'cooling-down',
+      title: 'Still cooling down',
+      whenDoc: 'last failure is within backoff',
+      noCommand: { doc: 'retried after the backoff' },
+    });
+    const ctx = entityContext(model, mustFind(model.slices[0]).entity);
+    expect(ctx).toContain('- THEN no command: retried after the backoff');
+  });
+
   it('lists the real preconditions instead of "nothing" when a given exists', () => {
     const model = sliceWithScenario('commandSlice', {
       id: 'transferred',

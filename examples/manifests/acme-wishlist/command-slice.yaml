@@ -1,0 +1,49 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: add-item-to-wishlist-slice
+  namespace: acme-wishlist
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-wishlist
+        slug: add-item-to-wishlist
+        version: '1'
+  doc: The shopper saves a product from the wishlist page.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-wishlist
+        slug: wishlist-item.added
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-wishlist
+        slug: shopper
+        version: '1'
+  scenarios:
+  - doc: The shopper saves a product.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-wishlist
+            slug: wishlist-item.added
+            version: '1'
+    id: added
+    title: Item added
+    when:
+      command:
+        id:
+          namespace: acme-wishlist
+          slug: add-item-to-wishlist
+          version: '1'
+  title: Add item to wishlist
+  ui:
+    ui:
+      id:
+        namespace: acme-wishlist
+        slug: wishlist-page
+        version: '1'

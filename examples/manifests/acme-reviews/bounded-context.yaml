@@ -7,7 +7,15 @@ spec:
   doc: Owns review eligibility and review submission once a storefront order is delivered.
   realizes:
   - id:
-      namespace: acme-reviews
+      namespace: acme
       slug: seller-reputation
       version: '1'
+  relationships:
+  - doc: Reviews takes the order.fulfilled fact as Acme Fulfillment publishes it and adapts when it changes.
+    intent: INTENT_CONFORMIST
+    upstream:
+      id:
+        namespace: acme-fulfillment
+        slug: acme-fulfillment
+        version: '1'
   title: Acme Reviews

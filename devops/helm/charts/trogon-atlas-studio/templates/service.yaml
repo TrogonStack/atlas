@@ -12,9 +12,9 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - name: http
+    - name: public
       port: {{ .Values.service.port }}
-      targetPort: http
+      targetPort: public
       protocol: TCP
       appProtocol: http
   selector:

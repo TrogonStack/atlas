@@ -28,6 +28,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
@@ -61,7 +62,7 @@ async fn client() -> EventModelServiceClient<Channel> {
     let addr = listener.local_addr().unwrap();
 
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
 
     let auth = BearerAuth::new(Arc::new(make_registry()));
@@ -376,6 +377,47 @@ async fn get_slice_projection_does_not_project_another_owners_slice() {
     assert_hidden("get_slice_projection", out, |r| r.projection.is_none());
 }
 
+/// The `did_you_mean` slugs a not-found slice projection names, if any.
+async fn suggestions_for(
+    c: &mut EventModelServiceClient<Channel>,
+    slug: &str,
+    token: &str,
+) -> Option<String> {
+    use tonic_types::StatusExt;
+
+    let status = c
+        .get_slice_projection(authed(
+            pb::GetSliceProjectionRequest {
+                kind: pb::EntityKind::CommandSlice as i32,
+                id: Some(id(slug)),
+            },
+            token,
+        ))
+        .await
+        .expect_err("the slug does not exist");
+    assert_eq!(status.code(), Code::NotFound, "{}", status.message());
+    status
+        .get_details_error_info()
+        .and_then(|info| info.metadata.get("did_you_mean").cloned())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_not_found_read_suggests_near_slugs_to_their_owner() {
+    let mut c = world().await;
+    assert_eq!(
+        suggestions_for(&mut c, "plac", ACME_TOKEN).await.as_deref(),
+        Some("place"),
+    );
+}
+
+/// A suggestion would name a slug in the hidden namespace, which is the
+/// existence oracle `require_visible` answers `NOT_FOUND` to prevent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_not_found_read_suggests_nothing_from_a_hidden_namespace() {
+    let mut c = world().await;
+    assert_eq!(suggestions_for(&mut c, "plac", BETA_TOKEN).await, None);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn extract_subgraph_does_not_extract_another_owners_subgraph() {
     let mut c = world().await;
@@ -475,12 +517,184 @@ async fn get_event_model_projection_does_not_project_another_owners_model() {
             pb::GetEventModelProjectionRequest {
                 id: Some(id("model")),
                 include_cross_model: true,
+                as_of_changeset: String::new(),
+                as_of_time: String::new(),
             },
             BETA_TOKEN,
         ))
         .await;
     assert_hidden("get_event_model_projection", out, |r| {
         r.projection.is_none()
+    });
+}
+
+/// An as-of target on another owner's branch must answer like `GetChangeset`
+/// does, so the refusal cannot name that branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_does_not_name_another_owners_branch() {
+    let mut c = world().await;
+    let branch = "@acme-writer:xt-asof-hidden";
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: String::new(),
+        },
+        ACME_TOKEN,
+    ))
+    .await
+    .expect("acme creates its own branch");
+    let mut put = authed(put_req(event_entity("drafted")), ACME_TOKEN);
+    put.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from(branch).unwrap(),
+    );
+    c.put_entity(put).await.expect("acme writes on its branch");
+    let target = c
+        .list_changesets(authed(
+            pb::ListChangesetsRequest {
+                page_token: String::new(),
+                page_size: 1,
+                branch: branch.into(),
+                namespace: String::new(),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .changesets[0]
+        .id
+        .clone();
+
+    let beta_ns = "xt-beta-own";
+    let beta_id = |slug: &str| pb::Id {
+        namespace: beta_ns.into(),
+        slug: slug.into(),
+        version: 1,
+    };
+    c.put_entity(authed(
+        put_req(pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                id: Some(beta_id("model")),
+                title: "model".into(),
+                ..Default::default()
+            })),
+        }),
+        BETA_TOKEN,
+    ))
+    .await
+    .expect("beta writes its own event model");
+
+    let err = c
+        .get_event_model_projection(authed(
+            pb::GetEventModelProjectionRequest {
+                id: Some(beta_id("model")),
+                include_cross_model: true,
+                as_of_changeset: target,
+                as_of_time: String::new(),
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .expect_err("a target on acme's branch is refused");
+    assert_eq!(err.code(), Code::NotFound, "{}", err.message());
+    assert!(
+        !err.message().contains("xt-asof-hidden"),
+        "the refusal names acme's branch: {}",
+        err.message()
+    );
+}
+
+/// The manifests are the model and its members in full, so rendering them
+/// for another owner would hand over the whole graph.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_event_model_manifests_does_not_render_another_owners_model() {
+    let mut c = world().await;
+    let out = c
+        .export_event_model_manifests(authed(
+            pb::ExportEventModelManifestsRequest {
+                id: Some(id("model")),
+            },
+            BETA_TOKEN,
+        ))
+        .await;
+    assert_hidden("export_event_model_manifests", out, |r| {
+        r.manifests.is_empty()
+    });
+}
+
+/// An attested bundle carries the manifests and the findings, so it would
+/// leak everything the two RPCs it combines are each kept from leaking.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_attest_another_owners_model() {
+    let mut c = world().await;
+    let out = c
+        .export_attested_model(authed(
+            pb::ExportAttestedModelRequest {
+                id: Some(id("model")),
+                as_of_changeset: String::new(),
+                allow_incomplete: true,
+            },
+            BETA_TOKEN,
+        ))
+        .await;
+    assert_hidden("export_attested_model", out, |r| r.bundle.is_none());
+}
+
+/// The newest baseline changeset id is a UUIDv7 over every owner's writes,
+/// so even an owner's bundle of its own model must not carry it.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_date_other_owners_writes() {
+    let mut c = world().await;
+    let bundle = c
+        .export_attested_model(authed(
+            pb::ExportAttestedModelRequest {
+                id: Some(id("model")),
+                as_of_changeset: String::new(),
+                allow_incomplete: true,
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .expect("acme exports its own model")
+        .into_inner()
+        .bundle
+        .unwrap();
+    let state = bundle.state.unwrap();
+    assert_eq!(state.baseline_changeset_id, "");
+}
+
+/// Reading through another owner's branch would hand back that branch's
+/// newest changeset id, so the branch must answer as absent.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_read_through_another_owners_branch() {
+    let mut c = world().await;
+    let branch = "@beta-writer:xt-attested-hidden";
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: String::new(),
+        },
+        BETA_TOKEN,
+    ))
+    .await
+    .expect("beta creates its own branch");
+    let mut req = authed(
+        pb::ExportAttestedModelRequest {
+            id: Some(id("model")),
+            as_of_changeset: String::new(),
+            allow_incomplete: true,
+        },
+        ACME_TOKEN,
+    );
+    req.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from(branch).unwrap(),
+    );
+    let out = c.export_attested_model(req).await;
+    assert_hidden("export_attested_model on beta's branch", out, |r| {
+        r.bundle.is_none()
     });
 }
 
@@ -499,4 +713,64 @@ async fn validate_event_model_does_not_load_another_owners_model() {
         ))
         .await;
     assert_hidden("validate_event_model", out, |r| r.issues.is_empty());
+}
+
+/// What beta sees of acme's namespace is an empty view. Its id must not
+/// collide with acme's id for an empty namespace, or a cache keyed on the id
+/// would hand one tenant's answer to the other.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_snapshot_id_binds_the_reader_into_the_id() {
+    let mut c = world().await;
+    let ask = |token| {
+        let mut c = c.clone();
+        async move {
+            c.get_snapshot_id(authed(
+                pb::GetSnapshotIdRequest {
+                    namespaces: vec!["xt-snapshot-unclaimed".into()],
+                    include_entries: false,
+                },
+                token,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+        }
+    };
+    let (acme, beta) = (ask(ACME_TOKEN).await, ask(BETA_TOKEN).await);
+    assert_eq!((acme.entity_count, beta.entity_count), (0, 0));
+    assert_ne!(acme.snapshot_id, beta.snapshot_id);
+    assert_eq!(acme.scope.unwrap().owner, "acme");
+    assert_eq!(beta.scope.unwrap().owner, "beta");
+
+    let hidden = c
+        .get_snapshot_id(authed(
+            pb::GetSnapshotIdRequest {
+                namespaces: vec![NS.into()],
+                include_entries: true,
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(hidden.entity_count, 0);
+    assert_eq!(hidden.entries, Vec::<pb::SnapshotEntry>::new());
+
+    let readable = |token| {
+        let mut c = c.clone();
+        async move {
+            c.get_snapshot_id(authed(
+                pb::GetSnapshotIdRequest {
+                    namespaces: Vec::new(),
+                    include_entries: false,
+                },
+                token,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+        }
+    };
+    let (acme_all, beta_all) = (readable(ACME_TOKEN).await, readable(BETA_TOKEN).await);
+    assert_ne!(acme_all.snapshot_id, beta_all.snapshot_id);
 }

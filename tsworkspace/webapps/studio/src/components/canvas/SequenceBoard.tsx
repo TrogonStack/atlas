@@ -9,12 +9,14 @@ import {
   ReactFlow,
   useReactFlow,
 } from '@xyflow/react';
-import { Repeat } from 'lucide-react';
+import { Clock, Repeat } from 'lucide-react';
 import { useQueryState } from 'nuqs';
 import { useMemo } from 'react';
 import type { SelectedEdge, Selection } from '@/components/canvas/Board';
 import { BoardTopRight } from '@/components/canvas/BoardTopRight';
+import { BoardEmptyState } from '@/components/ui/empty-state';
 import {
+  CardTitle,
   ContextHeaderNode,
   kindStyle,
   SliceHeaderNode,
@@ -70,7 +72,7 @@ function SeqLoopStubNode({ data }: NodeProps & { data: { entity?: Entity; doc: s
         <Repeat className="h-3 w-3" />
         Road continues
       </div>
-      <div className="mt-1 text-[13px] font-semibold leading-snug text-zinc-900">{data.entity?.title}</div>
+      <CardTitle title={data.entity?.title} />
       {data.doc ? <div className="mt-1 text-[10px] leading-tight text-zinc-600">when {data.doc}</div> : null}
       <div className="mt-1 text-[9px] font-medium text-amber-700">a new moment: click to jump ↗</div>
     </div>
@@ -283,6 +285,11 @@ export function SequenceBoard({
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="#d4d4d8" />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {nodes.length === 0 ? (
+        <BoardEmptyState icon={Clock} title="Nothing to sequence yet">
+          This view puts the model's slices in time order, and this model has no slices.
+        </BoardEmptyState>
+      ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-zinc-400" />

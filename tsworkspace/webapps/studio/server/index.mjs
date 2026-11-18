@@ -15,8 +15,12 @@ import { fileURLToPath } from "node:url";
 import grpc from "@grpc/grpc-js";
 import protoLoader from "@grpc/proto-loader";
 import express from "express";
+import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
-import { isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
+import { validateCatalogRequest } from "./decision-document-request.mjs";
+import { validateSourceRequest } from "./source-request.mjs";
+import { validateResponsibilityRequest } from "./responsibility-request.mjs";
+import { isChangesetId, isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The studio reads the canonical proto tree directly. We load `service.proto`
@@ -72,6 +76,11 @@ const RATE_LIMIT_WINDOW_MS = Number(
 );
 const RATE_LIMIT_MAX = Number(
   process.env.TROGON_ATLAS_STUDIO_RATE_MAX ?? 600,
+);
+// A single page view fetches dozens of static files, so this ceiling sits
+// well above the /api one.
+const STATIC_RATE_LIMIT_MAX = Number(
+  process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX ?? 1_000,
 );
 // Comma-separated allowlist of browser origins permitted to call /api/*.
 // Empty (default) keeps the same-origin posture: no CORS headers emitted,
@@ -186,13 +195,14 @@ if (NATS_WS_AUTH_TOKEN) {
 
 // A bridge token in passthrough mode is not the identity anywhere except
 // `/api/info`, the one route that runs before the auth guard can capture a
-// caller's token. Say so once at boot: an operator who sets both and expects
+// caller's token, and the background upstream check behind `/-/readiness`.
+// Say so once at boot: an operator who sets both and expects
 // the bridge token to stand in more broadly would otherwise find out from an
 // audit log.
 if (AUTH_PASSTHROUGH) {
   logEvent("info", "auth_passthrough_enabled", {
     msg: AUTH_TOKEN
-      ? "Forwarding each caller's own bearer token upstream; TROGON_ATLAS_AUTH_TOKEN is used only by /api/info, which runs before the auth guard"
+      ? "Forwarding each caller's own bearer token upstream; TROGON_ATLAS_AUTH_TOKEN is used only by /api/info, which runs before the auth guard, and by the upstream check behind /-/readiness"
       : "Forwarding each caller's own bearer token upstream; the bridge has no identity of its own",
   });
 }
@@ -218,14 +228,17 @@ try {
   });
   process.exit(1);
 }
-/** @type {{ EventModelService: new (target: string, credentials: grpc.ChannelCredentials) => Record<string, Function> }} */
+/** @type {{ EventModelService: new (target: string, credentials: grpc.ChannelCredentials, options?: grpc.ChannelOptions) => Record<string, Function> }} */
 const pkg = /** @type {any} */ (grpc.loadPackageDefinition(definition)).trogonatlas.api.eventmodel.v1alpha1;
 const useTls = GRPC_ENDPOINT.startsWith("https://");
 const target = GRPC_ENDPOINT.replace(/^https?:\/\//, "");
 const credentials = useTls
   ? grpc.credentials.createSsl()
   : grpc.credentials.createInsecure();
-const client = new pkg.EventModelService(target, credentials);
+const client = new pkg.EventModelService(target, credentials, {
+  "grpc.max_receive_message_length": 36 * 1024 * 1024,
+  "grpc.max_send_message_length": 36 * 1024 * 1024,
+});
 
 /**
  * @param {string | undefined} requestId
@@ -235,8 +248,9 @@ const client = new pkg.EventModelService(target, credentials);
 function metadata(requestId, branch, { allowBridgeIdentity = false } = {}) {
   const md = new grpc.Metadata();
   // In passthrough mode the caller's token is the identity. The bridge's own
-  // token stands in only for the one route that runs before the auth guard
-  // can set a caller's token (`/api/info`, via `allowBridgeIdentity`); any
+  // token stands in only where no caller exists to forward: `/api/info`,
+  // which runs before the auth guard, and the readiness upstream check, both
+  // via `allowBridgeIdentity`; any
   // other route reaching here with no forwarded token is a bug, not a caller
   // the bridge should quietly vouch for, so it fails closed instead of
   // substituting its own identity for whoever is actually asking.
@@ -308,13 +322,54 @@ function currentPrincipalToken() {
 // An allowlist rather than a denylist, so an RPC added to the proto later is
 // refused here until someone decides it is a read.
 const READ_RPCS = new Set([
+  "getSourceRegistration",
+  "listGlossaryEntries",
+  "getGlossaryTerm",
+  "inspectGlossarySources",
+  "compareGlossaries",
+  "inspectGlossaryRefresh",
+  "listSourceRegistrations",
+  "getSourceSnapshot",
+  "listSourceSnapshots",
+  "getSourceMapping",
+  "listSourceMappings",
+  "getSourceOverlay",
+  "getSourceRun",
+  "listSourceRuns",
+  "listSourceRunResults",
+  "listSourceRunOperations",
+
   "compileTypeLibrary",
   "diffBranch",
+  "exportEventModelManifests",
   "getEntity",
+  "inspectDataProduct",
+  "listSubjectAssignments",
+  "listAssigneeResponsibilities",
+  "listTeamMembers",
+  "listPersonTeams",
+  "getTeamContacts",
+  "listDecisionAmendments",
+  "listSubjectDecisions",
+  "listSubjectDocuments",
+  "getDecisionDetail",
+  "getDocumentDetail",
+  "listIncomingDecisionDeclarations",
+  "listIncomingDocumentDeclarations",
+  "inspectHumanInteraction",
+  "getDesignGraphDetail",
+  "listSubjectDesignGraphs",
+  "traverseDesignGraphTopology",
+  "listIncomingDesignGraphSubflows",
+
+  "getChangeset",
+  "getEntityHistory",
+  "getEventModelProjection",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
   "listBranches",
   "listChanges",
+  "listChangesets",
   "listEntities",
   "listEntitiesByDomain",
   "listEntityKinds",
@@ -441,7 +496,10 @@ protoBundleRoot.resolvePath = (/** @type {string} */ _origin, /** @type {string}
 /** @type {protobuf.Root} */
 let protoRoot;
 try {
-  protoRoot = await protoBundleRoot.load(PROTO_PATH);
+  protoRoot = await protoBundleRoot.load([
+    PROTO_PATH,
+    path.resolve(PROTO_INCLUDES[0], "trogonatlas/annotation/v1alpha1/annotations.proto"),
+  ]);
 } catch (err) {
   logEvent("error", "protobufjs_load_failed", {
     path: PROTO_PATH,
@@ -532,8 +590,15 @@ function valueToJs(v) {
   return null;
 }
 
-/** @param {string} typeUrl @param {unknown} value */
-function decodeAnyValue(typeUrl, value) {
+const NATIVE_METADATA_TYPES = new Set([
+  "trogonatlas.eventmodel.v1alpha1.AgentAnnotation",
+  "trogonatlas.annotation.v1alpha1.LifecycleAnnotation",
+  "trogonatlas.annotation.v1alpha1.BadgesAnnotation",
+  "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+]);
+
+/** @param {string} typeUrl @param {unknown} value @param {number} [depth] */
+function decodeAnyValue(typeUrl, value, depth = 0) {
   try {
     const fqn = typeUrl.split("/").pop() ?? "";
     const type = protoRoot.lookupType(fqn);
@@ -545,12 +610,15 @@ function decodeAnyValue(typeUrl, value) {
       return { "@type": typeUrl, value: structToJs(type.toObject(msg)) };
     }
     const obj = type.toObject(msg, { longs: String, enums: String });
-    return { "@type": typeUrl, ...obj };
+    return { "@type": typeUrl, .../** @type {Record<string, unknown>} */ (decodeAnnotations(obj, depth + 1)) };
   } catch (err) {
     logEvent("warn", "decode_any_value_failed", {
       typeUrl,
       error: String(/** @type {any} */ (err)?.message ?? err).slice(0, 200),
     });
+    if (NATIVE_METADATA_TYPES.has(typeUrl.split("/").pop() ?? "")) {
+      return { "@type": typeUrl, "@decodeError": "Malformed native annotation" };
+    }
     return null;
   }
 }
@@ -562,7 +630,7 @@ function decodeAnnotations(node, depth = 0) {
   if (depth >= DECODE_ANNOTATIONS_MAX_DEPTH) return node;
   if (Array.isArray(node)) {
     return node.map((item) => {
-      const decoded = maybeDecodeAny(item);
+      const decoded = maybeDecodeAny(item, depth + 1);
       return decoded ?? decodeAnnotations(item, depth + 1);
     });
   }
@@ -570,18 +638,18 @@ function decodeAnnotations(node, depth = 0) {
   /** @type {Record<string, unknown>} */
   const out = {};
   for (const [k, v] of Object.entries(/** @type {Record<string, unknown>} */ (node))) {
-    const decoded = maybeDecodeAny(v);
+    const decoded = maybeDecodeAny(v, depth + 1);
     out[k] = decoded ?? decodeAnnotations(v, depth + 1);
   }
   return out;
 }
 
-/** @param {unknown} item */
-function maybeDecodeAny(item) {
+/** @param {unknown} item @param {number} [depth] */
+function maybeDecodeAny(item, depth = 0) {
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
   const url = /** @type {any} */ (item).typeUrl ?? /** @type {any} */ (item).type_url;
   if (typeof url !== "string" || !url.startsWith("type.googleapis.com/")) return null;
-  return decodeAnyValue(url, /** @type {any} */ (item).value);
+  return decodeAnyValue(url, /** @type {any} */ (item).value, depth);
 }
 
 /** @type {Record<number, number>} */
@@ -640,6 +708,107 @@ app.use((/** @type {AppRequest} */ req, /** @type {Res} */ res, /** @type {Next}
   next();
 });
 
+// Readiness and liveness, answered ahead of auth, rate limiting, the access
+// log and the /api routes. Probes read held state and never call upstream: a
+// background loop records the last upstream check and the process records its
+// own lifecycle. Mirrors the server's `/-/` probes in
+// `rsworkspace/crates/trogon-atlas-server/src/health.rs`.
+const UPSTREAM_CHECK_INTERVAL_MS = 10_000;
+const UPSTREAM_CHECK_TIMEOUT_MS = 2_000;
+const GRPC_UNAUTHENTICATED = 16;
+
+/** @typedef {"starting" | "running" | "shutting-down"} Lifecycle */
+/** @typedef {"unchecked" | "reachable" | "unreachable"} UpstreamStatus */
+/** @typedef {"readiness" | "liveness"} Probe */
+
+const healthState = {
+  /** @type {Lifecycle} */
+  lifecycle: "starting",
+  /** @type {UpstreamStatus} */
+  upstream: "unchecked",
+};
+
+/** @param {Probe} probe @returns {{ name: string, passed: boolean }[]} */
+function healthChecks(probe) {
+  const ping = { name: "ping", passed: healthState.lifecycle !== "starting" };
+  if (probe === "liveness") return [ping];
+  return [
+    ping,
+    { name: "upstream", passed: healthState.upstream === "reachable" },
+    { name: "shutdown", passed: healthState.lifecycle !== "shutting-down" },
+  ];
+}
+
+function markLive() {
+  if (healthState.lifecycle === "starting") healthState.lifecycle = "running";
+}
+
+// Stops advertising readiness for good, before in-flight requests drain.
+function beginShutdown() {
+  healthState.lifecycle = "shutting-down";
+}
+
+/** @param {UpstreamStatus} status @param {unknown} [err] */
+function recordUpstream(status, err) {
+  const previous = healthState.upstream;
+  healthState.upstream = status;
+  if (status === "unreachable" && previous !== "unreachable") {
+    logEvent("warn", "upstream_check_failed", {
+      upstream: maskEndpoint(GRPC_ENDPOINT),
+      error: maskError(err),
+    });
+  } else if (status === "reachable" && previous === "unreachable") {
+    logEvent("info", "upstream_check_recovered", { upstream: maskEndpoint(GRPC_ENDPOINT) });
+  }
+}
+
+/** @type {Promise<void> | null} */
+let upstreamCheckInFlight = null;
+
+// Overlapping checks could let a stale failure overwrite a newer success.
+function checkUpstream() {
+  upstreamCheckInFlight ??= runUpstreamCheck().finally(() => {
+    upstreamCheckInFlight = null;
+  });
+  return upstreamCheckInFlight;
+}
+
+// A pass-through bridge with no token of its own has no identity to check
+// with, so the server refusing an anonymous caller still proves it answers.
+async function runUpstreamCheck() {
+  try {
+    await call("getServerInfo", {}, { timeoutMs: UPSTREAM_CHECK_TIMEOUT_MS, allowBridgeIdentity: true });
+    recordUpstream("reachable");
+  } catch (err) {
+    const answeredAnonymous =
+      AUTH_PASSTHROUGH && !AUTH_TOKEN && /** @type {any} */ (err)?.code === GRPC_UNAUTHENTICATED;
+    recordUpstream(answeredAnonymous ? "reachable" : "unreachable", err);
+  }
+}
+
+/** @param {Probe} probe */
+function probeHandler(probe) {
+  return (/** @type {AppRequest} */ req, /** @type {Res} */ res) => {
+    const checks = healthChecks(probe);
+    const passed = checks.every((check) => check.passed);
+    const query = req.originalUrl.split("?")[1] ?? "";
+    const verbose = query.split("&").some((pair) => pair.split("=")[0] === "verbose");
+    res.status(passed ? 200 : 503);
+    res.type("text/plain");
+    res.setHeader("Cache-Control", "no-store");
+    if (!verbose) {
+      res.send(passed ? "ok\n" : `${probe === "readiness" ? "not ready" : "not live"}\n`);
+      return;
+    }
+    const lines = checks.map((check) => (check.passed ? `[+]${check.name} ok` : `[-]${check.name} failed`));
+    lines.push(`${probe} check ${passed ? "passed" : "failed"}`);
+    res.send(`${lines.join("\n")}\n`);
+  };
+}
+
+app.get("/-/readiness", probeHandler("readiness"));
+app.get("/-/liveness", probeHandler("liveness"));
+
 // CORS: only the explicitly allowlisted origins are permitted. With an
 // empty allowlist we emit no headers, so browsers enforce same-origin.
 /** @param {AppRequest} req */
@@ -686,10 +855,10 @@ app.use((/** @type {AppRequest} */ req, /** @type {Res} */ res, /** @type {Next}
   withContext({ requestId: id }, () => next());
 });
 
-// Sliding-window per-IP rate limiter (in-memory). Sufficient for a
+// Sliding-window per-IP rate limiter (in-memory) for /api. Sufficient for a
 // single-process gateway; multi-instance deployments should sit behind a
 // shared limiter (e.g. NGINX) and can disable this by setting
-// TROGON_ATLAS_STUDIO_RATE_MAX=0.
+// TROGON_ATLAS_STUDIO_RATE_MAX=0, which also disables the static limiter.
 const RATE_BUCKETS = new Map();
 const RATE_BUCKETS_MAX = 10_000;
 /** @param {AppRequest} req @param {Res} res @param {Next} next */
@@ -772,9 +941,8 @@ function tokenDigest(token) {
 const AUTH_TOKEN_DIGEST = AUTH_TOKEN ? tokenDigest(AUTH_TOKEN) : null;
 
 // Global bearer-token guard for all /api/* routes. /api/info is kept
-// public (health/info endpoints are typically used by load balancers and
-// monitoring probes that run before auth is available). When AUTH_TOKEN is
-// not configured, all routes pass through.
+// public: it answers with the server version and feature flags only. When
+// AUTH_TOKEN is not configured, all routes pass through.
 /** @param {AppRequest} req @returns {string} */
 function bearerToken(req) {
   const header = req.headers.authorization ?? "";
@@ -973,9 +1141,11 @@ app.get(
   handler(() => call("listEntityKinds", {})),
 );
 
-// Validate every EventModel in a project or domain in one call. Query:
+// Validate every EventModel in a project, domain or namespace in one call.
+// Query, exactly one scope:
 //   ?projectNamespace=foo&projectSlug=foo  -- scope by Project
 //   ?domainNamespace=foo&domainSlug=foo    -- scope by Domain
+//   ?namespace=foo                         -- scope by namespace
 app.get(
   "/api/validate-project",
   branchHandler(async (req) => {
@@ -988,6 +1158,7 @@ app.get(
       "domainNamespace",
       "domainSlug",
       "domainVersion",
+      "namespace",
     ]) {
       if (q[key] != null) {
         const val = String(q[key]);
@@ -1009,17 +1180,31 @@ app.get(
     const domainId = q.domainNamespace && q.domainSlug
       ? { namespace: String(q.domainNamespace), slug: String(q.domainSlug), version: String(q.domainVersion ?? "1") }
       : null;
-    if (!projectId && !domainId) {
-      const err = /** @type {HttpError} */ (new Error("set projectNamespace+projectSlug OR domainNamespace+domainSlug"));
+    const namespaceScope = q.namespace ? String(q.namespace) : null;
+    const scopes = [projectId, domainId, namespaceScope].filter(Boolean).length;
+    if (scopes !== 1) {
+      const err = /** @type {HttpError} */ (new Error(
+        "set exactly one of projectNamespace+projectSlug, domainNamespace+domainSlug, or namespace",
+      ));
       err.status = 400;
       throw err;
     }
-    const args = projectId ? { projectId } : { domainId };
+    const args = projectId ? { projectId } : domainId ? { domainId } : { namespace: namespaceScope };
     return await call("validateProject", args);
   }),
 );
 
 const PATH_PARAM_MAX = 512;
+
+/** The `:namespace/:slug` pair a route names, checked before it reaches gRPC. @param {AppRequest} req */
+function namespaceSlugParams(req) {
+  const ns = String(req.params.namespace);
+  const slug = String(req.params.slug);
+  if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) throw badRequest("path param too long");
+  if (!isSafeNamespace(ns)) throw badRequest(`invalid namespace: ${JSON.stringify(ns)}`);
+  if (!isSafeNamespace(slug)) throw badRequest(`invalid slug: ${JSON.stringify(slug)}`);
+  return { ns, slug };
+}
 
 // List every entity scoped to a Domain via the server-side
 // EM->BC->Subdomain->Domain walk. Query:
@@ -1027,23 +1212,34 @@ const PATH_PARAM_MAX = 512;
 app.get(
   "/api/by-domain/:namespace/:slug",
   branchHandler(async (req) => {
-    const nsParam = String(req.params.namespace);
-    const slugParam = String(req.params.slug);
-    if (nsParam.length > PATH_PARAM_MAX || slugParam.length > PATH_PARAM_MAX) {
-      const err = /** @type {HttpError} */ (new Error("path param too long"));
-      err.status = 400;
-      throw err;
+    const { ns: nsParam, slug: slugParam } = namespaceSlugParams(req);
+    /** @param {string} name */
+    function scalarQuery(name) {
+      const value = req.query[name];
+      if (Object.keys(req.query).some((key) => key.startsWith(`${name}[`))) {
+        throw badRequest(`${name} must be a scalar query value`);
+      }
+      if (typeof value === "string") return value;
+      if (value === undefined) return undefined;
+      throw badRequest(`${name} must be a scalar query value`);
     }
-    if (!isSafeNamespace(nsParam)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(nsParam)}`));
-      err.status = 400;
-      throw err;
+    const version = scalarQuery("version") ?? "1";
+    if (!/^[1-9][0-9]*$/.test(version) || version.length > 20 || BigInt(version) > 18446744073709551615n) {
+      throw badRequest("version must be a positive uint64 decimal string");
     }
-    if (!isSafeNamespace(slugParam)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slugParam)}`));
-      err.status = 400;
-      throw err;
+    const latest = scalarQuery("latestVersionsOnly");
+    if (latest !== undefined && latest !== "true" && latest !== "false") {
+      throw badRequest("latestVersionsOnly must be true or false");
     }
+    const rawPageSize = scalarQuery("pageSize");
+    let pageSize;
+    if (rawPageSize !== undefined) {
+      if (!/^[1-9][0-9]*$/.test(rawPageSize) || rawPageSize.length > 10 || Number(rawPageSize) > 2147483647) {
+        throw badRequest("pageSize must be a positive int32");
+      }
+      pageSize = Number(rawPageSize);
+    }
+    const pageToken = scalarQuery("pageToken");
     const kinds = [];
     if (req.query.kinds) {
       for (const raw of String(req.query.kinds).split(",").filter(Boolean)) {
@@ -1062,10 +1258,12 @@ app.get(
       domainId: {
         namespace: nsParam,
         slug: slugParam,
-        version: "1",
+        version,
       },
       kinds,
-      latestVersionsOnly: true,
+      latestVersionsOnly: latest !== "false",
+      ...(pageSize !== undefined ? { pageSize } : {}),
+      ...(pageToken !== undefined ? { pageToken } : {}),
     });
   }),
 );
@@ -1192,6 +1390,105 @@ app.get(
       conflictFieldPaths: e.conflictFieldPaths ?? [],
     }));
     return { entries };
+  }),
+);
+
+// One entity's recorded revisions, newest first, for the Inspector's History
+// tab. Goes through branchHandler so a branch preview reads the branch's
+// history. `pageToken` is the changeset id the previous page ended on.
+app.get(
+  "/api/entity-history",
+  branchHandler(async (req) => {
+    /** @type {Record<string, string>} */
+    const q = {};
+    for (const key of ["namespace", "slug", "version", "pageToken"]) {
+      const raw = req.query[key];
+      if (raw == null || raw === "") continue;
+      const val = String(raw);
+      if (val.length > NAMESPACE_QUERY_MAX_LENGTH) throw badRequest(`${key} query value too long (max ${NAMESPACE_QUERY_MAX_LENGTH} chars)`);
+      if (!isSafeNamespace(val)) throw badRequest(`invalid value for ${key}: ${JSON.stringify(val)}`);
+      q[key] = val;
+    }
+    if (!q.namespace || !q.slug) throw badRequest("namespace and slug are required");
+    const kind = parseKindToken(String(req.query.kind ?? ""));
+    if (kind == null) throw badRequest(`unknown kind ${JSON.stringify(req.query.kind ?? "")}`);
+    const resp = /** @type {any} */ (await call("getEntityHistory", {
+      ref: { kind, id: { namespace: q.namespace, slug: q.slug, version: q.version ?? "1" } },
+      ...(q.pageToken ? { pageToken: q.pageToken } : {}),
+    }));
+    const revisions = (resp.revisions ?? []).map((/** @type {any} */ r) => ({
+      changesetId: r.changesetId ?? "",
+      author: r.author ?? "",
+      at: r.at ?? "",
+      rpc: r.rpc ?? "",
+      branch: r.branch ?? "",
+      kind: String(r.kind ?? "KIND_UNSPECIFIED"),
+      before: r.before ? decodeAnnotations(r.before) : null,
+      after: r.after ? decodeAnnotations(r.after) : null,
+    }));
+    return { revisions, nextPageToken: resp.nextPageToken ?? "" };
+  }),
+);
+
+/** @param {any} c */
+function changesetView(c) {
+  return {
+    id: c.id ?? "",
+    author: c.author ?? "",
+    at: c.at ?? "",
+    message: c.message ?? "",
+    branch: c.branch ?? "",
+    rpc: c.rpc ?? "",
+    ops: (c.ops ?? []).map((/** @type {any} */ op) => ({
+      kind: String(op.kind ?? "KIND_UNSPECIFIED"),
+      entity: {
+        kind: String(op.entity?.kind ?? "ENTITY_KIND_UNSPECIFIED"),
+        namespace: op.entity?.id?.namespace ?? "",
+        slug: op.entity?.id?.slug ?? "",
+        version: op.entity?.id?.version ?? "",
+      },
+    })),
+  };
+}
+
+// A namespace's changesets, newest first, for the History panel.
+// ListChangesets ignores the branch header and filters on its own `branch`
+// field, so a branch preview passes the branch there to list what the branch
+// did; baseline sends none and gets baseline and branch changesets alike.
+app.get(
+  "/api/changesets",
+  branchHandler(async (req) => {
+    const rawNamespace = String(req.query.namespace ?? "");
+    if (!rawNamespace) throw badRequest("namespace is required");
+    if (rawNamespace.length > NAMESPACE_QUERY_MAX_LENGTH) throw badRequest(`namespace query value too long (max ${NAMESPACE_QUERY_MAX_LENGTH} chars)`);
+    if (!isSafeNamespace(rawNamespace)) throw badRequest(`invalid namespace: ${JSON.stringify(rawNamespace)}`);
+    const pageToken = String(req.query.pageToken ?? "");
+    if (pageToken && !isChangesetId(pageToken)) throw badRequest(`invalid pageToken: ${JSON.stringify(pageToken)}`);
+    const rawPageSize = req.query.pageSize;
+    let pageSize;
+    if (rawPageSize != null && rawPageSize !== "") {
+      pageSize = Number(rawPageSize);
+      if (!Number.isInteger(pageSize) || pageSize <= 0) throw badRequest("pageSize must be a positive integer");
+      pageSize = Math.min(pageSize, 500);
+    }
+    const branch = currentBranch();
+    const resp = /** @type {any} */ (await call("listChangesets", {
+      namespace: rawNamespace,
+      ...(pageToken ? { pageToken } : {}),
+      ...(pageSize ? { pageSize } : {}),
+      ...(branch ? { branch } : {}),
+    }));
+    return { changesets: (resp.changesets ?? []).map(changesetView), nextPageToken: resp.nextPageToken ?? "" };
+  }),
+);
+
+app.get(
+  "/api/changesets/:id",
+  handler(async (req) => {
+    const id = String(req.params.id ?? "");
+    if (!isChangesetId(id)) throw badRequest(`invalid changeset id: ${JSON.stringify(id)}`);
+    const resp = /** @type {any} */ (await call("getChangeset", { id }));
+    return { changeset: resp.changeset ? changesetView(resp.changeset) : null };
   }),
 );
 
@@ -1348,22 +1645,14 @@ app.get(
 app.get(
   "/api/event-model/:namespace/:slug",
   branchHandler(async (req) => {
-    const ns = String(req.params.namespace);
-    const slug = String(req.params.slug);
-    if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) {
-      const err = /** @type {HttpError} */ (new Error("path param too long"));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(ns)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(ns)}`));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(slug)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slug)}`));
-      err.status = 400;
-      throw err;
+    const { ns, slug } = namespaceSlugParams(req);
+    const rawAsOf = String(req.query.asOf ?? "");
+    if (rawAsOf) {
+      if (!isChangesetId(rawAsOf)) throw badRequest(`invalid asOf: ${JSON.stringify(rawAsOf)}`);
+      // The server rewinds baseline history only and refuses a branch
+      // header with asOfChangeset, so the mix is refused here with a 400.
+      if (currentBranch()) throw badRequest("asOf reads baseline history only; drop branch");
+      return eventModelAsOf(ns, slug, rawAsOf);
     }
     const emResp = /** @type {any} */ (await call("getEntity", {
       kind: 12,
@@ -1506,6 +1795,52 @@ app.get(
         error: maskError(err),
       });
     }
+    // Domains and Subdomains declared in this namespace, even when they are
+    // not on the realizes chain: a Domain declared in a context's namespace
+    // is the subject of a finding, and a finding on an entity that is not
+    // loaded cannot link anywhere. Then the Project each loaded Domain names.
+    try {
+      /** @param {unknown} e */
+      const slugKey = (e) => envelopeKey(e)?.replace(/@[^@]*$/, "");
+      const loaded = new Set(knowledge.map(slugKey));
+      const declared = await paginateList((pageToken) => ({
+        namespaces: [ns],
+        kinds: [17, 18], // DOMAIN, SUBDOMAIN
+        latestVersionsOnly: true,
+        pageSize: 500,
+        pageToken,
+      }));
+      for (const ent of declared) {
+        const key = slugKey(ent);
+        if (key && loaded.has(key)) continue;
+        if (key) loaded.add(key);
+        knowledge.push(ent);
+      }
+      /** @type {Map<string, unknown>} */
+      const projectRefs = new Map();
+      for (const ent of knowledge) {
+        const pid = /** @type {any} */ (ent)?.domain?.project?.id;
+        if (pid?.namespace && pid?.slug) {
+          projectRefs.set(`${pid.namespace}/${pid.slug}`, { ...pid, version: pid.version || "1" });
+        }
+      }
+      const projects = await limitedMap(
+        [...projectRefs.values()],
+        GRPC_FANOUT_CONCURRENCY,
+        async (/** @type {unknown} */ id) => {
+          try {
+            const r = /** @type {any} */ (await call("getEntity", { kind: 20, id })); // PROJECT
+            return r.entity;
+          } catch (err) {
+            logEvent("warn", "fanout_project_fetch_failed", { kind: 20, id: /** @type {any} */ (id), error: maskError(err) });
+            return null;
+          }
+        },
+      );
+      for (const p of projects) if (p?.project) knowledge.push(p);
+    } catch (err) {
+      logEvent("warn", "namespace_strategic_fetch_failed", { error: maskError(err) });
+    }
     return {
       entities: decodeAnnotations([
         ...entities,
@@ -1513,6 +1848,76 @@ app.get(
         ...knowledge,
       ]),
     };
+  }),
+);
+
+/** @param {any} envelope @returns {string | undefined} */
+function envelopeKey(envelope) {
+  const [field, body] = Object.entries(envelope ?? {}).find(([k]) => k !== "system") ?? [];
+  const kind = field ? ENTITY_KIND_SNAKE[field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] : undefined;
+  const id = /** @type {any} */ (body)?.id;
+  return kind != null && id ? `${kind}:${id.namespace}/${id.slug}@${id.version}` : undefined;
+}
+
+// The board right after a past changeset. Only GetEventModelProjection can
+// rewind, so the members and halo come from its closure instead of live
+// getEntity reads. The knowledge graph is left out, because a live read
+// would mix the current domain map into a past board.
+/** @param {string} ns @param {string} slug @param {string} asOf */
+async function eventModelAsOf(ns, slug, asOf) {
+  const resp = /** @type {any} */ (await call("getEventModelProjection", {
+    id: { namespace: ns, slug, version: "1" },
+    // Cross-model, so the halo's foreign source events are in the closure.
+    includeCrossModel: true,
+    asOfChangeset: asOf,
+  }));
+  const em = resp.projection?.eventModel;
+  if (!em) {
+    const err = /** @type {HttpError} */ (new Error(`event model not found: ${ns}/${slug}`));
+    err.status = 404;
+    throw err;
+  }
+  if (resp.truncated) logEvent("warn", "as_of_projection_truncated", { namespace: ns, slug, as_of: asOf });
+  /** @type {Map<string, unknown>} */
+  const byKey = new Map();
+  for (const envelope of Object.values(resp.projection.entities ?? {})) {
+    const key = envelopeKey(envelope);
+    if (key) byKey.set(key, envelope);
+  }
+  // Same selection as the live route: the members, then foreign events
+  // that member read models project from.
+  const memberRefs = (em.members ?? []).filter((/** @type {any} */ m) => m.id);
+  const members = memberRefs
+    .map((/** @type {any} */ m) => byKey.get(`${kindEnumToNumber(m.kind)}:${m.id.namespace}/${m.id.slug}@${m.id.version}`))
+    .filter(Boolean);
+  /** @type {Map<string, unknown>} */
+  const halo = new Map();
+  let haloMissing = false;
+  for (const member of members) {
+    for (const src of /** @type {any} */ (member).readModel?.sourceEvents ?? []) {
+      const id = src.id;
+      if (!id || id.namespace === ns) continue;
+      const key = `${ENTITY_KIND_NUMBER.ENTITY_KIND_EVENT}:${id.namespace}/${id.slug}@${id.version}`;
+      const event = byKey.get(key);
+      if (event) halo.set(key, event);
+      else haloMissing = true;
+    }
+  }
+  const entities = decodeAnnotations([{ eventModel: em }, ...members, ...halo.values()]);
+  // Live reads each member and halo event by id, but there is no as-of read by
+  // id, so a clipped closure can only be flagged. Clipping deep refs alone
+  // leaves the board whole, so only a missing member or halo event counts.
+  if (resp.truncated && (members.length < memberRefs.length || haloMissing)) return { entities, incomplete: true };
+  return { entities };
+}
+
+// The board as the YAML manifests `trogon-atlas apply` reads, so a saved
+// board can be loaded back into an Atlas.
+app.get(
+  "/api/event-model/:namespace/:slug/manifests",
+  branchHandler(async (req) => {
+    const { ns, slug } = namespaceSlugParams(req);
+    return call("exportEventModelManifests", { id: { namespace: ns, slug, version: "1" } });
   }),
 );
 
@@ -1533,6 +1938,137 @@ app.get(
       namespaces,
       limit: 25,
     });
+  }),
+);
+
+const SOURCE_QUERIES = new Map([
+  ["registration", "getSourceRegistration"],
+  ["registrations", "listSourceRegistrations"],
+  ["snapshot", "getSourceSnapshot"],
+  ["snapshots", "listSourceSnapshots"],
+  ["mapping", "getSourceMapping"],
+  ["mappings", "listSourceMappings"],
+  ["overlay", "getSourceOverlay"],
+  ["run", "getSourceRun"],
+  ["runs", "listSourceRuns"],
+  ["run-results", "listSourceRunResults"],
+  ["run-operations", "listSourceRunOperations"],
+]);
+
+app.get("/api/source/:query", branchHandler((req) => {
+  const method = SOURCE_QUERIES.get(String(req.params.query));
+  const reject = () => { throw Object.assign(new TypeError("invalid source query request"), { status: 400 }); };
+  if (!method || req.query.asOf !== undefined) return reject();
+  if (typeof req.query.request !== "string" || Buffer.byteLength(req.query.request) > 65536) return reject();
+  let input;
+  try { input = JSON.parse(req.query.request); } catch { return reject(); }
+  const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+  validateSourceRequest(requestType, input);
+  return call(method, input);
+}));
+
+const CATALOG_QUERIES = new Map([
+  ["decision-amendments", "listDecisionAmendments"],
+  ["subject-decisions", "listSubjectDecisions"],
+  ["subject-documents", "listSubjectDocuments"],
+  ["decision-detail", "getDecisionDetail"],
+  ["document-detail", "getDocumentDetail"],
+  ["incoming-decisions", "listIncomingDecisionDeclarations"],
+  ["incoming-documents", "listIncomingDocumentDeclarations"],
+  ["human-interaction", "inspectHumanInteraction"],
+  ["design-graph-detail", "getDesignGraphDetail"],
+  ["subject-design-graphs", "listSubjectDesignGraphs"],
+  ["design-topology", "traverseDesignGraphTopology"],
+  ["incoming-subflows", "listIncomingDesignGraphSubflows"],
+]);
+
+const GLOSSARY_QUERIES = new Map([
+  ["entries", "listGlossaryEntries"],
+  ["term", "getGlossaryTerm"],
+  ["sources", "inspectGlossarySources"],
+  ["compare", "compareGlossaries"],
+  ["refresh", "inspectGlossaryRefresh"],
+  ["usage", "getEntity"],
+]);
+
+app.get("/api/glossary/:query", branchHandler((req) => {
+  const method = GLOSSARY_QUERIES.get(String(req.params.query));
+  const reject = () => { throw Object.assign(new TypeError("invalid glossary inspection request"), { status: 400 }); };
+  if (!method || req.query.asOf !== undefined) return reject();
+  if (typeof req.query.request !== "string" || Buffer.byteLength(req.query.request) > 65536) return reject();
+  let input;
+  try { input = JSON.parse(req.query.request); } catch { return reject(); }
+  const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+  try { validateSourceRequest(requestType, input); } catch { return reject(); }
+  if (method === "getEntity" && (!/^[1-9][0-9]*$/.test(String(input.id?.version ?? "")) || input.kind === "ENTITY_KIND_UNSPECIFIED" || input.kind === 0)) return reject();
+  return call(method, input);
+}));
+
+app.get(
+  "/api/catalog/:query",
+  branchHandler((req) => {
+    const method = CATALOG_QUERIES.get(String(req.params.query));
+    /** @param {string} message */
+    const reject = (message) => {
+      const error = /** @type {HttpError} */ (new Error(message));
+      error.status = 400;
+      throw error;
+    };
+    if (!method) return reject("unknown catalog query");
+    if (req.query.asOf !== undefined) return reject("historical catalog inspection unavailable");
+    let input;
+    try { input = JSON.parse(String(req.query.request ?? "")); }
+    catch { return reject("request must be a JSON object"); }
+    const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+    validateCatalogRequest(requestType, input);
+    return call(method, input);
+  }),
+);
+
+const RESPONSIBILITY_QUERIES = new Map([
+  ["subject-assignments", "listSubjectAssignments"],
+  ["assignee-responsibilities", "listAssigneeResponsibilities"],
+  ["team-members", "listTeamMembers"],
+  ["person-teams", "listPersonTeams"],
+  ["team-contacts", "getTeamContacts"],
+]);
+
+app.get(
+  "/api/responsibility/:query",
+  branchHandler((req) => {
+    const method = RESPONSIBILITY_QUERIES.get(String(req.params.query));
+    /** @param {string} message */
+    const reject = (message) => {
+      const error = /** @type {HttpError} */ (new Error(message));
+      error.status = 400;
+      throw error;
+    };
+    if (!method) return reject("unknown responsibility query");
+    if (req.query.asOf !== undefined) return reject("historical responsibility inspection unavailable");
+    let input;
+    try {
+      input = JSON.parse(String(req.query.request ?? ""));
+    } catch {
+      return reject("request must be a JSON object");
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input)) return reject("request must be a JSON object");
+    const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+    validateResponsibilityRequest(requestType, input);
+    return call(method, input);
+  }),
+);
+
+app.get(
+  "/api/data-product/:namespace/:slug/inspect",
+  branchHandler((req) => {
+    const { ns, slug } = namespaceSlugParams(req);
+    const version = String(req.query.version ?? "");
+    if (!/^[1-9][0-9]*$/.test(version)) {
+      const error = /** @type {HttpError} */ (new Error("inspection requires an exact positive version"));
+      error.status = 400;
+      throw error;
+    }
+    return call("inspectDataProduct", { product: { id: { namespace: ns, slug, version } } });
   }),
 );
 
@@ -1767,6 +2303,19 @@ app.use("/api", (/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
 // server takes this role in development.
 const distDir = path.resolve(__dirname, "../dist");
 if (fs.existsSync(distDir)) {
+  // express-rate-limit rather than `rateLimit`: CodeQL only recognizes
+  // known limiter packages as guarding these disk reads.
+  if (RATE_LIMIT_MAX > 0) {
+    app.use(
+      expressRateLimit({
+        windowMs: RATE_LIMIT_WINDOW_MS,
+        limit: STATIC_RATE_LIMIT_MAX,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: "rate limit exceeded" },
+      }),
+    );
+  }
   app.use(express.static(distDir));
   // SPA shell only for document navigations. Script/module fetches send
   // Accept without text/html (often bare */*); returning index.html for
@@ -1794,7 +2343,9 @@ app.use((/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
   res.status(404).end();
 });
 
-export { app, call };
+markLive();
+
+export { app, beginShutdown, call, checkUpstream, decodeAnnotations };
 
 if (process.env.NODE_ENV !== "test") {
   // Crash loudly rather than silently: an unhandled rejection that reaches
@@ -1824,8 +2375,13 @@ if (process.env.NODE_ENV !== "test") {
     });
   });
 
+  void checkUpstream();
+  const upstreamCheck = setInterval(() => void checkUpstream(), UPSTREAM_CHECK_INTERVAL_MS);
+
   /** @param {string} signal */
   function shutdown(signal) {
+    beginShutdown();
+    clearInterval(upstreamCheck);
     logEvent("info", "studio_bridge_shutdown", { signal, activeSSECount: activeSSEResponses.size });
     // Drain active SSE streams with a fatal event before closing the HTTP
     // server. Without this, server.close() hard-drops them mid-stream and

@@ -14,7 +14,10 @@ use std::sync::{
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use trogon_atlas_proto as pb;
-use trogon_atlas_server::batch_recovery::{recover_at_startup, spawn_sweep, SWEEP_INTERVAL};
+use trogon_atlas_server::{
+    batch_recovery::{recover_at_startup, spawn_sweep, SWEEP_INTERVAL},
+    metrics::ServerMetrics,
+};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,
@@ -91,6 +94,12 @@ impl Store for GatedRecoveryStore {
     ) -> trogon_atlas_store::StoreResult<()> {
         self.inner.release_namespace(id).await
     }
+    async fn delete_namespace(
+        &self,
+        id: &trogon_atlas_core::NamespaceId,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::NamespaceRecord> {
+        self.inner.delete_namespace(id).await
+    }
 
     async fn promote_namespace(
         &self,
@@ -104,6 +113,33 @@ impl Store for GatedRecoveryStore {
         id: &trogon_atlas_core::NamespaceId,
     ) -> trogon_atlas_store::StoreResult<Option<trogon_atlas_store::NamespaceRecord>> {
         self.inner.get_namespace(id).await
+    }
+    async fn get_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionState> {
+        self.inner.get_protection(identity).await
+    }
+
+    async fn put_protection(
+        &self,
+        record: &trogon_atlas_store::ProtectionRecord,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionRevision> {
+        self.inner.put_protection(record).await
+    }
+
+    async fn delete_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+        expected: trogon_atlas_store::ProtectionRevision,
+    ) -> trogon_atlas_store::StoreResult<()> {
+        self.inner.delete_protection(identity, expected).await
+    }
+
+    async fn list_protections(
+        &self,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionListing> {
+        self.inner.list_protections().await
     }
 
     async fn resolve_namespace(
@@ -185,6 +221,25 @@ impl Store for GatedRecoveryStore {
         ctx: WriteContext<'_>,
     ) -> trogon_atlas_store::StoreResult<()> {
         self.inner.delete(kind, id, expected_etag, ctx).await
+    }
+
+    async fn referenced_targets(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.inner.referenced_targets(targets, branch).await
+    }
+
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+        overlay: &[(pb::EntityKey, Option<pb::Entity>)],
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.inner
+            .referenced_targets_with_overlay(targets, branch, overlay)
+            .await
     }
 
     async fn list(
@@ -344,7 +399,7 @@ impl Store for GatedRecoveryStore {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_at_startup_skips_a_non_writer() {
     let store = GatedRecoveryStore::new(false).await;
-    let report = recover_at_startup(&store).await;
+    let report = recover_at_startup(&store, &ServerMetrics::default()).await;
     assert_eq!(store.recover_calls.load(Ordering::Acquire), 0);
     assert_eq!(report, BatchRecoveryReport::default());
 }
@@ -352,7 +407,7 @@ async fn recover_at_startup_skips_a_non_writer() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_at_startup_runs_on_the_writer() {
     let store = GatedRecoveryStore::new(true).await;
-    recover_at_startup(&store).await;
+    recover_at_startup(&store, &ServerMetrics::default()).await;
     assert_eq!(store.recover_calls.load(Ordering::Acquire), 1);
 }
 
@@ -374,7 +429,7 @@ async fn sweep_skips_ticks_while_not_the_writer_and_resumes_once_it_is() {
     let store = Arc::new(GatedRecoveryStore::new(false).await);
     tokio::time::pause();
     let recover_calls = store.recover_calls.clone();
-    let _sweep = spawn_sweep(store.clone());
+    let _sweep = spawn_sweep(store.clone(), ServerMetrics::default());
     // Let the sweep task run its first (immediate) tick and register its
     // real next-tick timer before the clock jumps, or that registration
     // happens post-jump and the interval silently re-anchors to "now".

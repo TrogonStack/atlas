@@ -2,12 +2,14 @@
 
 Umbrella chart deploying the event model stack to Kubernetes:
 
-- `server` (alias for trogon-atlas-server): the gRPC service (port 50069)
-  with an optional Prometheus metrics endpoint (port 9100).
+- `server` (alias for trogon-atlas-server): the gRPC service (`private` port 50069),
+  which also serves an MCP endpoint over Streamable HTTP at `/mcp` on that
+  same port. Metrics and traces are pushed over OTLP; there is no scrape
+  endpoint.
 - `studio` (alias for trogon-atlas-studio): the web UI and gateway
-  (port 80), reaching the server over gRPC.
+  (`public` port 80), reaching the server over gRPC.
 
-Both are standalone charts under `../trogon-atlas-server` and
+Each is a standalone chart under `../trogon-atlas-server` and
 `../trogon-atlas-studio`; this chart wires them together with local
 `file://` dependencies and the `server.enabled`/`studio.enabled`
 conditions. Either can also be installed on its own, without this chart.
@@ -22,8 +24,19 @@ with JetStream enabled.
 helm dependency update devops/helm/charts/trogon-atlas
 helm install trogon-atlas devops/helm/charts/trogon-atlas \
   --set server.config.natsUrl=nats://my-nats:4222 \
-  --set server.auth.token.value=change-me
+  --set server.auth.token.value=change-me \
+  --set server.image.tag=canary \
+  --set studio.image.tag=canary
 ```
+
+Every push to `main` publishes the images tagged `canary` and with the full
+commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
+which has no published image yet.
+
+The images under `ghcr.io/trogonstack/atlas/` are deprecated. They stopped
+receiving builds in October 2026, keep their last `canary` only until nothing
+pulls it, and will then be deleted. Pull from
+`ghcr.io/trogonstack/images/atlas/` instead.
 
 `helm dependency update` resolves the `file://` dependencies into
 `charts/*.tgz`; it needs rerunning whenever a subchart's `Chart.yaml`
@@ -33,9 +46,9 @@ gitignored, not vendored.
 ## Aliases
 
 Every value under `server.*` is trogon-atlas-server's own top-level
-`values.yaml`, addressed through the `server` alias; `studio.*` is the
-same for trogon-atlas-studio. See each subchart's README for its full
-value reference:
+`values.yaml`, addressed through the `server` alias; `studio.*` is the same
+for trogon-atlas-studio. See each
+subchart's README for its full value reference:
 
 - [trogon-atlas-server](../trogon-atlas-server/README.md)
 - [trogon-atlas-studio](../trogon-atlas-studio/README.md)
@@ -56,13 +69,25 @@ feeds. To share the server's token Secret, point
 `server.auth.token.existingSecret` or `server.auth.tokensFile.existingSecret`
 uses.
 
+## Upgrading from 1.0.0
+
+1.0.1 carries trogon-atlas-server 1.0.1, which removes `server.metrics.prometheus.enabled` and the `/-/metrics` scrape it served. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-100).
+
+## Upgrading from 0.x
+
+1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+
+Port names now follow who reaches them: the server's `grpc` port is `private` and studio's `http` port is `public`, on the containers and the Services. `server.service.grpcPort` is now `server.service.port`, and `studio.server.grpcPort` is now `studio.server.port`. Update any NetworkPolicy, ServiceMonitor, Ingress, or Gateway route that names either port. See the [studio upgrade notes](../trogon-atlas-studio/README.md#upgrading-from-0x) too.
+
 ## Notable values
 
 | Value | Default | Purpose |
 |---|---|---|
-| `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories in both subcharts |
+| `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories in every subchart |
 | `server.enabled` | `true` | install trogon-atlas-server |
 | `studio.enabled` | `true` | install trogon-atlas-studio |
+| `server.mcp.enabled` | `true` | serve MCP at `/mcp` from trogon-atlas-server |
+| `server.config.otlpEndpoint` | `""` | OTLP gRPC endpoint the server pushes traces and metrics to |
 
 See the subchart READMEs linked above for every `server.*` and `studio.*`
 value.

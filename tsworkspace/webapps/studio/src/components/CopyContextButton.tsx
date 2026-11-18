@@ -1,5 +1,5 @@
 import { AlertCircle, Check, Copy } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -41,6 +41,11 @@ export function CopyContextButton({
   className?: string;
 }) {
   const [state, setCopyState] = useState<CopyState>('idle');
+  useEffect(() => {
+    if (state === 'idle') return;
+    const timer = setTimeout(() => setCopyState('idle'), state === 'copied' ? 1500 : 2500);
+    return () => clearTimeout(timer);
+  }, [state]);
   return (
     <Button
       variant="outline"
@@ -49,13 +54,7 @@ export function CopyContextButton({
       title={title}
       onClick={async () => {
         const ok = await copyText(getText());
-        if (ok) {
-          setCopyState('copied');
-          setTimeout(() => setCopyState('idle'), 1500);
-        } else {
-          setCopyState('failed');
-          setTimeout(() => setCopyState('idle'), 2500);
-        }
+        setCopyState(ok ? 'copied' : 'failed');
       }}
     >
       {state === 'copied' ? <Check /> : state === 'failed' ? <AlertCircle /> : <Copy />}

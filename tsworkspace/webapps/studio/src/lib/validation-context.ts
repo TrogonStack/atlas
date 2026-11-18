@@ -1,5 +1,15 @@
 import type { Issue } from '@/lib/issues';
-import { asId, type Entity, type EntityId, type EntityKind, entityKey, type Model, wireKind } from '@/lib/model';
+import {
+  asId,
+  domainOf,
+  type Entity,
+  type EntityId,
+  type EntityKind,
+  entityKey,
+  type Model,
+  realizesOf,
+  wireKind,
+} from '@/lib/model';
 
 type ContextRef = { kind: EntityKind | 'slice'; id: EntityId };
 
@@ -24,6 +34,18 @@ const referenceFields: Record<string, ContextRef['kind']> = {
   upstream: 'boundedContext',
   realizes: 'subdomain',
   domain: 'domain',
+  project: 'project',
+  specification: 'specification',
+  schema: 'schema',
+  channel: 'channel',
+  store: 'dataStore',
+  team: 'team',
+  person: 'person',
+  product: 'dataProduct',
+  library: 'typeLibrary',
+  typeLibrary: 'typeLibrary',
+  component: 'component',
+  externalSystem: 'externalSystem',
 };
 
 function identity(ref: ContextRef): string {
@@ -50,7 +72,9 @@ function references(entity: Entity): ContextRef[] {
     const kind = wireKind(body.kind) ?? impliedKind;
     if (kind && body.id) add(kind, body.id);
     for (const [field, child] of Object.entries(body)) {
-      if (['id', 'data', 'metadata', 'fields', 'schema', 'supersedes'].includes(field)) continue;
+      if (['id', 'metadata', 'fields', 'supersedes', 'artifacts', 'expectedSelector'].includes(field)) continue;
+      if (field === 'data' && entity.kind !== 'dataProduct') continue;
+      if (field === 'schema' && entity.kind !== 'specification' && entity.kind !== 'dataProduct') continue;
       visit(child, referenceFields[field]);
     }
   };
@@ -86,11 +110,91 @@ function storyboardSlices(entity: Entity): ContextRef[] {
   });
 }
 
+// Open questions and assumptions are a register of open items, not defects, so an agent that
+// "repairs" them would change the model to hide a question only a human can settle.
+const annotationCodes = new Set(['OPEN_QUESTION_PRESENT', 'ASSUMPTION_PRESENT']);
+
+const annotationInstructions = [
+  'Nothing in the model is broken. The finding reports an annotation that only a human can settle: an open question needs an answer, and an assumption needs confirmation or correction. Do not change behavior, references, or other definitions to clear the finding.',
+  'Ask the human for the answer or the confirmation, and its source. Then edit the annotation or remove it once resolved, rerun validation for the affected scope, and report the annotation changed and the validation results. If the human cannot settle it yet, leave the annotation in place.',
+];
+
+const fetchAndPreserveInstruction =
+  'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.';
+
+const applyAndReportInstruction =
+  'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.';
+
+const repairInstructions = [
+  'For responsibility findings, preserve the complete typed selector, exact version, owner UID, member kind and ID, port direction and ID, occurrence ID and optional artifact digest. Fetch current authorized native content before repairing stale selections; never infer replacements or inherited ownership from membership.',
+  fetchAndPreserveInstruction,
+  'For temporal findings, inspect the full ordered storyboard, fetch the definitions of the slices and events it lists that bear on the finding, and check the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
+  applyAndReportInstruction,
+];
+
+const strategicKinds: ReadonlySet<EntityKind> = new Set(['boundedContext', 'domain', 'subdomain']);
+
+const strategicInstructions = [
+  fetchAndPreserveInstruction,
+  'This is a strategic finding about the problem space and the contexts that realize it. The problem space (Project, Domain and Subdomains) lives in one namespace whose slug equals the Domain. Each context namespace holds only its BoundedContext, which realizes a subdomain across namespaces. A Domain declared in a context namespace is misplaced: never create a Domain per context namespace, and do not move the problem space into a context.',
+  'When a context realizes subdomains of different classifications, split the context along classification lines instead of reclassifying a subdomain to clear the finding. Use the loaded referrers (subdomains pointing at a Domain, contexts realizing a subdomain, contexts sharing the Domain namespace) to see what depends on the subject, and fetch the current definition of anything not loaded before choosing a repair.',
+  'Make the change with the Atlas MCP tools or CLI, because Studio is a review surface and does not edit the model. Afterward run `validate_project` for the problem-space namespace or the project, since strategic findings are reported once at store level, and report the entities changed, the reason, and any remaining findings. See docs/how-to/repair-validation-findings.md and docs/explanation/validation-repair-patterns.md ("One problem space, contexts realize across namespaces").',
+  applyAndReportInstruction,
+];
+
+const slugIdentity = (id: EntityId) => `${id.namespace}/${id.slug}`;
+
+// What points at a strategic subject, from the entities the model loaded:
+// the outgoing references alone cannot show that a Domain has subdomains or
+// that a context shares its namespace.
+function strategicNeighbors(model: Model, subject: Entity): Entity[] {
+  const subdomains = model.byKind.get('subdomain') ?? [];
+  const contexts = model.byKind.get('boundedContext') ?? [];
+  const domains = model.byKind.get('domain') ?? [];
+  const realizedBy = (subdomain: Entity) =>
+    contexts.filter((bc) => realizesOf(bc).some((id) => slugIdentity(id) === slugIdentity(subdomain.id)));
+  const inNamespace = (entities: Entity[]) => entities.filter((entity) => entity.id.namespace === subject.id.namespace);
+  const pinned = (kind: EntityKind, id: EntityId | undefined) => {
+    const entity = id && model.byKey.get(entityKey(kind, id));
+    return entity ? [entity] : [];
+  };
+
+  if (subject.kind === 'domain') {
+    const children = subdomains.filter((sd) => {
+      const parent = domainOf(sd);
+      return parent && slugIdentity(parent) === slugIdentity(subject.id);
+    });
+    return [...children, ...children.flatMap(realizedBy), ...inNamespace(contexts)];
+  }
+  if (subject.kind === 'subdomain') {
+    const parent = domainOf(subject);
+    return [
+      ...realizedBy(subject),
+      ...pinned('domain', parent),
+      ...subdomains.filter((sd) => {
+        const other = domainOf(sd);
+        return sd.key !== subject.key && parent && other && slugIdentity(other) === slugIdentity(parent);
+      }),
+    ];
+  }
+  const realized = realizesOf(subject).flatMap((id) => pinned('subdomain', id));
+  const parents = realized.flatMap((sd) => pinned('domain', domainOf(sd)));
+  return [
+    ...realized,
+    ...parents,
+    ...inNamespace(domains),
+    ...inNamespace(subdomains),
+    ...realized.flatMap(realizedBy).filter((bc) => bc.key !== subject.key),
+  ];
+}
+
 export function validationFixPrompt(
   model: Model,
   issue: Issue,
   options: { branch?: string; momentKey?: string; scopePath?: string } = {},
 ): string {
+  const annotation = annotationCodes.has(issue.code);
+  const strategic = issue.ruleCategory === 'strategic';
   const selected = new Map<string, Entity>();
   const referenced = new Map<string, ContextRef>();
   const refsByKey = new Map(model.entities.map((entity) => [entity.key, references(entity)]));
@@ -134,20 +238,27 @@ export function validationFixPrompt(
       )
     ) {
       include(storyboard);
-      for (const ref of storyboardSlices(storyboard)) {
-        remember(ref);
-        for (const slice of resolve(model, ref)) include(slice);
-      }
+      for (const ref of storyboardSlices(storyboard)) remember(ref);
     }
   }
 
   if (issue.subject || moment) {
-    for (let depth = 0; depth < 2; depth += 1) {
-      const refs = [...referenced.values()];
-      for (const ref of refs) for (const entity of resolve(model, ref)) include(entity);
+    const hopSources = [issue.subject ? model.byKey.get(identity(issue.subject)) : undefined, moment];
+    for (const source of hopSources) {
+      if (!source) continue;
+      const slicesOfStoryboard = source.kind === 'storyboard';
+      for (const ref of refsByKey.get(source.key) ?? []) {
+        if (slicesOfStoryboard && ref.kind === 'slice') continue;
+        for (const entity of resolve(model, ref)) include(entity);
+      }
     }
   } else {
     for (const entity of model.byKind.get('eventModel') ?? []) include(entity);
+  }
+
+  const strategicSubject = issue.subject ? model.byKey.get(identity(issue.subject)) : undefined;
+  if (strategicSubject && strategicKinds.has(strategicSubject.kind)) {
+    for (const entity of strategicNeighbors(model, strategicSubject)) include(entity);
   }
 
   const missing = [...referenced.values()].filter((ref) => resolve(model, ref).length === 0).map(identity);
@@ -159,11 +270,9 @@ export function validationFixPrompt(
   const json = (value: unknown) => `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 
   return [
-    'Fix this validation finding in the Eventmodel project using the Eventmodel CLI or MCP tools.',
+    `${annotation ? 'Resolve' : 'Fix'} this validation finding in the Atlas project using the \`trogon-atlas\` CLI or the \`trogon-atlas-mcp\` MCP tools.`,
     'Re-read the current model and validation results in the specified branch and scope before editing. The snapshot below may be stale or incomplete.',
-    'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
-    'For temporal findings, inspect the full ordered storyboard, its slice definitions, and the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
-    'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.',
+    ...(annotation ? annotationInstructions : strategic ? strategicInstructions : repairInstructions),
     '',
     '## Scope',
     json({
@@ -207,7 +316,7 @@ export function validationFixPrompt(
     '',
     '## References to fetch',
     json({ notLoaded: missing, loadedButOmitted: omitted }),
-    'This is a focused snapshot, not the entire model. Follow relevant references in the raw definitions and fetch any additional current definitions needed for the repair. An empty reference list does not prove the model is complete.',
+    'This is a focused snapshot of the subject and its direct references, not the entire model. Follow relevant references in the raw definitions and fetch any additional current definitions needed for the repair. An empty reference list does not prove the model is complete.',
   ]
     .filter((line) => line !== '')
     .join('\n\n');

@@ -1,0 +1,14 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: carrier-dispatch-worker
+  namespace: acme-fulfillment
+spec:
+  calls:
+  - id:
+      namespace: acme-fulfillment
+      slug: acme-shipping-carrier
+      version: '1'
+  doc: Dispatches the order to the carrier and records delivery confirmation.
+  docTrigger: A fulfillment queue row appears.
+  title: Carrier dispatch worker

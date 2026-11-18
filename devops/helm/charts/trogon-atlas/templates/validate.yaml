@@ -13,6 +13,6 @@
 {{- $studioAuth := .Values.studio.auth }}
 {{- $hasStudioToken := or $studioAuth.token.value $studioAuth.token.existingSecret }}
 {{- if and $hasServerAuth (not $serverAuth.insecureAllowAnonymous) (not $hasStudioToken) }}
-{{- fail "studio.auth.token: required when studio.enabled and server.auth is configured. Set studio.auth.token.value or studio.auth.token.existingSecret so the studio Deployment gets TROGON_ATLAS_AUTH_TOKEN; otherwise /api/info readiness fails with UNAUTHENTICATED. Standalone trogon-atlas-server and trogon-atlas-studio installs cannot share a Secret implicitly; set studio.auth.token.existingSecret to the same Secret if you want to share the server's token." }}
+{{- fail "studio.auth.token: required when studio.enabled and server.auth is configured. Set studio.auth.token.value or studio.auth.token.existingSecret so the studio Deployment gets TROGON_ATLAS_AUTH_TOKEN; otherwise the server refuses the bridge's own calls with UNAUTHENTICATED: /api/info fails and, unless studio.auth.passthrough is on, so does the background upstream check behind /-/readiness, which keeps the studio pod from ever turning ready. Standalone trogon-atlas-server and trogon-atlas-studio installs cannot share a Secret implicitly; set studio.auth.token.existingSecret to the same Secret if you want to share the server's token." }}
 {{- end }}
 {{- end }}

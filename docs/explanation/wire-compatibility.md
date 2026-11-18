@@ -1,10 +1,24 @@
 # Wire compatibility and mixed-version operation
 
-The trogon-atlas CLI, the MCP adapter, the Studio gateway and the server ship from one tree,
-but they are not upgraded at the same instant. An agent's MCP adapter can be a
-release ahead of the server it talks to, or a release behind. This page
+The trogon-atlas CLI, the Studio gateway and the server ship from one tree,
+but they are not upgraded at the same instant. An agent's CLI can be a
+release ahead of the server it talks to, or a release behind. The MCP tools
+are served by the server itself, so they always match it. This page
 explains what keeps those combinations safe: a breaking-change gate on the
 protobuf contract, and a discovery handshake that runs before any mutation.
+
+## Current development policy
+
+Atlas is currently greenfield. Breaking schema and API changes are acceptable;
+development data can be recreated. Prefer the intended model directly over
+compatibility aliases, duplicate representations or migration layers added only
+to preserve unreleased contracts. A change still needs a coherent contract,
+generated clients, validation and tests.
+
+The mixed-version handshake prevents incompatible tools from making unsafe
+writes. It does not promise support for historical development data. Record
+intentional breaks through the existing baseline procedure so checks distinguish
+an accepted change from accidental drift.
 
 ## Why the protobuf contract is checked with the FILE rule set
 
@@ -89,6 +103,87 @@ a write was refused. The decision lives in `trogon-atlas-client::compat` so
 every surface applies the same rules; the revision constants live next to
 `SCHEMA_VERSION` in `trogon-atlas-proto`.
 
+## Stable connection identity
+
+Contract revision 9 introduced the requirement to preserve explicit connection
+IDs. Older writers can drop those fields, and older servers can discard them.
+Existing stored entities
+are not migrated; persisted connections must already carry valid IDs. New
+connections may request server-generated IDs by omitting them on creation.
+Once assigned, updates preserve an occurrence ID through reordering and content
+annotations. Replacing its role or endpoint requires a new ID. Removed IDs are
+retired for that stored entity incarnation, and connection references also pin
+the owner's system UID so delete and recreate cannot revive a stale reference.
+
+Contract revision 10 adds Channel and DataStore entity kinds with identified
+associations and reference admission. That revision raised both mutation
+compatibility floors to 10: clients and servers must understand these owners and preserve
+their association IDs and pinned observation references. Upgrade the server
+and clients together before authoring these resources. Existing revision-9
+entities retain their stored identities.
+
+Contract revision 11 raised both mutation compatibility floors to 11.
+It adds Specification members, exact member/content pins and
+identified API associations. Writers must preserve member IDs as well as
+connection IDs, request/response roles and provider selections. Upgrade clients
+and server before authoring these resources; an exact entity version alone
+does not pin a mutable contract's content or member incarnation.
+
+Contract revision 12 raised both mutation compatibility floors to 12.
+DataProduct writers preserve independent port IDs, nested association IDs
+and exact selected access and contract pins. Upgrade clients and server
+together before authoring DataProducts; older writers cannot preserve the
+complete resource contract.
+
+Revisions 13 through 18 raised both floors again as later resources landed.
+Each of those releases refuses writers and servers that predate its floor.
+
+Contract revision 19 raises both mutation compatibility floors to 19.
+Addressable schemas carry aggregate intent, identifiers, and property
+relationships. An older writer would drop those fields. `GetServerInfo`
+followed by `compat::check` refuses that writer before any mutation is sent.
+Reads stay available.
+
+Contract revision 19 adds Channel links and storage access claims on Component,
+ExternalSystem and DataProduct, and raised both mutation compatibility floors to
+19. Older writers could drop these occurrences and their IDs, so they are
+refused before they can. The shared `CatalogTitle` and `CatalogText` values moved
+to `catalog_values.proto` with unchanged names and field numbers; buf reports the
+move as an acknowledged FILE break. Upgrade clients and server together before
+authoring these associations. Development data may be recreated.
+
+Contract revision 20 adds `Component.ui_hostings`, which records which UIs a
+component hosts, and raises both mutation compatibility floors to 20. An older
+writer would drop those hostings, so it is refused before any mutation.
+
+Contract revision 21 adds entity protection: `ProtectEntity`,
+`UnprotectEntity`, `ListEntityProtections`, and the `entity_protection`
+feature flag. The floors stay at 20. A revision 20 client can still write to a
+revision 21 server, and protection is enforced on its writes. A client that
+relies on protection requires the `entity_protection` feature before it
+sends a protection write, so an older server refuses it rather than ignoring
+the protection request.
+
+Contract revision 22 adds `ClassifyImpact` and the
+`impact_classification` feature flag. The floors stay at 20 because the RPC
+is read-only. A client that relies on impact classification requires the
+feature before it sends the request, so an older server refuses it rather
+than silently substituting a different impact contract.
+
+Contract revision 23 adds `GetEventModelProjection.as_of_time` and the
+`as_of_time` feature flag. The floors stay at 20 because the read is
+optional. A client that sends the instant requires the feature first, so an
+older server refuses it rather than ignoring the field and returning the
+current model.
+
+Contract revision 24 lets an automation scenario state that it issues no
+command: `AutomationScenario.then` moves into `oneof outcome` beside the new
+`no_command`, and a scenario with neither is rejected. Field 6 keeps its number
+and JSON name, so stored scenarios and manifests are unchanged. buf reports the
+move as an acknowledged FIELD_SAME_ONEOF break. Both mutation compatibility
+floors rise to 24: an older writer would drop `no_command` from a slice it
+re-puts, so it is refused before any mutation.
+
 ## Supported combinations
 
 | Client vs server | Mutations |
@@ -119,3 +214,19 @@ drift.
   field or an optional RPC already covered by a feature flag: no bump.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
+
+The current contract revision is 24, with both mutation compatibility floors
+at 24. Native catalog context writers preserve Decision dates, makers and
+amendments, Term domain ownership, and Document content and classifications.
+CalendarDate uses the shared type package. It requires no breaking-change
+acknowledgment against the main baseline.
+Upgrade clients and server together before authoring these fields to prevent
+lossy writes.
+
+Revision 19 adds descriptive `DataProduct.resource_associations`, independent
+`Specification.message_channels`, and `SchemaBinding.environments` /
+`is_default`. `CONTRACT_REVISION`, `MIN_CLIENT_CONTRACT_REVISION`, and
+`MIN_SERVER_CONTRACT_REVISION` are all 19. Older writers are refused before a
+mutation because they would drop these stored fields. `DataProduct` field 9
+stays reserved for storage claims and is not part of this revision. Claim-route
+and operation-binding inverse discovery are not included.

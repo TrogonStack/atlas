@@ -1,3 +1,0 @@
-[[IgnoredVulns]]
-id = "GHSA-fc5q-39xc-vjpf"
-reason = "picomatch has no patched release; reached only through Studio dev/build tooling (vite, tinyglobby, fdir). Revisit when a fix ships."

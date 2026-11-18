@@ -3,6 +3,7 @@ syntax = "proto3";
 package trogonatlas.eventmodel.v1alpha1;
 
 import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/fields.proto";
@@ -57,6 +58,7 @@ message Swimlane {
       EventRef event = 1;
       string doc = 2;
       repeated google.protobuf.Any metadata = 3;
+      trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
     }
   }
 
@@ -182,6 +184,7 @@ message UI {
     UIRef to = 1;
     string doc = 2;             // "tab bar", "link in confirmation email"
     repeated google.protobuf.Any metadata = 3;
+    trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
   }
   // Composition metadata only: the UI remains the Event Modeling moment;
   // Screen declares the URL-addressable surface this UI contributes to.

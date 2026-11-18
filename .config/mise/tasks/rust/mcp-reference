@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate docs/reference/mcp-tools.md from the MCP tool registry"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/rsworkspace"
+exec cargo run --quiet -p trogon-atlas-mcp --example mcp_reference

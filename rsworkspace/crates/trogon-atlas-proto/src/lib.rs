@@ -10,22 +10,34 @@ pub use generated::trogonatlas::{
 
 pub const SCHEMA_VERSION: &str = "trogonatlas.eventmodel.v1alpha1";
 
+impl AutomationScenario {
+    /// The command this scenario issues, or `None` when its outcome is
+    /// `no_command` or unset.
+    pub fn then_command(&self) -> Option<&CommandRef> {
+        match &self.outcome {
+            Some(automation_scenario::Outcome::Then(t)) => t.command.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 /// Wire contract revision this build speaks, advertised by the server as
 /// `GetServerInfoResponse.contract_revision` and checked by clients before
 /// mutating. See `docs/explanation/wire-compatibility.md` for when it changes.
-pub const CONTRACT_REVISION: u32 = 8;
+pub const CONTRACT_REVISION: u32 = 26;
 
 /// Oldest server contract revision clients built from this tree mutate
 /// against.
-pub const MIN_SERVER_CONTRACT_REVISION: u32 = 8;
+pub const MIN_SERVER_CONTRACT_REVISION: u32 = 26;
 
 /// Oldest client contract revision a server built from this tree accepts
 /// mutations from.
-pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 8;
+pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 26;
 
 /// Serialized `FileDescriptorSet` for the schema, for reflection-based
 /// tooling (textproto/JSON transcoding).
-pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("gen/descriptor.binpb");
+pub const FILE_DESCRIPTOR_SET: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.binpb"));
 
 /// Hashable identity newtype carrying the (kind, namespace, slug, version)
 /// quadruple. Replaces the ad-hoc `(EntityKind, String, String, u64)` tuple
@@ -222,6 +234,16 @@ pub mod canonical {
             EntityKind::AlertPolicy => "alert_policy",
             EntityKind::AlertNotificationTarget => "alert_notification_target",
             EntityKind::TypeLibrary => "type_library",
+            EntityKind::Channel => "channel",
+            EntityKind::DataStore => "data_store",
+            EntityKind::Specification => "specification",
+            EntityKind::DataProduct => "data_product",
+            EntityKind::Team => "team",
+            EntityKind::Person => "person",
+            EntityKind::Decision => "decision",
+            EntityKind::Document => "document",
+            EntityKind::DesignGraph => "design_graph",
+            EntityKind::SystemGroup => "system_group",
         }
     }
 
@@ -259,6 +281,16 @@ pub mod canonical {
         EntityKind::AlertPolicy,
         EntityKind::AlertNotificationTarget,
         EntityKind::TypeLibrary,
+        EntityKind::Channel,
+        EntityKind::DataStore,
+        EntityKind::Specification,
+        EntityKind::DataProduct,
+        EntityKind::Team,
+        EntityKind::Person,
+        EntityKind::Decision,
+        EntityKind::Document,
+        EntityKind::DesignGraph,
+        EntityKind::SystemGroup,
     ];
 
     /// Parse a kind string into an `EntityKind`. Accepts the canonical

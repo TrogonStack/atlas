@@ -57,6 +57,15 @@ export const FIXTURE_BRANCH = {
   deltaCount: 1,
 };
 
+// The registry the bridge's namespace picker and /namespaces page read.
+// `shop` was adopted before the registry existed, so its id is its name;
+// `legacy` holds entities but was never registered, which is the row the
+// registry page flags.
+export const FIXTURE_NAMESPACES = [
+  { name: 'shop', entityCount: 2, id: 'shop', parent: '' },
+  { name: 'legacy', entityCount: 1, id: '', parent: '' },
+];
+
 const DIFF_ENTRY = {
   ref: { kind: 'ENTITY_KIND_EVENT', id: ORDER_PLACED_EVENT.event.id },
   status: 'STATUS_CHANGED',
@@ -109,6 +118,10 @@ function listEntitiesByDomain(_call, callback) {
   callback(null, { entities: [] });
 }
 
+function listNamespaces(_call, callback) {
+  callback(null, { namespaces: FIXTURE_NAMESPACES });
+}
+
 function listBranches(_call, callback) {
   callback(null, { branches: [FIXTURE_BRANCH] });
 }
@@ -121,6 +134,53 @@ function diffBranch(call, callback) {
   callback(null, { entries: [DIFF_ENTRY] });
 }
 
+// One edit to the fixture event, so the Inspector's History tab has a
+// before/after pair to render. Every other ref has no recorded history.
+export const ORDER_PLACED_REVISION = {
+  changesetId: '0192f000-0000-7000-8000-000000000001',
+  author: 'acme-agent',
+  at: '2026-01-02T00:00:00Z',
+  rpc: 'PutEntity',
+  branch: '',
+  entity: { kind: 'ENTITY_KIND_EVENT', id: ORDER_PLACED_EVENT.event.id },
+  kind: 'KIND_PUT',
+  before: { event: { ...ORDER_PLACED_EVENT.event, doc: 'Emitted at checkout.' } },
+  after: ORDER_PLACED_EVENT,
+};
+
+function getEntityHistory(call, callback) {
+  const id = call.request.ref?.id;
+  const matches = id?.namespace === ORDER_MODEL_ID.namespace && id?.slug === ORDER_PLACED_EVENT.event.id.slug;
+  callback(null, { revisions: matches ? [ORDER_PLACED_REVISION] : [], nextPageToken: '' });
+}
+
+// The changeset behind ORDER_PLACED_REVISION, so the History panel and the
+// Inspector's History tab describe the same edit.
+export const ORDER_PLACED_CHANGESET = {
+  id: ORDER_PLACED_REVISION.changesetId,
+  author: ORDER_PLACED_REVISION.author,
+  at: ORDER_PLACED_REVISION.at,
+  message: 'put event shop/order.placed',
+  branch: '',
+  rpc: 'PutEntity',
+  operationId: '',
+  ops: [{ kind: 'KIND_PUT', entity: ORDER_PLACED_REVISION.entity }],
+};
+
+function listChangesets(call, callback) {
+  const { namespace, branch } = call.request;
+  const matches = (!namespace || namespace === ORDER_MODEL_ID.namespace) && !branch;
+  callback(null, { changesets: matches ? [ORDER_PLACED_CHANGESET] : [], nextPageToken: '' });
+}
+
+function getChangeset(call, callback) {
+  if (call.request.id === ORDER_PLACED_CHANGESET.id) {
+    callback(null, { changeset: ORDER_PLACED_CHANGESET });
+    return;
+  }
+  callback({ code: grpc.status.NOT_FOUND, details: 'entity not found' });
+}
+
 function listValidationRules(_call, callback) {
   callback(null, { rules: [] });
 }
@@ -131,6 +191,22 @@ function listEntityKinds(_call, callback) {
 
 function searchEntities(_call, callback) {
   callback(null, { results: [] });
+}
+
+export const ORDER_MANIFESTS = `apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata:
+  namespace: ${ORDER_MODEL_ID.namespace}
+  name: ${ORDER_MODEL_ID.slug}
+  version: 1
+`;
+
+function exportEventModelManifests(call, callback) {
+  if (call.request.id?.slug !== ORDER_MODEL_ID.slug) {
+    callback({ code: grpc.status.NOT_FOUND, details: 'event model not found' });
+    return;
+  }
+  callback(null, { manifests: ORDER_MANIFESTS });
 }
 
 function validateEventModel(call, callback) {
@@ -205,6 +281,33 @@ function getTypeLibraryDescriptorSet(call, callback) {
   callback(null, { fileDescriptorSet: Buffer.alloc(0), messages });
 }
 
+// The Inspector asks for a selected subject's decisions, documents and
+// responsibility assignments. The fixture records none, so each query
+// answers "resolved, nothing declared" and echoes the subject in the
+// checked scope, the way the real server reports a subject it resolved.
+function listSubjectDecisions(call, callback) {
+  callback(null, {
+    declarations: [],
+    scope: { authorizedNamespaces: [ORDER_MODEL_ID.namespace], visitedSubjects: [call.request.subject] },
+    incomplete: false,
+    failures: [],
+    subjectState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+  });
+}
+
+function listSubjectDocuments(call, callback) {
+  listSubjectDecisions(call, callback);
+}
+
+function listSubjectAssignments(call, callback) {
+  callback(null, {
+    assignments: [],
+    scope: { authorizedNamespaces: [ORDER_MODEL_ID.namespace], visitedSubjects: [call.request.subject] },
+    incomplete: false,
+    subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_RESOLVED',
+  });
+}
+
 function unimplemented(_call, callback) {
   callback({ code: grpc.status.UNIMPLEMENTED, message: 'not implemented in the e2e fixture server' });
 }
@@ -230,17 +333,25 @@ export async function startFakeGrpcServer() {
     listEntities,
     getEntity,
     listEntitiesByDomain,
+    listNamespaces,
     listBranches,
     diffBranch,
+    getEntityHistory,
+    listChangesets,
+    getChangeset,
     listValidationRules,
     listEntityKinds,
     searchEntities,
     validateEventModel,
     validateProject,
+    exportEventModelManifests,
     listChanges,
     deleteByQuery,
     compileTypeLibrary,
     getTypeLibraryDescriptorSet,
+    listSubjectDecisions,
+    listSubjectDocuments,
+    listSubjectAssignments,
     createBranch: unimplemented,
     deleteBranch: unimplemented,
     mergeBranch: unimplemented,

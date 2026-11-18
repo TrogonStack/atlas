@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Project
+metadata:
+  name: acme
+  namespace: acme
+spec:
+  doc: The Acme online retail business, from the storefront and fulfillment to reviews, wishlists, and customer data deletion.
+  title: Acme

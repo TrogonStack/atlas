@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc};
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -15,9 +15,10 @@ fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     }
 }
 
-fn fixture_dir() -> PathBuf {
+fn manifests_dir(namespace: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples/manifests/acme-customer-data-deletion")
+        .join("../../../examples/manifests")
+        .join(namespace)
 }
 
 fn put(entity: pb::Entity) -> pb::BatchMutateOp {
@@ -34,18 +35,21 @@ fn put(entity: pb::Entity) -> pb::BatchMutateOp {
 }
 
 fn load_manifests() -> Vec<pb::Entity> {
-    trogon_atlas_client::manifest::load_paths(&[fixture_dir()])
-        .expect("acme-customer-data-deletion manifests should load")
-        .into_iter()
-        .map(|m| m.entity)
-        .collect()
+    trogon_atlas_client::manifest::load_paths(&[
+        manifests_dir("acme"),
+        manifests_dir("acme-customer-data-deletion"),
+    ])
+    .expect("acme-customer-data-deletion manifests should load")
+    .into_iter()
+    .map(|m| m.entity)
+    .collect()
 }
 
 async fn seed_entities(entities: Vec<pb::Entity>) -> EventModelServiceImpl {
     let ops: Vec<pb::BatchMutateOp> = entities.into_iter().map(put).collect();
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let resp = svc
         .batch_mutate(Request::new(pb::BatchMutateRequest {
             operation_id: String::new(),

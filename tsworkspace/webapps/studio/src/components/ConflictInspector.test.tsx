@@ -63,4 +63,71 @@ describe('ConflictInspector', () => {
     expect(() => fireEvent.click(screen.getAllByText(/order\.shipped/)[0])).not.toThrow();
     expect(screen.getAllByText(/ours/i).length).toBeGreaterThan(0);
   });
+
+  it.each([
+    ['channel', 'ENTITY_KIND_CHANNEL'],
+    ['component', 'ENTITY_KIND_COMPONENT'],
+    ['externalSystem', 'ENTITY_KIND_EXTERNAL_SYSTEM'],
+    ['dataProduct', 'ENTITY_KIND_DATA_PRODUCT'],
+  ])('shows changed %s associations with exact selectors and distinct occurrence identities', (kind, wireKind) => {
+    const id = { namespace: 'shop', slug: `${kind}-owner`, version: '18446744073709551615' };
+    const target = { id: { ...id, slug: kind === 'channel' ? 'target-channel' : 'target-store' } };
+    const beforeAssociation =
+      kind === 'channel'
+        ? {
+            connectionId: { value: 'link-before' },
+            kind: 'CHANNEL_LINK_KIND_COMPOSES',
+            target,
+            parameterValues: { tenant: '' },
+            doc: { value: 'Before relationship' },
+          }
+        : {
+            connectionId: { value: 'claim-before' },
+            direction: 'STORAGE_DIRECTION_READ',
+            store: target,
+            ...(kind === 'dataProduct' ? { portId: { value: 'input-port' } } : {}),
+            attachment: {
+              owner: { kind: 'ENTITY_KIND_DATA_STORE', id: target.id },
+              ownerUid: 'store-uid',
+              id: { value: 'attachment' },
+            },
+          };
+    const afterAssociation =
+      kind === 'channel'
+        ? {
+            ...beforeAssociation,
+            connectionId: { value: 'link-after' },
+            kind: 'CHANNEL_LINK_KIND_ROUTES_TO',
+            parameterValues: { tenant: 'north', region: 'eu' },
+            doc: { value: '<script>inert()</script>' },
+          }
+        : {
+            ...beforeAssociation,
+            connectionId: { value: 'claim-after' },
+            direction: 'STORAGE_DIRECTION_WRITE',
+            ...(kind === 'dataProduct' ? { portId: { value: 'output-port' } } : {}),
+          };
+    const stable = { ...beforeAssociation, connectionId: { value: 'unchanged-sibling' } };
+    const field = kind === 'channel' ? 'links' : 'storageClaims';
+    const base = { [kind]: { id, title: 'Owner', [field]: [beforeAssociation, stable] }, system: { uid: 'owner-uid' } };
+    const ours = { [kind]: { id, title: 'Owner', [field]: [afterAssociation, stable] }, system: { uid: 'owner-uid' } };
+    const entry: BranchDiffEntry = {
+      ref: { kind: wireKind, id },
+      status: 'STATUS_CHANGED',
+      base,
+      ours,
+      theirs: base,
+      baseEtag: '11',
+      conflictFieldPaths: [],
+    };
+    const { container } = render(<ConflictInspector branch="associations" entries={[entry]} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`shop/${kind}-owner`) }));
+    const panes = [...container.querySelectorAll('pre')].map((pane) => JSON.parse(pane.textContent ?? 'null'));
+    expect(panes).toEqual([base, ours, base]);
+    expect(panes[0][kind][field][0].connectionId.value).not.toBe(panes[1][kind][field][0].connectionId.value);
+    expect(panes[0][kind][field][1]).toEqual(panes[1][kind][field][1]);
+    expect(panes[1][kind].id.version).toBe('18446744073709551615');
+    expect(container.querySelector('script')).toBeNull();
+    expect(screen.queryByRole('button', { name: /resolve|merge|apply/i })).toBeNull();
+  });
 });

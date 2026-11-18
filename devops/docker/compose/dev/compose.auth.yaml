@@ -31,11 +31,11 @@ services:
     volumes:
       - ./services/trogon-atlas-server/auth:/auth:ro
 
-  # The studio bridge and the MCP adapter are clients of the server, not
-  # peers of it. A server that now demands a token rejects them as failing
-  # health checks rather than as an auth error, which is the failure mode
-  # that costs an afternoon. `:?` turns the missing variable into a refusal
-  # to start, with the reason printed.
+  # The studio bridge is a client of the server, not a peer of it. A server
+  # that now demands a token rejects it as failing health checks rather than
+  # as an auth error, which is the failure mode that costs an afternoon. `:?`
+  # turns the missing variable into a refusal to start, with the reason
+  # printed.
   #
   # The studio gets the `studio` reader key, not the agents' one. People
   # observe and agents edit, so a key that reaches a browser must be one the
@@ -55,9 +55,9 @@ services:
       # It belongs to the `studio` reader principal in auth/tokens.toml.
       TROGON_ATLAS_AUTH_PASSTHROUGH: "true"
 
-  trogon-atlas-mcp:
-    environment:
-      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_AUTH_TOKEN:?export it as the contents of services/trogon-atlas-server/auth/api.key}
+  # The server's /mcp endpoint holds no key. Each MCP client sends its own,
+  # api.key for the agents principal, as `Authorization: Bearer <key>`, so
+  # nothing here changes for it.
 
   # Every decision the server makes about who owns what is read from here, so
   # a stack whose decision store still answers to the base file's published

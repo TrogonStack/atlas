@@ -16,7 +16,16 @@
 // duplication. Everything derives from the storyboards; no new data.
 import type { Edge, Node } from '@xyflow/react';
 import type { BoardEdgeData } from './layout';
-import { asId, type Entity, type Model, type SliceView, slugKey, uiTransitionsOf, versionOf } from './model';
+import {
+  asId,
+  type Entity,
+  type Model,
+  type SliceView,
+  latestSliceBySlug,
+  slugKey,
+  uiTransitionsOf,
+  versionOf,
+} from './model';
 
 export const SITE_W = 232;
 export const SITE_H = 108;
@@ -64,7 +73,7 @@ export function buildSitemap(
   }
   const resolve = (kind: Entity['kind'], ref: { id: { namespace: string; slug: string } } | undefined) =>
     ref ? bySlug.get(slugKey(kind, ref.id)) : undefined;
-  const sliceBySlug = new Map(model.slices.map((s) => [`${s.entity.id.namespace}/${s.entity.id.slug}`, s]));
+  const sliceBySlug = latestSliceBySlug(model);
 
   const occs: Occ[] = [];
   const occsByType = new Map<string, Occ[]>();

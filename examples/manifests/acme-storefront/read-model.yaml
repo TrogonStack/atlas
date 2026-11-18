@@ -5,6 +5,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: Running item count per cart.
+  key:
+  - cart_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -14,8 +16,12 @@ spec:
     - name: item_count
       type:
         int: {}
-  key:
-  - cart_id
+    - name: product_id
+      type:
+        uuid: {}
+    - name: quantity
+      type:
+        int: {}
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -30,28 +36,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: 'Worker feed: orders awaiting payment capture.'
-  schema:
-    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
-    fields:
-    - name: order_id
-      type:
-        uuid: {}
   key:
   - order_id
-  sourceEvents:
-  - id:
-      namespace: acme-storefront
-      slug: order.placed
-      version: '1'
-  title: Pending payments (queue)
----
-apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
-kind: ReadModel
-metadata:
-  name: fulfillment-queue
-  namespace: acme-storefront
-spec:
-  doc: 'Worker feed: paid orders awaiting carrier dispatch.'
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -64,33 +50,18 @@ spec:
     - name: seller_id
       type:
         uuid: {}
-  key:
-  - order_id
-  sourceEvents:
-  - id:
-      namespace: acme-storefront
-      slug: order.paid
-      version: '1'
-  title: Fulfillment queue
----
-apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
-kind: ReadModel
-metadata:
-  name: order-status
-  namespace: acme-storefront
-spec:
-  doc: Current status of an order for the shopper-facing tracking page.
-  schema:
-    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
-    fields:
-    - name: order_id
+    - name: cart_id
       type:
         uuid: {}
+    - name: placed_at
+      type:
+        timestamp: {}
+    - name: paid_at
+      type:
+        timestamp: {}
     - name: status
       type:
         string: {}
-  key:
-  - order_id
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -100,8 +71,4 @@ spec:
       namespace: acme-storefront
       slug: order.paid
       version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: order.fulfilled
-      version: '1'
-  title: Order status
+  title: Pending payments (queue)

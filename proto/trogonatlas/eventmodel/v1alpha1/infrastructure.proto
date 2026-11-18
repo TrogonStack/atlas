@@ -5,6 +5,46 @@ package trogonatlas.eventmodel.v1alpha1;
 import "google/protobuf/any.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
+
+import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
+
+message ArchitecturalEndpoint {
+  oneof target {
+    ComponentRef component = 1;
+    ExternalSystemRef external_system = 2;
+  }
+}
+
+message ArchitecturalRelationship {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ArchitecturalEndpoint target = 2;
+  CatalogTitle label = 3;
+  CatalogText doc = 4;
+}
+
+message CommunicationDeclaration {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  CommunicationDirection direction = 2;
+  ArchitecturalEndpoint peer = 3;
+  ContractMemberRef message = 4;
+  CatalogTitle label = 5;
+  CatalogText condition = 6;
+  CatalogText doc = 7;
+}
+
+message UiHosting {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  UIRef ui = 2;
+  CatalogTitle label = 3;
+  CatalogText doc = 4;
+}
+
 // A Component is a living implementation unit: the deployable thing that
 // hosts processors, serves UIs, projects read models, exposes APIs, and owns
 // its technology choices -- including the messaging it relies on (Kafka
@@ -20,6 +60,11 @@ message Component {
   repeated EntityRef members = 5;  // what it hosts (processors, UIs, read models, ...)
   repeated google.protobuf.Any metadata = 6;
   trogonatlas.type.v1alpha1.Id supersedes = 7;
+  repeated ArchitecturalRelationship relationships = 8;
+  repeated CommunicationDeclaration communications = 9;
+  repeated UiHosting ui_hostings = 10;
+  MessageClaims message_claims = 11;
+  repeated StorageAccessClaim storage_claims = 12;
 }
 
 // An ExternalSystem is a living third-party boundary: the APIs and webhooks
@@ -33,6 +78,10 @@ message ExternalSystem {
   repeated string tech = 4;  // e.g. "webhook", "rest", "kafka"
   repeated google.protobuf.Any metadata = 5;
   trogonatlas.type.v1alpha1.Id supersedes = 6;
+  repeated ArchitecturalRelationship relationships = 7;
+  repeated CommunicationDeclaration communications = 8;
+  MessageClaims message_claims = 9;
+  repeated StorageAccessClaim storage_claims = 10;
 }
 
 // Delivery status of a tracked item. Lives ONLY in Trackers -- design

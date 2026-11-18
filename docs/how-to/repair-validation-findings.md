@@ -15,22 +15,14 @@ Record the endpoint, branch, EventModel identity including version, Studio
 scope path, finding code, subject identity, and subject field. Keep tokens in
 the process environment, never in the record or command arguments.
 
-The MCP process scopes its calls through `--branch` or `TROGON_ATLAS_BRANCH`.
-For baseline, omit `--branch` and explicitly unset an inherited
-`TROGON_ATLAS_BRANCH`. For a named branch, pass that name explicitly. Do not
-change branches halfway through a repair.
+Point the MCP host at the server's `/mcp` endpoint, for example
+`http://127.0.0.1:50069/mcp` on the development stack, and have it send your
+key as `Authorization: Bearer <token>`.
 
-For example, from the `atlas/` directory, after building the adapter:
-
-```sh
-mise exec -- cargo build -p trogon-atlas-mcp
-mise exec -- env -u TROGON_ATLAS_BRANCH target/debug/trogon-atlas-mcp \
-  --grpc http://127.0.0.1:50069
-```
-
-An MCP host launches this process and calls its tools over stdio. The shell
-command itself does not perform a repair. A configured remote endpoint can
-replace the development endpoint above.
+The endpoint scopes each request's tool calls through the
+`x-trogon-atlas-branch` header. For baseline, omit the header. For a named
+branch, have the MCP host send that name on every request. Do not change
+branches halfway through a repair.
 
 Fetch the EventModel with `get_entity_json`, then run `validate_event_model`.
 Both use explicit `namespace`, `slug`, and numeric `version` arguments;
@@ -45,7 +37,33 @@ clarification. A new rule or unclear result can require inspection of its
 validator implementation; the catalog and tool contracts are the starting
 point.
 
+Do not repair a `REF_OUTSIDE_VISIBLE_SCOPE` finding by editing the reference.
+It means your key cannot read the target's namespace, not that the target is
+missing. Rerun validation with a key that can read that namespace; only a
+reference or content defect confirmed against readable definitions is a
+candidate for repair.
+
+The same limit applies when a finding depends on a referenced schema or
+indicator measure. Do not add fields, change projection keys, replace a
+connection, or remove an objective threshold merely because the referenced
+definition is unreadable. Inspect the exact dependency with an authorized
+caller and revalidate. Preserve independent findings on the visible
+definition, such as an invalid key declaration or target ratio. See
+[unreadable dependencies](../explanation/validation-repair-patterns.md#unreadable-dependencies-reported-as-content-defects).
+
+To survey a whole namespace instead, run `validate_project` with `namespace`
+set to it and `json: true`: every EventModel in the namespace is validated in
+one call. Filter its findings on a code to list what needs work, for example
+`SLICE_NO_SCENARIOS` (Info) for the slices that still lack a given/when/then
+scenario.
+
 ## Discover the full dependency context
+
+Start from the finding's `evidence` when it has any: each item names an
+exact entity, field, pinned target and, for storyboard-order rules, the
+storyboard position. See [finding evidence](../reference/finding-evidence.md)
+for the roles and which rules carry them. Evidence names the direct causes,
+not the full dependency context.
 
 Use existing model tools before searching exports manually:
 
@@ -54,9 +72,11 @@ Use existing model tools before searching exports manually:
 | `get_entity_json` | Fetch an exact definition and retain its opaque `etag`. |
 | `get_outgoing_references` | Find definitions referenced by the subject or a related slice. |
 | `get_incoming_references` | Find consumers, emitting slices, containing storyboards, and model memberships. |
-| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. |
+| `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. Containers such as event models are reported but their members are not expanded unless `include_containers` is true. |
+| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. It walks incoming references only, so it is the dependents-only view. |
 
-These tools take flat identity arguments, for example:
+Except for `classify_impact`, these tools take flat identity arguments, for
+example:
 
 ```json
 {
@@ -67,8 +87,22 @@ These tools take flat identity arguments, for example:
 }
 ```
 
+`classify_impact` nests two exact identities:
+
+```json
+{
+  "current": {"kind": "event", "namespace": "ecommerce", "slug": "order.fulfilled", "version": 1},
+  "candidate": {"kind": "event", "namespace": "ecommerce", "slug": "order.fulfilled", "version": 2}
+}
+```
+
 For `get_impact`, optionally add `max_depth`. Zero uses the server default,
-currently capped at 16 hops; it does not prove an unlimited closure. Avoid
+currently capped at 16 hops; it does not prove an unlimited closure. The
+response says which bound applied (`effective_max_depth`), whether the
+server chose it (`depth_clamped`), whether reachable entities lie past it
+(`depth_limited`), and whether the snapshot behind it was cut
+(`snapshot_truncated`). Treat either of the last two as an incomplete
+result. Avoid
 kind filters until the necessary dependency paths are understood. Impact
 results are inspection candidates, not exclusively downstream dependents.
 Inspect reference directions to distinguish an emitter from a consumer, then fetch each
@@ -104,6 +138,39 @@ storyboard's declared entry view. The
 shows the evidence required for that distinction. Removing a member is not
 a general solution to a validation error.
 
+For strategic findings such as `DOMAIN_IN_CONTEXT_NAMESPACE` and
+`REALIZES_MIXED_CLASSIFICATIONS`, repair the shape of the problem space,
+not the individual entity. The
+[problem space pattern](../explanation/validation-repair-patterns.md#one-problem-space-contexts-realize-across-namespaces)
+records the evidence and the decision. Never silence `DOMAIN_MISSING_PROJECT`
+with a Project and a Domain in each context namespace.
+
+To move a problem space that was declared inside context namespaces:
+
+1. Put the Project, the Domain and every Subdomain in one problem-space
+   namespace, with the Project and Domain slugs equal to that namespace.
+   Copy each Subdomain's classification and doc unchanged.
+2. Run `retarget_references` from each old Subdomain to its replacement,
+   with `filter_kinds` set to `bounded_context`, so every `realizes`
+   points across namespaces. Preview with `dry_run: true` first.
+3. Delete the old Subdomains, Domains and Projects with `delete_entity` in
+   its default `fail_if_referenced` mode. A refusal names a referrer that
+   still needs retargeting.
+4. If a context still realizes Subdomains of different classifications,
+   split it along the classification line. Reclassifying a Subdomain to
+   match the other half misstates where the business invests.
+5. Run `validate_project` with the problem-space `namespace`, then with the
+   Project scope. Strategic findings appear once, on the store-level report.
+
+Sometimes the model is right and the rule is wrong. Check the rule's
+description against the definitions you fetched. If the finding
+contradicts a fact that the model states on purpose, such as an external
+source that supplies a read model's fields, change the validator, not the
+model. Do not invent a source event, drop a field, or remove the fact only
+to pass the rule. Record the case in the
+[repair patterns](../explanation/validation-repair-patterns.md) so the next
+reviewer can tell a modeling gap from a rule gap.
+
 Limit the proposed edits to the affected definitions. Preserve their
 unrelated fields and use the current `etag` for every existing entity put.
 If a contract needs a new version, follow the
@@ -112,8 +179,8 @@ If a contract needs a new version, follow the
 ## Preview and apply the guarded change
 
 For a related set of edits, use `batch_mutate_json`. The outer MCP argument
-is `request_json`, a JSON-encoded string containing a proto3 JSON
-`BatchMutateRequest`. Inside that request, use `validateOnly: true` for the
+is `request_json`, a proto3 JSON `BatchMutateRequest` object (a JSON-encoded
+string is also accepted). Inside that request, use `validateOnly: true` for the
 preview and `ifMatch` on each existing-entity put. Each `entity` is an
 `Entity` wrapper, such as `{ "storyboard": <complete revised definition> }`.
 Use `createOnly: true` for an intentional new entity.
@@ -145,7 +212,9 @@ errors and `isError` before reading that envelope.
 | --- | --- |
 | `get_entity_json` | `{ "etag": "...", "json": { ... } }` with an object-valued entity. |
 | `validate_event_model` with `json: true` | `{ "json": "..." }` with a JSON-encoded response string. |
-| Reference tools, `get_impact`, `batch_mutate_json` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| Reference tools, `get_impact` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| `classify_impact` | The aggregated `ClassifyImpactResponse` in proto3 JSON plus `clientVerdict`. |
+| `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate`, `batch_mutate_json`, `merge_branch`, `apply_manifests` | The `scope`, `branch` and `binpb_base64` envelope plus an `issues` array. Use `scope` and `branch` to confirm which store took the write. Each issue has `severity`, `code`, `subject`, `field` and `message`; batch and apply issues add `op_index` and `op_entity`, for delete ops as well as puts. Strategic findings arrive here without blocking the write, and a `delete_entity` `dry_run` previews them. |
 
 The JSON response helper can fall back to `binpb_base64` if reflection
 rendering fails. Decode binary responses using the matching RPC response
@@ -185,6 +254,14 @@ under `examples/manifests/`. Compare live definitions first: a full
 manifest replay can overwrite unrelated live changes. Preview the selected
 seed manifests with `trogon-atlas apply --dry-run` in the same branch and endpoint.
 That check verifies manifest admissibility, not full scoped validation.
+
+When the seed itself is the thing to repair, edit the YAML, run
+`trogon-atlas fmt -w` on the touched files, and run
+`cargo test -p trogon-atlas-server --test example_manifests_validate`. That
+test applies the `acme` problem space and every example namespace to an
+ephemeral store and lists each warning or error by code and subject, so it
+doubles as the before and after record. Finish with
+`mise run manifests:verify -- bootstrap`.
 
 ## Keep the result available to the next session
 

@@ -56,6 +56,12 @@ const KIND_STYLE: Record<
   eventModel: { bg: 'bg-zinc-200', border: 'border-zinc-400', label: 'Event Model', icon: Layers },
   component: { bg: 'bg-zinc-100', border: 'border-zinc-400', label: 'Component', icon: Boxes },
   externalSystem: { bg: 'bg-fuchsia-100', border: 'border-fuchsia-300', label: 'External System', icon: Globe },
+  channel: { bg: 'bg-cyan-50', border: 'border-cyan-300', label: 'Channel', icon: Globe },
+  dataStore: { bg: 'bg-emerald-50', border: 'border-emerald-300', label: 'DataStore', icon: Database },
+  systemGroup: { bg: 'bg-orange-50', border: 'border-orange-300', label: 'System Group', icon: Boxes },
+  team: { bg: 'bg-cyan-50', border: 'border-cyan-300', label: 'Team', icon: Boxes },
+  person: { bg: 'bg-teal-50', border: 'border-teal-300', label: 'Person', icon: User },
+  dataProduct: { bg: 'bg-emerald-50', border: 'border-emerald-300', label: 'DataProduct', icon: Database },
   tracker: { bg: 'bg-stone-100', border: 'border-stone-400', label: 'Tracker', icon: ListChecks },
   boundedContext: { bg: 'bg-fuchsia-50', border: 'border-fuchsia-300', label: 'Bounded Context', icon: Globe },
   domain: { bg: 'bg-indigo-50', border: 'border-indigo-300', label: 'Domain', icon: Globe },
@@ -84,6 +90,7 @@ const KIND_STYLE: Record<
     label: 'Alert Notification Target',
     icon: Megaphone,
   },
+  specification: { bg: 'bg-slate-100', border: 'border-slate-400', label: 'Specification', icon: ListChecks },
   typeLibrary: { bg: 'bg-slate-100', border: 'border-slate-400', label: 'Type Library', icon: ListChecks },
 };
 
@@ -240,7 +247,7 @@ export function StickyCardBody({
           ) : null}
         </span>
       </div>
-      <div className="mt-1 text-[13px] font-semibold leading-snug text-zinc-900">{entity.title}</div>
+      <CardTitle title={entity.title} />
       {/* At-a-glance only: the slug. Full identity (ns + defining slice) and
           the doc live in the tooltip and the drawer. */}
       <div
@@ -250,6 +257,15 @@ export function StickyCardBody({
         {entity.id.slug}
       </div>
     </>
+  );
+}
+
+/** A full-size card's title. Cards have a fixed height, and a title can hold one long identifier such as an RPC name. */
+export function CardTitle({ title }: { title?: string }) {
+  return (
+    <div title={title} className="mt-1 line-clamp-3 text-[13px] font-semibold leading-snug text-zinc-900 wrap-anywhere">
+      {title}
+    </div>
   );
 }
 

@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// Full MCP stdio-transport round trips for the tools still uncovered after
+mod support;
+
+// Full MCP in-process transport round trips for the tools still uncovered after
 // mcp_integration.rs and tool_lifecycle_integration.rs: get_server_info,
 // batch_get_entities, get_latest_version, get_supersession_chain,
 // get_incoming_references, get_outgoing_references, get_impact,
@@ -25,13 +27,13 @@ use prost::Message as _;
 use tokio::net::TcpListener;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -49,10 +51,7 @@ type McpServiceRunning =
 
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -420,6 +419,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
                 ("slug", serde_json::json!("placed")),
                 ("version", serde_json::json!(1)),
                 ("max_depth", serde_json::json!(5)),
+                ("include_containers", serde_json::json!(true)),
             ])),
         )
         .await
@@ -803,6 +803,51 @@ async fn mcp_batch_mutate_binpb_variant() {
     mcp_service.cancel().await.unwrap();
 }
 
+// validate_project: a namespace alone scopes the call to every EventModel in it.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_validate_project_accepts_a_namespace_scope() {
+    let (client, _mcp_service, grpc_endpoint) = start_mcp_client().await;
+    let mut grpc = trogon_atlas_client::client::connect(&grpc_endpoint, None, 30)
+        .await
+        .unwrap();
+
+    for (ns, slug) in [("vpns-a", "checkout"), ("vpns-b", "billing")] {
+        grpc.put_entity(put_req(
+            pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                    id: Some(pb::Id {
+                        namespace: ns.into(),
+                        slug: slug.into(),
+                        version: 1,
+                    }),
+                    title: slug.into(),
+                    ..Default::default()
+                })),
+            },
+            true,
+        ))
+        .await
+        .unwrap();
+    }
+
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("validate_project").with_arguments(args_obj(
+                &[
+                    ("namespace", serde_json::json!("vpns-a")),
+                    ("json", serde_json::json!(true)),
+                ],
+            )),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    let text = format!("{result:?}");
+    assert!(text.contains("checkout"), "{text}");
+    assert!(!text.contains("billing"), "{text}");
+}
+
 // validate_project: scope by project_namespace+project_slug; scope by
 // domain_namespace+domain_slug; and the invalid_params rejection when
 // neither scope is set.
@@ -1054,6 +1099,69 @@ async fn mcp_get_snapshot_id_detects_change() {
     assert_eq!(detailed.snapshot_id, after.snapshot_id);
     assert_eq!(detailed.entries.len(), 1);
     assert_eq!(detailed.entries[0].content_hash.len(), 64);
+
+    mcp_service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_get_backing_report_binds_snapshot_and_reports_unbacked() {
+    let (client, mcp_service, grpc_endpoint) = start_mcp_client().await;
+    let mut grpc =
+        trogon_atlas_proto::event_model_service_client::EventModelServiceClient::connect(
+            grpc_endpoint.clone(),
+        )
+        .await
+        .unwrap();
+    let ns = "mcp-backing";
+    grpc.put_entity(put_req(event_entity(ns, "bare", 1, "Bare"), true))
+        .await
+        .unwrap();
+
+    let call = |args: Vec<(&'static str, serde_json::Value)>| {
+        let client = &client;
+        async move {
+            let result = client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("get_backing_report")
+                        .with_arguments(args_obj(&args)),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error.unwrap_or(false), "{result:?}");
+            call_tool_result_text(&result)
+        }
+    };
+
+    let body = call(vec![
+        ("namespaces", serde_json::json!([ns])),
+        ("include_unbacked_findings", serde_json::json!(true)),
+    ])
+    .await;
+    let raw = base64_decode(body["binpb_base64"].as_str().unwrap());
+    let report = pb::GetBackingReportResponse::decode(raw.as_slice()).unwrap();
+    let totals = report.totals.unwrap();
+    assert_eq!((totals.total, totals.unbacked), (1, 1));
+    assert_eq!(totals.unbacked_rate, Some(1.0));
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].code, "ENTITY_UNBACKED");
+
+    let snapshot = grpc
+        .get_snapshot_id(pb::GetSnapshotIdRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(report.snapshot_id, snapshot.snapshot_id);
+
+    let body = call(vec![
+        ("namespaces", serde_json::json!([ns])),
+        ("json", serde_json::json!(true)),
+    ])
+    .await;
+    let json: serde_json::Value = serde_json::from_str(body["json"].as_str().unwrap()).unwrap();
+    assert_eq!(json["snapshotId"], serde_json::json!(snapshot.snapshot_id));
+    assert_eq!(json["totals"]["unbacked"], serde_json::json!(1));
+    assert_eq!(json["totals"]["unbackedRate"], serde_json::json!(1.0));
+    assert!(json.get("findings").is_none(), "findings are opt-in");
 
     mcp_service.cancel().await.unwrap();
 }

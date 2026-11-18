@@ -32,6 +32,7 @@ import {
   asId,
   type Entity,
   instanceUidOf,
+  latestSliceBySlug,
   type Model,
   orderedSlices,
   type SliceView,
@@ -99,7 +100,7 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
   const resolve = (kind: Entity['kind'], ref: { id: { namespace: string; slug: string } } | undefined) =>
     ref ? bySlug.get(slugKey(kind, ref.id)) : undefined;
 
-  const sliceBySlug = new Map(model.slices.map((s) => [`${s.entity.id.namespace}/${s.entity.id.slug}`, s]));
+  const sliceBySlug = latestSliceBySlug(model);
   const claimed = new Set<string>();
 
   const buildChunk = (storyboard: Entity | undefined, slices: SliceView[]): Chunk => {
@@ -406,11 +407,18 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
   // Fork edges ("we observe state, therefore we can act"): each road leaves
   // from the occurrence of the read model its entry observes. Fallbacks:
   // the transition's `after` event occurrence, then the chunk's last slot.
-  // Cycles end forward in a loop stub, never a backward edge.
+  // Cycles end forward in a loop stub, never a backward edge. Several
+  // transitions can open the same storyboard pair, and React Flow needs one
+  // id per road, so repeats get a `#n` suffix.
+  const roadCount = new Map<string, number>();
   for (const c of model.continuations) {
     const from = chunkBySb.get(c.from.key);
     const to = chunkBySb.get(c.to.key);
     if (!from || !to || from.slots.length === 0 || to.slots.length === 0) continue;
+    const pair = `${c.from.key}->${c.to.key}`;
+    const nth = (roadCount.get(pair) ?? 0) + 1;
+    roadCount.set(pair, nth);
+    const road = nth === 1 ? pair : `${pair}#${nth}`;
     let src: [number, number] = [from.slots.length - 1, 0];
     const entryRm = storyboardEntryReadModel(c.to);
     const entryRmKey = entryRm ? slugKey('readModel', entryRm) : undefined;
@@ -445,7 +453,7 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
       }) satisfies BoardEdgeData;
     const isBack = (placementOrder.get(to) ?? 0) <= (placementOrder.get(from) ?? 0);
     if (isBack) {
-      const stubId = `seq-loop:${c.from.key}->${c.to.key}`;
+      const stubId = `seq-loop:${road}`;
       nodes.push({
         id: stubId,
         type: 'seqLoopStub',
@@ -456,7 +464,7 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
         zIndex: 2,
       });
       edges.push({
-        id: `seq-fork:${c.from.key}->${c.to.key}`,
+        id: `seq-fork:${road}`,
         source: nodeId(from, src[0], src[1]),
         sourceHandle: 'r',
         target: stubId,
@@ -466,7 +474,7 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
       });
     } else {
       edges.push({
-        id: `seq-fork:${c.from.key}->${c.to.key}`,
+        id: `seq-fork:${road}`,
         source: nodeId(from, src[0], src[1]),
         sourceHandle: 'r',
         target: nodeId(to, 0, 0),

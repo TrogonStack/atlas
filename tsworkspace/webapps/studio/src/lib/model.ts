@@ -51,7 +51,17 @@ export type EntityKind =
   | 'serviceLevelObjective'
   | 'alertPolicy'
   | 'alertNotificationTarget'
-  | 'typeLibrary';
+  | 'typeLibrary'
+  | 'channel'
+  | 'dataStore'
+  | 'team'
+  | 'person'
+  | 'decision'
+  | 'document'
+  | 'designGraph'
+  | 'dataProduct'
+  | 'specification'
+  | 'systemGroup';
 
 export interface FieldTypeConfig {
   version?: number;
@@ -65,6 +75,13 @@ export interface FieldSpec {
   type?: Record<string, FieldTypeConfig>;
   doc?: string;
   [key: string]: unknown;
+}
+
+/** A field annotated as derived with a non-empty doc, which the validator exempts from sourcing rules. */
+export function isDerivedField(f: FieldSpec): boolean {
+  return decodeAnnotations(f.metadata).some(
+    (a) => a.type === 'DerivedFieldAnnotation' && typeof a.data.doc === 'string' && a.data.doc !== '',
+  );
 }
 
 export function fieldTypeLabel(f: FieldSpec): string | undefined {
@@ -126,8 +143,13 @@ export interface Entity {
 
 // A slice endpoint is a typed Edge in the proto: a pointer plus design data
 // attached to the connection itself (doc, Any annotations).
+export interface ConnectionId {
+  value: string;
+}
+
 export interface EdgeRef {
   id: EntityId;
+  connectionId?: ConnectionId;
   doc: string;
   metadata: unknown[];
 }
@@ -150,6 +172,8 @@ export interface ScenarioView {
   thenEmits: ScenarioExample[];
   thenState?: ScenarioExample;
   thenCommand?: ScenarioExample;
+  /** An automation scenario in which the automation deliberately issues nothing. */
+  noCommand?: { doc: string };
   reject?: { reasonCode: string; doc: string };
   annotations: Annotation[];
 }
@@ -274,6 +298,7 @@ export function subdomainsOf(model: Model, domain: Entity): Entity[] {
 export interface UiTransitionView {
   to: EntityId;
   doc: string;
+  connectionId?: ConnectionId;
 }
 
 // A command is intent; events are the facts. Mirrors the server-side rule
@@ -343,7 +368,11 @@ export function uiTransitionsOf(entity: Entity): UiTransitionView[] {
   if (entity.kind !== 'ui') return [];
   const raw = Array.isArray(entity.raw.transitions) ? (entity.raw.transitions as Record<string, unknown>[]) : [];
   return raw
-    .map((t) => ({ to: asId((t.to as Record<string, unknown> | undefined)?.id), doc: String(t.doc ?? '') }))
+    .map((t) => ({
+      to: asId((t.to as Record<string, unknown> | undefined)?.id),
+      doc: String(t.doc ?? ''),
+      connectionId: connectionIdOf(t),
+    }))
     .filter((t) => t.to.slug);
 }
 
@@ -354,6 +383,7 @@ export interface ContinuationView {
   // Any annotations on the transition's Next: the fork branch is a real
   // connection and carries design data like every other edge.
   metadata: unknown[];
+  connectionId?: ConnectionId;
   afterEvent: EntityId;
 }
 
@@ -408,6 +438,16 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'alertPolicy',
   'alertNotificationTarget',
   'typeLibrary',
+  'channel',
+  'dataStore',
+  'team',
+  'person',
+  'decision',
+  'document',
+  'designGraph',
+  'dataProduct',
+  'specification',
+  'systemGroup',
 ]);
 
 const WIRE_KIND: Record<string, EntityKind> = {
@@ -440,6 +480,16 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_ALERT_POLICY: 'alertPolicy',
   ENTITY_KIND_ALERT_NOTIFICATION_TARGET: 'alertNotificationTarget',
   ENTITY_KIND_TYPE_LIBRARY: 'typeLibrary',
+  ENTITY_KIND_CHANNEL: 'channel',
+  ENTITY_KIND_DATA_STORE: 'dataStore',
+  ENTITY_KIND_TEAM: 'team',
+  ENTITY_KIND_PERSON: 'person',
+  ENTITY_KIND_DECISION: 'decision',
+  ENTITY_KIND_DOCUMENT: 'document',
+  ENTITY_KIND_DESIGN_GRAPH: 'designGraph',
+  ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
+  ENTITY_KIND_SPECIFICATION: 'specification',
+  ENTITY_KIND_SYSTEM_GROUP: 'systemGroup',
 };
 
 export function wireKind(wire: unknown): EntityKind | undefined {
@@ -497,6 +547,19 @@ export function screenOfUi(model: Model, ui: Entity): Entity | undefined {
   );
 }
 
+export function termOwningDomain(entity: Entity): EntityId | undefined {
+  if (entity.kind !== 'term' || !entity.raw.owningDomain) return undefined;
+  const reference = entity.raw.owningDomain as { id?: unknown };
+  if (!reference.id || typeof reference.id !== 'object') return undefined;
+  const version = (reference.id as { version?: unknown }).version;
+  if (typeof version === 'number' && (!Number.isSafeInteger(version) || version <= 0)) return undefined;
+  if (typeof version !== 'string' && typeof version !== 'number') return undefined;
+  const exactVersion = String(version);
+  if (!/^[1-9][0-9]*$/.test(exactVersion) || BigInt(exactVersion) > 18446744073709551615n) return undefined;
+  const id = asId(reference.id);
+  return id.namespace && id.slug ? id : undefined;
+}
+
 export function termEmbodiedBy(entity: Entity): { kind: EntityKind; id: EntityId }[] {
   if (entity.kind !== 'term') return [];
   const refs = Array.isArray(entity.raw.embodiedBy) ? (entity.raw.embodiedBy as Record<string, unknown>[]) : [];
@@ -540,6 +603,12 @@ export function asId(raw: unknown): EntityId {
   };
 }
 
+function connectionIdOf(body: Record<string, unknown>): ConnectionId | undefined {
+  const id = body.connectionId;
+  if (!id || typeof id !== 'object' || !('value' in id) || typeof id.value !== 'string' || !id.value) return undefined;
+  return { value: id.value };
+}
+
 function refEdge(edge: unknown, refField: string): EdgeRef | undefined {
   if (!edge || typeof edge !== 'object') return undefined;
   const body = edge as Record<string, unknown>;
@@ -549,6 +618,7 @@ function refEdge(edge: unknown, refField: string): EdgeRef | undefined {
   if (!id) return undefined;
   return {
     id: asId(id),
+    connectionId: connectionIdOf(body),
     doc: String(body.doc ?? ''),
     metadata: Array.isArray(body.metadata) ? body.metadata : [],
   };
@@ -595,9 +665,15 @@ function normalizeEntity(wire: WireEntity): Entity | undefined {
     kind,
     id,
     key: entityKey(kind, id),
-    title: String(bodyObj.title ?? id.slug),
+    title: String(
+      (kind === 'team' || kind === 'person' || kind === 'decision' || kind === 'document' || kind === 'designGraph'
+        ? (bodyObj.title as { value?: string } | undefined)?.value
+        : bodyObj.title) ?? id.slug,
+    ),
     doc: String(bodyObj.doc ?? ''),
-    role: bodyObj.role ? String(bodyObj.role) : undefined,
+    role: bodyObj.role
+      ? String(kind === 'person' ? ((bodyObj.role as { value?: string }).value ?? '') : bodyObj.role)
+      : undefined,
     order: bodyObj.order !== undefined ? Number(bodyObj.order) : undefined,
     color: bodyObj.color ? String(bodyObj.color) : undefined,
     swimlane: swimlaneRef?.id ? asId(swimlaneRef.id) : undefined,
@@ -687,6 +763,8 @@ function scenarioViews(entity: Entity): ScenarioView[] {
       v.whenDoc = s.whenDoc ? String(s.whenDoc) : undefined;
       const t = example('command', s.then, 'command');
       if (t) v.thenCommand = t;
+      const none = s.noCommand as Record<string, unknown> | undefined;
+      if (none) v.noCommand = { doc: String(none.doc ?? '') };
     }
     return v;
   });
@@ -749,8 +827,16 @@ function sliceView(entity: Entity): SliceView | undefined {
   return undefined;
 }
 
+// The event-model response can carry one entity twice, for example a bounded
+// context that is both a member and part of the knowledge graph. Keep the first
+// copy, because every view keys canvas nodes and edges by entity.
 export function buildModel(wireEntities: WireEntity[]): Model {
-  return assembleModel(wireEntities.map(normalizeEntity).filter((x): x is Entity => Boolean(x)));
+  const byKey = new Map<string, Entity>();
+  for (const wire of wireEntities) {
+    const e = normalizeEntity(wire);
+    if (e && !byKey.has(e.key)) byKey.set(e.key, e);
+  }
+  return assembleModel([...byKey.values()]);
 }
 
 /**
@@ -849,6 +935,7 @@ function buildContinuations(
           to,
           doc: String(next.doc ?? ''),
           metadata: Array.isArray(next.metadata) ? next.metadata : [],
+          connectionId: connectionIdOf(next),
           afterEvent: afterId,
         });
       }
@@ -899,6 +986,12 @@ export function assembleModel(entities: Entity[]): Model {
   return { entities, byKey, byKind, slices, storyboards, continuations, swimlanes, tracking, namespaces };
 }
 
+/** True when some swimlane holds an event: the stream towers then have something to draw. */
+export function hasStreamEvents(model: Model): boolean {
+  const lanes = new Set(model.swimlanes.map((l) => slugKey('swimlane', l.id)));
+  return model.entities.some((e) => e.kind === 'event' && e.swimlane && lanes.has(slugKey('swimlane', e.swimlane)));
+}
+
 /** Tracker entries pointing at this entity (status overlays). */
 export function trackingOf(model: Model, entity: Entity): TrackingView[] {
   return model.tracking.get(slugKey(entity.kind, entity.id)) ?? [];
@@ -941,9 +1034,27 @@ export function storyboardEntryObserver(sb: Entity): StoryboardEntryObserver {
   };
 }
 
-/** Ordered slice keys: storyboard order first, leftovers by slug. */
+/**
+ * One slice per `namespace/slug`, at its highest loaded version. Every view that
+ * lists slices must use this, so they agree on which version a slug means.
+ */
+export function latestSliceBySlug(model: Model): Map<string, SliceView> {
+  const bySlug = new Map<string, SliceView>();
+  for (const s of model.slices) {
+    const k = `${s.entity.id.namespace}/${s.entity.id.slug}`;
+    const cur = bySlug.get(k);
+    if (!cur || versionOf(s.entity.id) > versionOf(cur.entity.id)) bySlug.set(k, s);
+  }
+  return bySlug;
+}
+
+/**
+ * Ordered slices: storyboard order first, leftovers by slug. Only the latest
+ * version of a slug is listed, so an older version no storyboard names does not
+ * show up as a second slice on the board, plan and sequence views.
+ */
 export function orderedSlices(model: Model): SliceView[] {
-  const bySlug = new Map(model.slices.map((s) => [`${s.entity.id.namespace}/${s.entity.id.slug}`, s]));
+  const bySlug = latestSliceBySlug(model);
   const ordered: SliceView[] = [];
   const seen = new Set<string>();
   for (const sb of model.storyboards) {
@@ -958,8 +1069,9 @@ export function orderedSlices(model: Model): SliceView[] {
       }
     }
   }
-  const rest = model.slices
-    .filter((s) => !seen.has(`${s.entity.id.namespace}/${s.entity.id.slug}`))
+  const rest = [...bySlug.entries()]
+    .filter(([k]) => !seen.has(k))
+    .map(([, s]) => s)
     .sort((a, b) => a.entity.id.slug.localeCompare(b.entity.id.slug));
   return [...ordered, ...rest];
 }
@@ -1076,6 +1188,13 @@ export function neighborsOf(model: Model, entity: Entity): { backward: NeighborV
   }
 
   return { backward, forward };
+}
+
+/** Id prefix of a seam edge; the 2D producers build the ids and the 3D view reads them back. */
+export const SEAM_EDGE_PREFIX = 'seam:';
+
+export function isSeamEdge(edgeId: string): boolean {
+  return edgeId.startsWith(SEAM_EDGE_PREFIX);
 }
 
 // A context seam: the ONE legal touchpoint between bounded contexts, an

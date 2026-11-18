@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tonic::{Code, Request};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 const NS: &str = "scenario-validation";
 
@@ -19,6 +19,7 @@ fn id(slug: &str, version: u64) -> pb::Id {
 
 fn event_edge(slug: &str) -> pb::EventEdge {
     pb::EventEdge {
+        connection_id: None,
         event: Some(pb::EventRef {
             id: Some(id(slug, 1)),
         }),
@@ -29,6 +30,7 @@ fn event_edge(slug: &str) -> pb::EventEdge {
 
 fn command_edge(slug: &str) -> pb::CommandEdge {
     pb::CommandEdge {
+        connection_id: None,
         command: Some(pb::CommandRef {
             id: Some(id(slug, 1)),
         }),
@@ -39,6 +41,7 @@ fn command_edge(slug: &str) -> pb::CommandEdge {
 
 fn ui_edge(slug: &str) -> pb::UiEdge {
     pb::UiEdge {
+        connection_id: None,
         ui: Some(pb::UiRef {
             id: Some(id(slug, 1)),
         }),
@@ -49,6 +52,7 @@ fn ui_edge(slug: &str) -> pb::UiEdge {
 
 fn persona_edge(slug: &str) -> pb::PersonaEdge {
     pb::PersonaEdge {
+        connection_id: None,
         persona: Some(pb::PersonaRef {
             id: Some(id(slug, 1)),
         }),
@@ -138,7 +142,7 @@ fn make_ui(slug: &str) -> pb::Entity {
 async fn seed_basics() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let basics = vec![
         make_event("order.placed"),
         make_event("order.paid"),
@@ -332,6 +336,87 @@ async fn command_scenario_clean_is_accepted() {
         .unwrap();
 }
 
+fn automation_slice_with_scenarios(scenarios: Vec<pb::AutomationScenario>) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(id("place-order-automation", 1)),
+            title: "place-order-automation".into(),
+            emitted_command: Some(command_edge("place-order")),
+            scenarios,
+            ..Default::default()
+        })),
+    }
+}
+
+fn automation_scenario(
+    title: &str,
+    outcome: Option<pb::automation_scenario::Outcome>,
+) -> pb::AutomationScenario {
+    pb::AutomationScenario {
+        id: title.into(),
+        title: title.into(),
+        doc: String::new(),
+        given: Vec::new(),
+        when_doc: "order paid".into(),
+        outcome,
+        metadata: Vec::new(),
+    }
+}
+
+fn issues_command(slug: &str) -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::Then(command_example(slug))
+}
+
+fn issues_no_command() -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::NoCommand(pb::NoCommand {
+        doc: "still within backoff".into(),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_command_or_no_command_is_accepted() {
+    let svc = seed_basics().await;
+    let scenarios = vec![
+        automation_scenario("fires", Some(issues_command("place-order"))),
+        automation_scenario("does not fire", Some(issues_no_command())),
+    ];
+    put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_missing_outcome_is_rejected() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario("no outcome", None)];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_MISSING_THEN"),
+        "msg={}",
+        err.message()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_command_must_match_slice_command() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario(
+        "wrong command",
+        Some(issues_command("cancel-order")),
+    )];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_COMMAND_MISMATCH"),
+        "msg={}",
+        err.message()
+    );
+}
+
 fn make_event_on_lane(slug: &str, lane: &str) -> pb::Entity {
     pb::Entity {
         system: None,
@@ -359,6 +444,7 @@ fn make_lane_with_transitions(slug: &str, after: &str, next: &[&str]) -> pb::Ent
                 next: next
                     .iter()
                     .map(|n| pb::swimlane::transition::Next {
+                        connection_id: None,
                         event: Some(pb::EventRef { id: Some(id(n, 1)) }),
                         doc: String::new(),
                         metadata: Vec::new(),
@@ -674,6 +760,66 @@ async fn batch_mutate_scenario_error_reports_correct_failed_op_index() {
     assert_eq!(
         resp.failed_op_index, 1,
         "failed_op_index must point at the slice op with the scenario error, not 0"
+    );
+}
+
+/// A real batch admits architecture only after the scenario gate, so a
+/// scenario failure must not report architecture as having run.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_scenario_error_does_not_claim_architecture_ran() {
+    let svc = seed_basics().await;
+
+    let dangling = pb::CommandScenario {
+        id: "s1".into(),
+        title: "dangling".into(),
+        given: vec![event_example("does-not-exist")],
+        when: Some(command_example("place-order")),
+        then: Some(pb::command_scenario::Then::Emit(pb::EmittedEvents {
+            events: vec![event_example("order.placed")],
+        })),
+        ..Default::default()
+    };
+    let team = pb::Entity {
+        kind: Some(pb::entity::Kind::Team(pb::Team {
+            id: Some(id("arch-gate-team", 1)),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Gate team".into(),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let resp = svc
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            operation_id: String::new(),
+            ops: vec![
+                put_op(team),
+                put_op(command_slice_named("arch-gate-slice", vec![dangling])),
+            ],
+            validate_only: false,
+        }))
+        .await
+        .expect("scenario failure is a Failed response, not gRPC error")
+        .into_inner();
+
+    assert_eq!(
+        resp.status,
+        pb::batch_mutate_response::Status::Failed as i32
+    );
+    let coverage = resp.coverage.expect("scenario failure reports coverage");
+    let architecture = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "architecture")
+        .expect("architecture suite");
+    assert_eq!(
+        (architecture.state, architecture.reason.as_str()),
+        (
+            pb::validation_check_result::State::Skipped as i32,
+            "blocked_by_scenarios"
+        ),
+        "{coverage:?}"
     );
 }
 

@@ -184,3 +184,48 @@ describe('context seams', () => {
     expect(seam.view.id.namespace).toBe('down');
   });
 });
+
+const twoVersionModel = (ns: string) => {
+  const slice = (slug: string, version: string, ui: string, command: string, event: string) => ({
+    commandSlice: {
+      id: { namespace: ns, slug, version },
+      title: `${slug} v${version}`,
+      persona: { persona: { id: id(ns, 'buyer') } },
+      ui: { ui: { id: id(ns, ui) } },
+      command: { command: { id: id(ns, command) } },
+      emittedEvents: [{ event: { id: id(ns, event) } }],
+    },
+  });
+  return [
+    { persona: { id: id(ns, 'buyer'), title: 'Buyer' } },
+    { ui: { id: id(ns, 'home'), title: 'Home' } },
+    { ui: { id: id(ns, 'old-page'), title: 'Old page' } },
+    { ui: { id: id(ns, 'detail'), title: 'Detail' } },
+    { command: { id: id(ns, 'open-item'), title: 'open-item' } },
+    { command: { id: id(ns, 'buy'), title: 'buy' } },
+    { event: { id: id(ns, 'item.opened'), title: 'item.opened' } },
+    { event: { id: id(ns, 'item.bought'), title: 'item.bought' } },
+    slice('s1', '2', 'home', 'open-item', 'item.opened'),
+    slice('s1', '1', 'old-page', 'open-item', 'item.opened'),
+    slice('s2', '1', 'detail', 'buy', 'item.bought'),
+    {
+      storyboard: {
+        id: id(ns, 'sb'),
+        title: 'flow',
+        slices: [{ id: id(ns, 's1') }, { id: id(ns, 's2') }],
+      },
+    },
+  ];
+};
+
+describe('buildSitemap: a slice loaded at two versions', () => {
+  it('draws the highest version, whatever the load order', () => {
+    const { nodes, edges } = buildSitemap(buildModel(twoVersionModel('shop') as never));
+    const slugs = (ids: string[]) =>
+      ids.map(
+        (n) => (nodes.find((x) => x.id === n)?.data as { ui?: { id: { slug: string } } } | undefined)?.ui?.id.slug,
+      );
+    expect(slugs(edges.map((e) => e.source))).toContain('home');
+    expect(slugs(edges.map((e) => e.source))).not.toContain('old-page');
+  });
+});

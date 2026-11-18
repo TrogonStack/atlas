@@ -1,7 +1,9 @@
+use std::{collections::HashSet, sync::Arc};
+
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use trogon_atlas_core::{Epoch, NamespaceId, NamespaceName, OwnerId, WriterRole};
-use trogon_atlas_proto::{Entity, EntityKind, EntityRef, Id};
+use trogon_atlas_proto::{Entity, EntityKey, EntityKind, EntityRef, Id};
 
 use crate::error::{StoreError, StoreResult};
 
@@ -34,12 +36,14 @@ pub struct BranchDeltaEntry {
 /// rather than silently overwritten).
 #[derive(Debug, Clone)]
 pub enum BranchLandOp {
-    /// Write `ours` to baseline verbatim -- no `system` re-stamping. Used
+    /// Land a trusted branch value while preserving incarnation identity and
+    /// checking connection provenance against its recorded fork snapshot. Used
     /// for ADDED/CHANGED entries (and CONFLICT_DELETE_EDIT resolved via
     /// take-ours, if ever surfaced that way).
     Put {
         kind: EntityKind,
         ours: Box<Entity>,
+        base: Option<Box<Entity>>,
         /// Baseline etag this was diffed against. `None` means baseline
         /// had no row for this key at diff time.
         expected_baseline_etag: Option<String>,
@@ -174,6 +178,43 @@ pub struct NamespaceClaim {
 pub enum ChangeKind {
     Put,
     Delete,
+    /// Protection set on the entity's identity. Only ever a changeset op; the
+    /// change feed never carries it.
+    Protect,
+    /// Protection lifted. Same changeset-only rule as [`ChangeKind::Protect`].
+    Unprotect,
+}
+
+impl ChangeKind {
+    #[must_use]
+    pub fn to_proto(self) -> i32 {
+        use trogon_atlas_proto::change_event::Kind;
+        match self {
+            Self::Put => Kind::Put as i32,
+            Self::Delete => Kind::Deleted as i32,
+            Self::Protect => Kind::Protected as i32,
+            Self::Unprotect => Kind::Unprotected as i32,
+        }
+    }
+
+    #[must_use]
+    pub fn from_proto(raw: i32) -> Option<Self> {
+        use trogon_atlas_proto::change_event::Kind;
+        match Kind::try_from(raw).ok()? {
+            Kind::Put => Some(Self::Put),
+            Kind::Deleted => Some(Self::Delete),
+            Kind::Protected => Some(Self::Protect),
+            Kind::Unprotected => Some(Self::Unprotect),
+            Kind::Unspecified => None,
+        }
+    }
+
+    /// Whether this kind changes entity content, as opposed to the
+    /// protection registry.
+    #[must_use]
+    pub fn is_content(self) -> bool {
+        matches!(self, Self::Put | Self::Delete)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +254,15 @@ pub struct ChangesetRef<'a> {
     pub operation_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ConnectionAdmission<'a> {
+    #[default]
+    Active,
+    /// Only for server-computed structural merges of stored snapshots while
+    /// holding the writer lease and mutation lock across selection and write.
+    BranchMerge { base: &'a Entity },
+}
+
 /// Scope and attribution for one mutating call.
 ///
 /// This replaces the bare `branch: Option<&str>` that mutating methods used
@@ -227,6 +277,8 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    settlement_deferred: bool,
+    connection_admission: ConnectionAdmission<'a>,
 }
 
 impl<'a> WriteContext<'a> {
@@ -243,6 +295,8 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -254,6 +308,8 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -264,6 +320,33 @@ impl<'a> WriteContext<'a> {
         self
     }
 
+    #[must_use]
+    pub(crate) fn without_changeset(self) -> Self {
+        Self {
+            changeset: None,
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn without_branch(self) -> Self {
+        Self {
+            branch: None,
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_branch_merge_base(mut self, base: &'a Entity) -> Self {
+        self.connection_admission = ConnectionAdmission::BranchMerge { base };
+        self
+    }
+
+    #[must_use]
+    pub fn connection_admission(self) -> ConnectionAdmission<'a> {
+        self.connection_admission
+    }
+
     /// Attach the operation-receipt key this write claims, so a journaled
     /// batch can record it and a later recovery pass can settle it. See
     /// `trogon_atlas_store::operations`.
@@ -271,6 +354,20 @@ impl<'a> WriteContext<'a> {
     pub fn with_operation_key(mut self, key: &'a str) -> Self {
         self.operation_key = Some(key);
         self
+    }
+
+    /// Mark the claimed receipt as settled by the caller only after work
+    /// that follows this write, so a recovery pass that finds the write
+    /// durable does not settle it applied on the caller's behalf.
+    #[must_use]
+    pub fn with_deferred_settlement(mut self) -> Self {
+        self.settlement_deferred = true;
+        self
+    }
+
+    #[must_use]
+    pub fn settlement_deferred(self) -> bool {
+        self.settlement_deferred
     }
 
     #[must_use]
@@ -295,6 +392,123 @@ impl<'a> WriteContext<'a> {
 pub struct ChangesetOp {
     pub kind: ChangeKind,
     pub entity_ref: EntityRef,
+}
+
+/// What validation backed a changeset when it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangesetValidation {
+    /// Recorded before receipts existed. Nothing is known, which is not the
+    /// same as a clean result.
+    NotRecorded,
+    /// No validation coverage was declared for the write, so no issue
+    /// counts are recorded.
+    Unvalidated(UnvalidatedReason),
+    Validated(ValidationReceipt),
+}
+
+impl ChangesetValidation {
+    /// The wire receipt. `None` for [`ChangesetValidation::NotRecorded`], so
+    /// an old changeset keeps reading as "nothing known".
+    #[must_use]
+    pub fn to_proto(&self) -> Option<trogon_atlas_proto::ChangesetValidation> {
+        use trogon_atlas_proto::changeset_validation::Outcome;
+        let outcome = match self {
+            Self::NotRecorded => return None,
+            Self::Unvalidated(reason) => {
+                Outcome::Unvalidated(trogon_atlas_proto::ChangesetUnvalidated {
+                    reason: reason.as_str().to_owned(),
+                })
+            }
+            Self::Validated(receipt) => {
+                Outcome::Validated(trogon_atlas_proto::ChangesetValidated {
+                    coverage_complete: receipt.coverage == ReceiptCoverage::Complete,
+                    incomplete_checks: match &receipt.coverage {
+                        ReceiptCoverage::Complete => Vec::new(),
+                        ReceiptCoverage::Incomplete(checks) => checks.clone(),
+                    },
+                    error_count: receipt.issues.errors,
+                    warning_count: receipt.issues.warnings,
+                    info_count: receipt.issues.infos,
+                    rule_catalog_digest: receipt.rule_catalog.as_str().to_owned(),
+                })
+            }
+        };
+        Some(trogon_atlas_proto::ChangesetValidation {
+            outcome: Some(outcome),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnvalidatedReason {
+    /// The write path reports no validation coverage.
+    NoDeclaredCoverage,
+    /// Reconstructed by crash recovery, which cannot know what ran.
+    Recovered,
+    /// A reason written by a newer server. Kept verbatim rather than mapped
+    /// onto a known one.
+    Unrecognized(String),
+}
+
+impl UnvalidatedReason {
+    const NO_DECLARED_COVERAGE: &'static str = "no_declared_coverage";
+    const RECOVERED: &'static str = "recovered";
+
+    #[must_use]
+    pub fn parse(token: &str) -> Self {
+        match token {
+            Self::NO_DECLARED_COVERAGE => Self::NoDeclaredCoverage,
+            Self::RECOVERED => Self::Recovered,
+            other => Self::Unrecognized(other.to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::NoDeclaredCoverage => Self::NO_DECLARED_COVERAGE,
+            Self::Recovered => Self::RECOVERED,
+            Self::Unrecognized(token) => token,
+        }
+    }
+}
+
+/// The result of the suites a write path ran before its changeset landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationReceipt {
+    pub coverage: ReceiptCoverage,
+    pub issues: IssueCounts,
+    pub rule_catalog: RuleCatalogDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptCoverage {
+    Complete,
+    /// Check ids that applied but did not complete, sorted.
+    Incomplete(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IssueCounts {
+    pub errors: u32,
+    pub warnings: u32,
+    pub infos: u32,
+}
+
+/// Identity of the rule catalogue a validation ran with, as lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleCatalogDigest(String);
+
+impl RuleCatalogDigest {
+    #[must_use]
+    pub fn new(hex: String) -> Self {
+        Self(hex)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Durable record of one mutation RPC: what landed together, who did it,
@@ -322,6 +536,7 @@ pub struct ChangesetRecord {
     /// The `operation_id` the mutation carried, if any. See
     /// `ChangesetRef::operation_id`.
     pub operation_id: Option<String>,
+    pub validation: ChangesetValidation,
 }
 
 /// One entity as it stood on either side of one changeset's write.
@@ -395,6 +610,21 @@ impl ChangesetScope<'_> {
     }
 }
 
+/// True when at least one of `record`'s ops wrote an entity in `namespace`.
+///
+/// A changeset can span namespaces, so a namespace filter keeps the whole
+/// record rather than trimming its ops: a trimmed record would describe a
+/// change that never happened.
+#[must_use]
+pub fn touches_namespace(record: &ChangesetRecord, namespace: &str) -> bool {
+    record.ops.iter().any(|op| {
+        op.entity_ref
+            .id
+            .as_ref()
+            .is_some_and(|id| id.namespace == namespace)
+    })
+}
+
 /// Paging request for [`Store::list_changesets`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChangesetPage<'a> {
@@ -405,6 +635,8 @@ pub struct ChangesetPage<'a> {
     pub limit: usize,
     /// Which changesets the page covers.
     pub scope: ChangesetScope<'a>,
+    /// Only changesets with at least one op in this namespace. `None` = all.
+    pub namespace: Option<&'a str>,
 }
 
 /// Backend-agnostic persistence interface. The bundled implementation is
@@ -429,6 +661,14 @@ pub struct ChangesetPage<'a> {
 /// - `delete`: removes the row. `expected_etag = None` is an unconditional
 ///   delete; a `Some(etag)` fails with `EtagMismatch` if the stored etag
 ///   differs. Returns `NotFound` if no row exists.
+///
+/// Connection-bearing writes normalize IDs against the entity actually replaced
+/// before semantic no-op detection. Use
+/// `trogon_atlas_core::connection_persistence::prepare_entity` for ordinary
+/// writes and `prepare_landing` for trusted branch landings. Existing owners
+/// accept supplied IDs only for active occurrences; additions receive fresh IDs.
+/// Branch landing and resolution also consult the recorded common base so
+/// deleted occurrences cannot be restored under their former identity.
 ///
 /// ## Error mapping
 ///
@@ -469,8 +709,27 @@ pub struct ChangesetPage<'a> {
 ///
 /// See `create_branch`/`list_branches`/`delete_branch` for branch lifecycle
 /// management, and `docs/explanation/branching.md` for the full design.
+/// Most entities a single `list` call returns, whatever `limit` asks for.
+pub const LIST_HARD_CAP: usize = 10_000;
+
 #[async_trait]
 pub trait Store: Send + Sync {
+    /// A leader-observed revision of every model input, unavailable while a
+    /// recoverable write is in flight. Equal markers bracket a stable read.
+    async fn read_marker(&self) -> StoreResult<StoreReadMarker> {
+        Err(StoreError::Unavailable(
+            "consistent read markers are unsupported by this store".into(),
+        ))
+    }
+
+    fn artifact_publication_authority(
+        &self,
+    ) -> StoreResult<Arc<dyn crate::artifact_publication::ArtifactPublicationAuthority>> {
+        Err(StoreError::Unavailable(
+            "artifact publication authority is unsupported by this store".into(),
+        ))
+    }
+
     // ---- Single-writer fencing --------------------------------------------
     //
     // Only one process may mutate at a time; see `docs/explanation/single-writer.md`.
@@ -562,7 +821,7 @@ pub trait Store: Send + Sync {
     /// (kind, namespace, slug, version asc).
     ///
     /// `limit` caps the number of results returned. When `None` the store
-    /// applies an internal hard cap (`10_000`) to prevent unbounded scans.
+    /// applies [`LIST_HARD_CAP`] to prevent unbounded scans.
     /// Callers should always pass the bound they actually need.
     ///
     /// # Memory
@@ -577,6 +836,67 @@ pub trait Store: Send + Sync {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
+
+    /// List with a cumulative stored-payload byte budget enforced before decoding.
+    ///
+    /// The budget covers scanned baseline Entity payloads and full branch delta
+    /// payloads before latest-version selection or result truncation. Branch
+    /// payloads include retained base/ours snapshots, tombstones and protobuf
+    /// framing. Return `ResourceExhausted` before decoding an over-budget payload.
+    async fn list_bounded(
+        &self,
+        _filter: ListFilter<'_>,
+        _limit: Option<usize>,
+        _branch: Option<&str>,
+        _budget: EntityByteBudget,
+    ) -> StoreResult<Vec<StoredEntity>> {
+        Err(StoreError::Unavailable(
+            "byte-bounded entity listing is unsupported by this store".into(),
+        ))
+    }
+
+    /// Requested targets explicitly referenced by entities in the merged view.
+    ///
+    /// Resolve all targets in one complete scan, without list() truncation.
+    /// Implementations must fail closed on scan errors or time limits. Callers using
+    /// this as a mutation guard hold the writer lease and mutation lock throughout.
+    /// Untyped slice references use the graph's first-existing-kind precedence.
+    /// Implicit schema ownership by type libraries is checked separately.
+    async fn referenced_targets(
+        &self,
+        targets: &[EntityKey],
+        branch: Option<&str>,
+    ) -> StoreResult<HashSet<EntityKey>>;
+
+    /// Complete incoming-reference guard over the final proposed owner replacements and deletions.
+    /// Callers hold the same writer lease and mutation lock as `referenced_targets`.
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[EntityKey],
+        branch: Option<&str>,
+        overlay: &[(EntityKey, Option<Entity>)],
+    ) -> StoreResult<HashSet<EntityKey>> {
+        if !overlay.is_empty() {
+            return Err(StoreError::Backend(
+                "final-view reference scanning is unsupported".into(),
+            ));
+        }
+        self.referenced_targets(targets, branch).await
+    }
+
+    /// Whether any entity in the merged view explicitly references this exact target.
+    async fn has_incoming_reference(
+        &self,
+        kind: EntityKind,
+        id: &Id,
+        branch: Option<&str>,
+    ) -> StoreResult<bool> {
+        let target = EntityKey::new(kind, id);
+        Ok(self
+            .referenced_targets(std::slice::from_ref(&target), branch)
+            .await?
+            .contains(&target))
+    }
 
     /// Append a change record. Returns the assigned sequence number.
     ///
@@ -720,10 +1040,11 @@ pub trait Store: Send + Sync {
     /// Returns an empty vec (not `NotFound`) for a branch with zero deltas.
     async fn list_branch_deltas(&self, branch: &str) -> StoreResult<Vec<BranchDeltaEntry>>;
 
-    /// Land a set of branch deltas onto baseline verbatim: `BranchLandOp::Put`
-    /// writes `ours` bytes as-is (no `system` re-stamp, no idempotency
-    /// short-circuit -- identity is preserved exactly as authored on the
-    /// branch); `BranchLandOp::Delete` removes the baseline row. Each op is
+    /// Land a set of branch deltas onto baseline. Each `BranchLandOp::Put`
+    /// passes through `prepare_landing` against the baseline row it replaces,
+    /// preserving connection identity and checking the recorded fork snapshot while
+    /// allowing the system stamp to change. There is no idempotency
+    /// short-circuit. `BranchLandOp::Delete` removes the baseline row. Each op is
     /// guarded by the baseline etag captured at diff time: if baseline moved
     /// since then, the whole call fails without applying anything (the
     /// caller is expected to have already re-diffed under the mutation lock
@@ -762,11 +1083,14 @@ pub trait Store: Send + Sync {
     /// Resolve a single conflicting entry on `branch`:
     /// - `take_theirs = true`: overwrite the delta with the current
     ///   baseline value (or remove the delta entirely if baseline no
-    ///   longer has the key), clearing the conflict by making `ours`
-    ///   converge with baseline.
+    ///   longer has the key).
     /// - `take_theirs = false` (keep ours): rebase `base`/`base_etag`
-    ///   forward to the current baseline, keeping the branch's `ours`
-    ///   unchanged.
+    ///   forward to the current baseline, keeping the branch's content.
+    ///
+    /// Both choices preserve the selected incarnation. Within the same
+    /// incarnation, consult the common base and renew selected connections
+    /// whose IDs the discarded side removed. Unaffected IDs remain stable.
+    /// Taking theirs can therefore leave a resolved delta rather than converge.
     ///
     /// Returns `NotFound` if the branch has no delta for this key.
     async fn resolve_branch_entry(
@@ -851,6 +1175,7 @@ pub trait Store: Send + Sync {
                 before: None,
                 limit: 1,
                 scope: ChangesetScope::Baseline,
+                namespace: None,
             })
             .await?;
         Ok(newest.into_iter().next().map(|record| record.id))
@@ -933,6 +1258,14 @@ pub trait Store: Send + Sync {
     /// releasing a row that is already gone succeeds.
     async fn release_namespace(&self, id: &NamespaceId) -> StoreResult<()>;
 
+    /// Drop a row of any tenure and its name index.
+    ///
+    /// Returns the removed record so the caller can retire its authorization
+    /// edges. Store-level only: the caller must first prove the namespace
+    /// holds nothing. Fails with `NotFound` when no such row exists, and with
+    /// a backend error when the row changed after it was read.
+    async fn delete_namespace(&self, id: &NamespaceId) -> StoreResult<NamespaceRecord>;
+
     /// Make a provisional row permanent, because its branch merged.
     ///
     /// `None` when no such row exists. A row that is already permanent is
@@ -941,6 +1274,41 @@ pub trait Store: Send + Sync {
 
     /// Look up one row by id. `None` when no such namespace is registered.
     async fn get_namespace(&self, id: &NamespaceId) -> StoreResult<Option<NamespaceRecord>>;
+
+    // ---- Entity protection registry ---------------------------------------
+    //
+    // Protection is keyed by identity rather than stored on the entity, so no
+    // write, merge, or revert of the entity can carry it away. Rows are never
+    // versioned and never branch-scoped: a branch cannot see a different
+    // answer than baseline, which is what keeps an old branch from merging
+    // over a protected identity.
+
+    /// One identity's protection. A row that exists but cannot be decoded is
+    /// [`ProtectionState::Unknown`](crate::protection::ProtectionState::Unknown);
+    /// `Err` means the registry did not answer.
+    async fn get_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+    ) -> StoreResult<crate::protection::ProtectionState>;
+
+    /// Write a row. Fails with `AlreadyExists` when a row is already there, so
+    /// two concurrent protects cannot both claim to have set it.
+    async fn put_protection(
+        &self,
+        record: &crate::protection::ProtectionRecord,
+    ) -> StoreResult<crate::protection::ProtectionRevision>;
+
+    /// Remove the row only if it is still at `expected`. `EtagMismatch` when
+    /// it moved or is gone.
+    async fn delete_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+        expected: crate::protection::ProtectionRevision,
+    ) -> StoreResult<()>;
+
+    /// Every row the registry can enumerate, for listing only; the write path
+    /// looks identities up one at a time.
+    async fn list_protections(&self) -> StoreResult<crate::protection::ProtectionListing>;
 
     /// Resolve a human name to its id *within one owner*. `None` when that
     /// owner has no namespace by that name, even if another owner does.
@@ -1028,11 +1396,92 @@ pub trait Store: Send + Sync {
         Ok(())
     }
 
+    /// Settle a claim as not-applied although changeset `changeset_id`
+    /// already landed its content: a later step of the same operation
+    /// failed, so a retry is free to claim again and can recognise that
+    /// content as its own instead of tripping its own precondition. A
+    /// backend that cannot record the changeset settles plain not-applied.
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        let _ = changeset_id;
+        self.settle_operation_not_applied(key).await
+    }
+
     /// Look up a claim by key, for `GetOperation`. `None` means no record:
     /// never claimed, or past the backend's retention.
     async fn get_operation(&self, key: &str) -> StoreResult<Option<OperationRecord>> {
         let _ = key;
         Ok(None)
+    }
+
+    async fn source_expire_transaction(
+        &self,
+        _registration: &crate::source::SourceDocumentKey,
+        _run_id: &str,
+        _plan_digest: &str,
+    ) -> StoreResult<()> {
+        Err(StoreError::Unavailable(
+            "source retention is unsupported".into(),
+        ))
+    }
+
+    async fn source_prepare(
+        &self,
+        _publication: &crate::source::SourcePublication,
+    ) -> StoreResult<()> {
+        Err(StoreError::Unavailable(
+            "coordinated source preparation is unsupported".into(),
+        ))
+    }
+
+    async fn source_publish(
+        &self,
+        _publication: &crate::source::SourcePublication,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        Err(StoreError::Unavailable(
+            "coordinated source publication is unsupported".into(),
+        ))
+    }
+
+    async fn source_recover(
+        &self,
+        _registration: &crate::source::SourceDocumentKey,
+        _run_id: &str,
+        _plan_digest: &str,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        Err(StoreError::Unavailable(
+            "coordinated source recovery is unsupported".into(),
+        ))
+    }
+
+    async fn source_get(
+        &self,
+        _key: &crate::source::SourceDocumentKey,
+    ) -> StoreResult<Option<crate::source::SourceDocument>> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
+    }
+
+    async fn source_compare_and_swap(
+        &self,
+        _key: &crate::source::SourceDocumentKey,
+        _expected_revision: Option<u64>,
+        _bytes: &[u8],
+        _storage_limit: u64,
+    ) -> StoreResult<crate::source::SourceDocument> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
+    }
+
+    async fn source_list(
+        &self,
+        _after: Option<&str>,
+        _limit: usize,
+    ) -> StoreResult<crate::source::SourceDocumentPage> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
     }
 }
 
@@ -1078,7 +1527,9 @@ pub struct OperationRecord {
     /// Branch the mutation applied to. `None` = baseline.
     pub branch: Option<String>,
     pub status: OperationStatus,
-    /// Set when `status == Applied`.
+    /// Set when `status == Applied`, and on a `NotApplied` claim whose
+    /// content landed before a later step failed (see
+    /// [`Store::settle_operation_unfinished`]).
     pub changeset_id: String,
     /// Set when `status == Rejected`.
     pub rejection_code: String,
@@ -1170,7 +1621,53 @@ pub struct Written {
 pub struct ListFilter<'a> {
     pub kinds: &'a [EntityKind],
     pub namespaces: &'a [String],
+    /// Restrict the listing to one slug. With one kind and one namespace this
+    /// names a single identity, so the answer is every stored version of it
+    /// (or just the latest with `latest_versions_only`) no matter how many
+    /// other identities the store holds, and a result cap can never push the
+    /// identity out of the listing.
+    pub slug: Option<&'a str>,
     pub latest_versions_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityByteBudget {
+    max_encoded_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BucketReadRevision {
+    pub(crate) incarnation: String,
+    pub(crate) sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreNamespaceMarker(pub(crate) BucketReadRevision);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreReadMarker {
+    pub(crate) revisions: Vec<BucketReadRevision>,
+    pub(crate) namespace: StoreNamespaceMarker,
+    pub(crate) writer: Option<(String, u64)>,
+}
+
+impl StoreReadMarker {
+    #[must_use]
+    pub fn namespace_marker(&self) -> &StoreNamespaceMarker {
+        &self.namespace
+    }
+}
+
+impl EntityByteBudget {
+    #[must_use]
+    pub const fn new(max_encoded_bytes: usize) -> Self {
+        Self { max_encoded_bytes }
+    }
+
+    #[must_use]
+    pub const fn max_encoded_bytes(self) -> usize {
+        self.max_encoded_bytes
+    }
 }
 
 // Historical home for `stamp_system`. The policy lives in
@@ -1179,3 +1676,71 @@ pub struct ListFilter<'a> {
 // existing `trogon_atlas_store::store::stamp_system` import path keeps
 // working until call sites migrate.
 pub use trogon_atlas_core::system_meta::stamp_system;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(namespace: &str) -> ChangesetOp {
+        ChangesetOp {
+            kind: ChangeKind::Put,
+            entity_ref: EntityRef {
+                kind: EntityKind::Event as i32,
+                id: Some(Id {
+                    namespace: namespace.to_owned(),
+                    slug: "order.placed".to_owned(),
+                    version: 1,
+                }),
+            },
+        }
+    }
+
+    fn record(ops: Vec<ChangesetOp>) -> ChangesetRecord {
+        ChangesetRecord {
+            id: uuid::Uuid::now_v7().to_string(),
+            author: "acme-bot".to_owned(),
+            at: "2026-10-15T00:00:00Z".to_owned(),
+            message: String::new(),
+            rpc: "PutEntity".to_owned(),
+            branch: None,
+            ops,
+            operation_id: None,
+            validation: ChangesetValidation::NotRecorded,
+        }
+    }
+
+    #[test]
+    fn touches_namespace_matches_an_op_in_the_namespace() {
+        assert!(touches_namespace(
+            &record(vec![op("acme.orders")]),
+            "acme.orders"
+        ));
+    }
+
+    #[test]
+    fn touches_namespace_rejects_ops_only_in_other_namespaces() {
+        assert!(!touches_namespace(
+            &record(vec![op("acme.billing")]),
+            "acme.orders"
+        ));
+    }
+
+    #[test]
+    fn touches_namespace_matches_when_any_op_of_a_mixed_changeset_matches() {
+        let mixed = record(vec![op("acme.billing"), op("acme.orders")]);
+        assert!(touches_namespace(&mixed, "acme.orders"));
+        assert!(touches_namespace(&mixed, "acme.billing"));
+        assert!(!touches_namespace(&mixed, "acme.shipping"));
+    }
+
+    #[test]
+    fn touches_namespace_rejects_a_changeset_with_no_ops() {
+        assert!(!touches_namespace(&record(Vec::new()), "acme.orders"));
+    }
+
+    #[test]
+    fn touches_namespace_needs_an_exact_match() {
+        // A prefix is a different namespace, not a parent of it.
+        assert!(!touches_namespace(&record(vec![op("acme.orders")]), "acme"));
+    }
+}

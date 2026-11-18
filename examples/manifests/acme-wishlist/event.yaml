@@ -1,0 +1,25 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: wishlist-item.added
+  namespace: acme-wishlist
+spec:
+  doc: A shopper added a product to their wishlist.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: shopper_id
+      type:
+        uuid: {}
+    - name: product_id
+      type:
+        uuid: {}
+    - name: added_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-wishlist
+      slug: wishlist
+      version: '1'
+  title: Wishlist item added

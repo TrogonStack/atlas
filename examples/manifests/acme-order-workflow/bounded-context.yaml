@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-order-workflow
+  namespace: acme-order-workflow
+spec:
+  doc: Runs one order through tax, payment and shipping, and cancels it when payment fails.
+  realizes:
+  - id:
+      namespace: acme
+      slug: ordering
+      version: '1'
+  title: Acme Order Workflow

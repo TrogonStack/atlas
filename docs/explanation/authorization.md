@@ -51,8 +51,9 @@ The server already has authentication, but no authorization:
 - The server refuses to start without a token unless
   `--insecure-allow-anonymous` (`TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS=true`) is
   passed explicitly. This escape hatch exists for local development and CI.
-- The gRPC health service is mounted outside the interceptor so probes work
-  without credentials.
+- Health, `/-/readiness` and `/-/liveness` over HTTP and the
+  `grpc.health.v1.Health` service, is mounted outside the interceptor so
+  probes work without credentials.
 
 The gaps:
 
@@ -147,7 +148,7 @@ Three ordered roles:
 | -------- | ------------------------------------------------------------------- |
 | `reader` | Read-only RPCs: `Get*`, `List*` (including `ListBranches`), `Search*`, `Diff*`, `BatchGet`, projections, references, impact |
 | `writer` | Everything `reader` has, plus `PutEntity`, `BatchMutate`, and LLM-backed inference RPCs (they spend tokens) |
-| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, and any future destructive RPC |
+| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, `ProtectEntity`, `UnprotectEntity`, and any future destructive RPC |
 
 `RegisterNamespace` requires `writer`: claiming a namespace is ordinary setup
 for anyone who can write. `MoveNamespace` requires `admin` because it
@@ -160,6 +161,15 @@ agents hold the `writer` and `admin` keys through the CLI and MCP. The Studio
 gateway refuses every mutating request and RPC on its own, but that check
 lives in the gateway; the `reader` role is what makes the server refuse the
 same key when someone sends it straight to the gRPC port.
+
+Protecting an entity is an `admin` decision because it overrides every
+writer's access to one identity, the admin's own included, until an admin
+lifts it. The role check alone is not enough for it: a server with no token
+registry runs every caller unauthenticated, and protection set by nobody
+could be lifted by anybody, so the handlers also require an authenticated
+admin principal. Reading the marks (`GetEntityProtection`,
+`ListEntityProtections`) is a `reader` RPC. See
+[entity protection](entity-protection.md).
 
 ### The method map (code, maintained by developers)
 
@@ -393,8 +403,9 @@ secrets system can materialize one:
 
 The repository must never contain real tokens. It ships only a documented
 example (`rsworkspace/crates/trogon-atlas-server/examples/tokens.toml`) with fake values, and
-each client stores only its own token in its environment (`TROGON_ATLAS_AUTH_TOKEN`
-on the MCP side, the gateway env on the Studio side).
+each client stores only its own token: an MCP client sends it as
+`Authorization: Bearer <token>`, the CLI reads `TROGON_ATLAS_AUTH_TOKEN`, and
+the Studio side keeps it in the gateway env.
 
 ### Request flow
 
@@ -562,14 +573,16 @@ each carries its own gate.
 The full list of key-shaped reads that carry their own gate:
 `GetEntity`, `BatchGetEntities`, `GetEntityHistory`, `DiffEntities`,
 `GetLatestVersion`, `GetOutgoingReferences`, `GetSliceProjection`,
-`GetStoryboardProjection`, `GetEventModelProjection`, `ValidateEventModel`,
-and the unscoped `ListChanges` poll. `DiffEntities` is two key lookups
+`GetStoryboardProjection`, `GetEventModelProjection`,
+`ExportEventModelManifests`, `ExportAttestedModel`, `ValidateEventModel`, and the unscoped
+`ListChanges` poll. `DiffEntities` is two key lookups
 wearing a diff for a hat; `GetLatestVersion` accepts an empty namespace
 meaning "any", so its filter runs on the results rather than on the request.
 
-The last five are the ones worth naming individually, because they read
-*both* ways and only one of the two was covered. Each fetches a root entity
-by key and then walks its neighbourhood through the lens-filtered snapshot.
+`GetOutgoingReferences`, the projection RPCs, `ExportEventModelManifests`,
+`ExportAttestedModel` and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
+and then walks its neighbourhood through the lens-filtered snapshot, but
+only the snapshot read was covered.
 The neighbourhood was narrowed correctly, which made the handler look
 guarded from the outside and in review: the response held nothing but the
 root. But the root is the entity the caller named, and it was returned
@@ -579,6 +592,12 @@ validating a model by id loaded that model and reported issues naming its
 members. Taking a lensed snapshot somewhere in a handler says nothing about
 whether the by-key read in the same handler is gated. They are separate
 reads and each needs its own gate.
+
+`ExportAttestedModel` also names changeset boundaries, which carry no
+entity but still describe other owners. A baseline changeset id is a UUIDv7
+over every owner's writes, so a bound caller's current bundle leaves it
+empty. A branch header naming a branch the caller cannot see answers
+NOT_FOUND before the branch is read, as the other branch-scoped reads do.
 
 `GetEntity`, `GetEntityHistory`, and `DiffEntities` answer **NOT_FOUND**, not
 PERMISSION_DENIED, for a namespace the caller cannot see. PERMISSION_DENIED
@@ -920,9 +939,10 @@ the owner it is bound to. It is Reader-level, because a principal learning
 its own identity is never more privileged than the identity itself, and any
 authenticated caller can always ask who it is.
 
-The MCP adapter uses this to narrow what it offers rather than what the
-server will accept. On connect, it calls `GetServerInfo`, checks the
-`who_am_i` feature flag, and calls `WhoAmI`; the resulting role filters the
+The server's MCP endpoint uses this to narrow what it offers rather than what the
+server will accept. On each `tools/list`, with that request's own bearer
+token, it calls `GetServerInfo`, checks the `who_am_i` feature flag, and
+calls `WhoAmI`; the resulting role filters the
 tool list it hands back to `list_tools`, so a reader-scoped agent is never
 shown `put_entity` or `merge_branch` only to have the server refuse them with
 `PERMISSION_DENIED`. A tool the adapter does not yet have a policy for is
@@ -930,17 +950,18 @@ treated as admin-only rather than silently listed, so a new tool added
 without updating the policy table fails toward hiding it, not exposing it.
 
 None of this moves the enforcement boundary. `AuthzLayer` still authorizes
-every RPC on the server, independent of what the MCP adapter chose to list;
+every RPC on the server, independent of what the MCP endpoint chose to list;
 a caller that invokes a tool outside its role some other way (a stale tool
 list, a hand-rolled client, a cached response) is refused exactly as before.
 Tool filtering is a courtesy that spares a well-behaved agent a round trip
 it was always going to lose, not a second authorization system.
 
-A server that predates the `who_am_i` feature flag, or a `WhoAmI` call that
-fails for any reason, leaves the adapter without a role to filter by. It
-degrades to listing every tool, the same menu it offered before role
-filtering existed, because a client-side listing miss is never a safety
-gap; the server decides what actually executes.
+A server that predates the `who_am_i` feature flag leaves the adapter without
+a role to filter by, so it lists every tool, the same menu it offered before
+role filtering existed. A `GetServerInfo` or `WhoAmI` call that fails lists
+only the reader tools instead: the server still decides what executes, but a
+transient error should not show a reader the names and schemas of admin
+tools.
 
 ## Decisions and rationale
 
@@ -990,7 +1011,7 @@ gap; the server decides what actually executes.
   realtime gap: NATS supports JWT auth natively, so the same issuer can mint
   scoped, expiring NATS user credentials for the browser instead of the
   shared `NATS_WS_AUTH_TOKEN`.
-- **mTLS** for service-to-service clients (MCP, Studio gateway) to remove
+- **mTLS** for service-to-service clients (Studio gateway) to remove
   shared secrets entirely. The server's tonic `tls` feature is already
   enabled.
 - **Owned changesets.** A changeset still carries no owner, which is why it

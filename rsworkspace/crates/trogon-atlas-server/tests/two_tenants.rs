@@ -37,6 +37,7 @@ use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
     auth::{Principal, PrincipalKind, Role, TokenRegistry},
+    metrics::ServerMetrics,
     scope::NamespaceScope,
     service::EventModelServiceImpl,
 };
@@ -119,7 +120,7 @@ parent = "acme"
 #[tokio::test(flavor = "multi_thread")]
 async fn move_namespace_refuses_a_bound_admin_even_injected_directly() {
     let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
-    let svc = EventModelServiceImpl::try_new(store).unwrap();
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
 
     let mut req = Request::new(pb::MoveNamespaceRequest {
         id: "whatever".into(),
@@ -526,6 +527,8 @@ async fn sweep_read_matrix(
             pb::GetEventModelProjectionRequest {
                 id: Some(id(beta_ns, MODEL_SLUG)),
                 include_cross_model: true,
+                as_of_changeset: String::new(),
+                as_of_time: String::new(),
             },
             beta_token,
         ))
@@ -572,6 +575,7 @@ async fn sweep_read_matrix(
                 page_token: String::new(),
                 page_size: 0,
                 branch: String::new(),
+                namespace: String::new(),
             },
             beta_token,
         ))

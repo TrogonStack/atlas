@@ -8,7 +8,14 @@ release branches.
 ## Reporting a Vulnerability
 
 Please report security vulnerabilities privately through GitHub's private
-vulnerability reporting: open the **Security** tab on this repository and
-select **Report a vulnerability**.
+vulnerability reporting:
+<https://github.com/TrogonStack/atlas/security/advisories/new>.
 
 Do not open a public issue for security vulnerabilities.
+
+## Disclosure Process
+
+Reports are acknowledged and triaged in the private advisory, where the fix
+is developed and reviewed with the reporter. Once a fix is merged to `main`,
+the advisory is published with credit to the reporter unless they ask to
+stay anonymous.

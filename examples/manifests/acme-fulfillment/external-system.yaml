@@ -1,0 +1,10 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ExternalSystem
+metadata:
+  name: acme-shipping-carrier
+  namespace: acme-fulfillment
+spec:
+  doc: Acme Shipping Carrier. Dispatches parcels and confirms delivery over a polled tracking API.
+  tech:
+  - carrier-api
+  title: Acme Shipping Carrier

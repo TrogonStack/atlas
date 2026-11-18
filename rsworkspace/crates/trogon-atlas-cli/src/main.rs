@@ -4,11 +4,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use trogon_atlas_client::{
-    apply, branch, client, compat, export, failure::Failure, fmt, manifest, manifest_schema,
-    openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
-    precondition::BranchEntryState, walk,
+    apply, attested, branch, client, compat, export, failure::Failure, fmt, manifest,
+    manifest_schema, openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
+    precondition::BranchEntryState, validate, view, walk,
 };
 use trogon_atlas_proto as pb;
+
+mod glossary;
 
 /// kubectl-style CLI for the trogon-atlas server: declarative YAML manifests
 /// in, idempotent BatchMutate out.
@@ -20,12 +22,18 @@ struct Args {
         long,
         global = true,
         env = "TROGON_ATLAS_ENDPOINT",
+        hide_env_values = true,
         default_value = "http://127.0.0.1:50069"
     )]
     endpoint: String,
 
     /// Bearer token; omit only against servers allowing anonymous access.
-    #[arg(long, global = true, env = "TROGON_ATLAS_AUTH_TOKEN")]
+    #[arg(
+        long,
+        global = true,
+        env = "TROGON_ATLAS_AUTH_TOKEN",
+        hide_env_values = true
+    )]
     auth_token: Option<String>,
 
     #[arg(
@@ -66,17 +74,191 @@ enum Format {
 }
 
 #[derive(Subcommand)]
+enum ArtifactCmd {
+    /// Discover the deployment's artifact backend and upload limits.
+    Info,
+    /// Upload a local file and return its verified durable artifact reference.
+    Upload {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        media_type: Option<String>,
+    },
+    /// Inspect an accepted artifact without fetching its bytes.
+    Get {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+    },
+    /// Download and verify an artifact into a new file.
+    Download {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
+    /// Review and inspect contextual vocabulary, source evidence and usage policy.
+    Glossary {
+        #[command(subcommand)]
+        command: glossary::GlossaryCmd,
+    },
+    /// Upload and retrieve files using the server-configured object storage.
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactCmd,
+    },
+    /// Read the exact bounded operation and guard page for a source preview.
+    ListSourceRunOperations {
+        #[arg(long)]
+        request: String,
+    },
+    /// Declare source administration and destination scope with explicit budgets and retention.
+    CreateSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Revise source policy under its current revision guard; prior previews remain immutable.
+    UpdateSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect source policy and its current revision before proposing changes.
+    GetSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect source registrations in an explicitly selected administration namespace.
+    ListSourceRegistrations {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retire source administration without deleting native resources; unsettled recovery blocks deletion.
+    DeleteSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retain supplied snapshot bytes. Intake acceptance establishes no native commit or accepted merge base.
+    AcceptSourceSnapshot {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect retained snapshot evidence; exact byte recovery requires includeBytes and available bytes.
+    GetSourceSnapshot {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect independently addressable source versions without interpreting their version text.
+    ListSourceSnapshots {
+        #[arg(long)]
+        request: String,
+    },
+    /// Declare an exact typed selection, explicit field ownership and guarded adoption decision.
+    CreateSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Revise explicit mapping decisions under current mapping and registration guards.
+    UpdateSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect exact selectors, adoption, ownership and accepted-base evidence.
+    GetSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect mapping decisions without inferring ownership from source labels or names.
+    ListSourceMappings {
+        #[arg(long)]
+        request: String,
+    },
+    /// Relinquish source mapping authority without deleting the native owner.
+    DeleteSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect ordered source declarations; incomplete or unavailable results do not prove absence.
+    GetSourceOverlay {
+        #[arg(long)]
+        request: String,
+    },
+    /// Review an immutable proposal. Declared COMPLETE is distinct from verified completeness; preview never commits.
+    PreviewSourceRun {
+        #[arg(long)]
+        request: String,
+        /// Explicit complete owner import: category=source-key=manifest-path. Exactly one owner per file.
+        #[arg(long = "native-owner")]
+        native_owners: Vec<String>,
+    },
+    /// Request the exact guarded preview commit. Unsettled outcomes require recovery, never a new-identity retry.
+    ApplySourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Request cancellation. A possible or completed commit is settled by recovery and cannot be undone here.
+    CancelSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect run status and recovery needs; a preview or pending result is not an apply receipt.
+    GetSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect retained run outcomes within their reported branch and authorization scope.
+    ListSourceRuns {
+        #[arg(long)]
+        request: String,
+    },
+    /// Resolve durable publication evidence for the same run without reapplying native changes.
+    RecoverSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect bounded fidelity and result evidence; remaining or incomplete pages do not prove losslessness.
+    ListSourceRunResults {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retain only explicitly supplied files with logical locators and exact media types.
+    UploadSourceSnapshot {
+        #[arg(long)]
+        registration_id: String,
+        #[arg(long)]
+        registration_revision: String,
+        #[arg(long)]
+        inventory: PathBuf,
+        /// Repeat logical-name=media-type=explicit-path. No directory or pointer traversal.
+        #[arg(long = "file")]
+        files: Vec<String>,
+    },
+
     /// Apply manifests: create missing entities, overwrite drifted ones,
     /// skip unchanged ones. The whole change set is one atomic BatchMutate.
     /// Exits 3 without writing anything if another writer changed an entity
     /// after it was read; run apply again to plan from fresh state.
     Apply {
         /// Manifest files or directories (directories are walked recursively
-        /// for .yaml/.yml).
+        /// for .yaml/.yml), or a board .html file saved by Studio's Export
+        /// HTML. A board file's external entities are never written; apply
+        /// fails if the target lacks one.
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
         /// Run server-side validation for every change without persisting.
+        /// Reports the request-time findings for each write, including the
+        /// strategic ones (BoundedContext, Domain, Subdomain rules), which
+        /// never block the apply at any severity, so it still exits 0.
+        /// Findings that need the whole model in view come from `validate`
+        /// and `validate-project`.
         #[arg(long)]
         dry_run: bool,
         /// Idempotency key for the batch this apply sends; omit to mint a
@@ -88,6 +270,7 @@ enum Cmd {
     /// Show what apply would change, as a unified diff of canonical proto
     /// JSON. Exits 1 when differences exist (kubectl diff semantics).
     Diff {
+        /// Manifest files, directories or a board .html file, as for apply.
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
     },
@@ -111,6 +294,246 @@ enum Cmd {
         /// anyway. Generated files are overwritten; stale ones are kept.
         #[arg(long)]
         force: bool,
+    },
+    /// Print one entity as the manifest YAML document `export` writes.
+    /// Omit `@version` to read the latest version.
+    Get {
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`,
+        /// or an id that `describe` prints.
+        entity: String,
+    },
+    /// List exact Decision amendments using proto3 JSON `ListDecisionAmendmentsRequest`.
+    ListDecisionAmendments {
+        /// Proto3 JSON `ListDecisionAmendmentsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List Decisions for an exact subject using proto3 JSON `ListSubjectDecisionsRequest`.
+    ListSubjectDecisions {
+        /// Proto3 JSON `ListSubjectDecisionsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List Documents for an exact subject using proto3 JSON `ListSubjectDocumentsRequest`.
+    ListSubjectDocuments {
+        /// Proto3 JSON `ListSubjectDocumentsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a Decision using proto3 JSON `GetDecisionDetailRequest`.
+    GetDecisionDetail {
+        /// Proto3 JSON `GetDecisionDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a whole Document or anchor using proto3 JSON `GetDocumentDetailRequest`.
+    GetDocumentDetail {
+        /// Proto3 JSON `GetDocumentDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find declarations selecting a Decision using proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
+    ListIncomingDecisionDeclarations {
+        /// Proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find declarations selecting an exact Domain using proto3 JSON `ListTermDomainDeclarationsRequest`.
+    ListTermDomainDeclarations {
+        /// Proto3 JSON `ListTermDomainDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find declarations selecting a Document using proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
+    ListIncomingDocumentDeclarations {
+        /// Proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Check one exact authored hosting and human path using proto3 JSON.
+    InspectHumanInteraction {
+        #[arg(long)]
+        request: String,
+    },
+    /// List messages carried by an exact channel using proto3 JSON `ListChannelMessagesRequest`.
+    ListChannelMessages {
+        /// Proto3 JSON `ListChannelMessagesRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a DesignGraph with exact hydrated targets using proto3 JSON `GetDesignGraphDetailRequest`.
+    GetDesignGraphDetail {
+        /// Proto3 JSON `GetDesignGraphDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List DesignGraphs associated with an exact subject using proto3 JSON `ListSubjectDesignGraphsRequest`.
+    ListSubjectDesignGraphs {
+        /// Proto3 JSON `ListSubjectDesignGraphsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Traverse flow topology across subflows with explicit depth and cycle boundaries using proto3 JSON `TraverseDesignGraphTopologyRequest`.
+    TraverseDesignGraphTopology {
+        /// Proto3 JSON `TraverseDesignGraphTopologyRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find steps in other DesignGraphs that reference a DesignGraph as a subflow using proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
+    ListIncomingDesignGraphSubflows {
+        /// Proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Classify each dependent of an exact version as breaking, bump-only or
+    /// unknown against an exact candidate version. Exits 1 when any
+    /// dependent breaks and 12 when bump-only cannot be proven.
+    ClassifyImpact {
+        /// Exact `<kind>/<namespace>/<slug>@<version>` address dependents pin today.
+        current: String,
+        /// Exact address of the version that would replace it.
+        candidate: String,
+        /// Maximum referrer hops from `current`. 0 = the server maximum.
+        #[arg(long, default_value_t = 0)]
+        max_depth: u32,
+    },
+    /// Inspect authoritative DataProduct selections and checked model evidence.
+    InspectDataProduct {
+        /// Exact `data_product/<namespace>/<slug>@<version>` address.
+        entity: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListSubjectAssignmentsRequest`.
+    ListSubjectAssignments {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListAssigneeResponsibilitiesRequest`.
+    ListAssigneeResponsibilities {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListTeamMembersRequest`.
+    ListTeamMembers {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListPersonTeamsRequest`.
+    ListPersonTeams {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `GetTeamContactsRequest`.
+    GetTeamContacts {
+        #[arg(long)]
+        request: String,
+    },
+    /// Print one entity as readable text: title, doc, schema fields, and
+    /// the references it holds and receives.
+    Describe {
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`,
+        /// or an id that `describe` prints.
+        entity: String,
+    },
+    /// Print a namespace's structure: domains with their subdomains, then
+    /// each storyboard's slices with the commands, events, read models and
+    /// processors they connect.
+    Tree {
+        /// Namespace id, as `namespaces` lists it. Omit to print every
+        /// namespace that holds entities.
+        namespace: Option<String>,
+    },
+    /// List the namespaces the caller can see, with their ids and entity counts.
+    Namespaces,
+    /// Report which entities carry an accepted Decision, a Document or a
+    /// complete code reference. Exits 11 when any subject could not be
+    /// settled or the snapshot was truncated, so a gate never reads a
+    /// partial count as a rate. With --branch, reports the branch's view.
+    BackingReport {
+        /// Count only subjects in this namespace id. Repeat for several;
+        /// omit for every visible namespace.
+        #[arg(long = "namespace")]
+        namespaces: Vec<String>,
+        /// Also return an `ENTITY_UNBACKED` Info finding per unbacked subject.
+        #[arg(long)]
+        unbacked_findings: bool,
+    },
+    /// Run full validation on a stored event model: the rules that need the
+    /// whole model in view, which `apply --dry-run` does not run, the
+    /// scenario checks of its slices against the current lanes, plus the
+    /// strategic chain of the model's namespace (its BoundedContext, the
+    /// Subdomains it realizes, their Domains, and Domains declared in the
+    /// namespace). Exits 1 when any finding is an error, otherwise 11 when
+    /// the server's coverage shows the run was incomplete. With --branch,
+    /// validates the branch's view of the model.
+    Validate {
+        /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
+        /// `@version` to validate the latest version.
+        model: String,
+    },
+    /// Export a stored event model as an attested bundle: its manifests,
+    /// its validation findings and coverage, and the state both were read
+    /// from, bound by one digest that `verify` checks offline. Refuses an
+    /// export that cannot cover its whole scope unless --allow-incomplete
+    /// is given, which saves the bundle marked incomplete and exits 11.
+    /// With --branch, exports the branch's view of the model.
+    ExportAttested {
+        /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
+        /// `@version` to export the latest version.
+        model: String,
+        /// File to write the bundle's proto3 JSON into.
+        #[arg(short = 'o', long = "output")]
+        output: PathBuf,
+        /// Describe baseline as it stood right after this changeset landed,
+        /// instead of its current state.
+        #[arg(long)]
+        as_of_changeset: Option<String>,
+        /// Save a bundle that does not cover its whole scope, marked
+        /// incomplete with the reasons, instead of refusing it.
+        #[arg(long)]
+        allow_incomplete: bool,
+    },
+    /// Check an attested bundle offline, without contacting a server: its
+    /// digest, and that what it says about its own completeness holds.
+    /// Exits 0 for a complete bundle, 11 for an intact bundle marked
+    /// incomplete, and 5 for one that is malformed or was altered. Without
+    /// --trusted-key a signature is not checked and nothing is
+    /// authenticated.
+    Verify {
+        /// Bundle file written by `export-attested`.
+        bundle: PathBuf,
+        /// SPKI PEM Ed25519 public key whose signature to accept. Repeat
+        /// for several keys. When given, an unsigned bundle, a signature by
+        /// any other key or a signature that does not verify exits 5.
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<PathBuf>,
+    },
+    /// Validate every event model in a namespace, domain or project, with
+    /// the scenario checks of each model's slices, plus the strategic
+    /// findings (BoundedContext, Domain, Subdomain, Project rules), which
+    /// print once in a store-level section. Use it after
+    /// editing only problem-space entities or a BoundedContext, when there
+    /// may be no event model to run `validate` on. Exits 1 when any
+    /// finding is an error, otherwise 11 when the server's coverage shows
+    /// the run was incomplete. With --branch, validates the branch's view.
+    #[command(group(
+        clap::ArgGroup::new("scope")
+            .required(true)
+            .multiple(false)
+            .args(["namespace", "domain", "project"])
+    ))]
+    ValidateProject {
+        /// Every event model in this namespace, problem-space namespaces
+        /// (those with no event model) included.
+        #[arg(long)]
+        namespace: Option<String>,
+        /// `<namespace>/<slug>[@version]` of a Domain; omit `@version` for
+        /// the latest.
+        #[arg(long)]
+        domain: Option<String>,
+        /// `<namespace>/<slug>[@version]` of a Project; omit `@version` for
+        /// the latest.
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
@@ -140,6 +563,13 @@ enum Cmd {
     Operation {
         #[command(subcommand)]
         cmd: OperationCmd,
+    },
+    /// Freeze an identity (every version of `<kind>/<namespace>/<slug>`) so
+    /// no route can change it, lift that freeze, or inspect which
+    /// identities are frozen. Protection is not branch-scoped.
+    Protection {
+        #[command(subcommand)]
+        cmd: ProtectionCmd,
     },
     Fmt {
         /// Manifest files or directories (directories are walked
@@ -186,6 +616,44 @@ enum Cmd {
 enum OperationCmd {
     /// Report the status of one operation_id.
     Get { operation_id: String },
+}
+
+#[derive(Subcommand)]
+enum ProtectionCmd {
+    /// Protect `<kind>/<namespace>/<slug>`. Requires an admin token; the
+    /// identity must already have a stored version.
+    Protect {
+        identity: String,
+        /// Why the identity is frozen; shown to every refused writer.
+        #[arg(long)]
+        reason: String,
+        /// Check the request without protecting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Lift protection from `<kind>/<namespace>/<slug>`. Requires an admin
+    /// token.
+    Unprotect {
+        identity: String,
+        /// Lift only the row at this revision (as `get` or `list` report
+        /// it); refused with exit 3 once the row has moved. Also how an
+        /// unreadable row is lifted.
+        #[arg(long)]
+        if_match: Option<String>,
+        /// Check the request without lifting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Report whether `<kind>/<namespace>/<slug>` is protected,
+    /// unprotected, or unknown. Exits 11 when unknown.
+    Get { identity: String },
+    /// List protected identities and unreadable protection rows. Exits 11
+    /// when the listing is partial.
+    List {
+        /// Only identities in this namespace.
+        #[arg(long)]
+        namespace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -249,7 +717,8 @@ enum BranchCmd {
     Merge {
         name: String,
         /// Run full conflict detection and post-merge validation without
-        /// persisting anything, even on success.
+        /// persisting anything, even on success. Prints how many entities
+        /// would be added, changed and deleted, and the post-merge findings.
         #[arg(long)]
         dry_run: bool,
         /// Keep the branch (now empty of deltas) after a successful merge
@@ -309,10 +778,300 @@ enum BranchCmd {
     },
 }
 
+/// One section of a `validate-project` run: a model's findings, or the
+/// store-level findings (strategic rules) that belong to no event model.
+struct ProjectSection {
+    /// Canonical event model id; `None` for the store-level section.
+    event_model: Option<String>,
+    counts: branch::SeverityCounts,
+    issues: Vec<pb::ValidationIssue>,
+}
+
+struct ProjectValidation {
+    scope: String,
+    total: branch::SeverityCounts,
+    sections: Vec<ProjectSection>,
+}
+
+impl ProjectValidation {
+    fn of(scope: &str, resp: &pb::ValidateProjectResponse) -> Self {
+        let sections: Vec<ProjectSection> = resp
+            .reports
+            .iter()
+            .map(|report| ProjectSection {
+                event_model: report
+                    .event_model_id
+                    .as_ref()
+                    .filter(|id| !id.slug.is_empty())
+                    .map(|id| pb::canonical::id_string(pb::EntityKind::EventModel, id)),
+                counts: branch::SeverityCounts::of(&report.issues),
+                issues: report.issues.clone(),
+            })
+            .collect();
+        let total =
+            sections
+                .iter()
+                .fold(branch::SeverityCounts::default(), |mut total, section| {
+                    total.errors += section.counts.errors;
+                    total.warnings += section.counts.warnings;
+                    total.infos += section.counts.infos;
+                    total
+                });
+        Self {
+            scope: scope.to_string(),
+            total,
+            sections,
+        }
+    }
+
+    fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = format!("{}: {}\n", self.scope, self.total);
+        for section in &self.sections {
+            let name = section.event_model.as_deref().unwrap_or("store-level");
+            let _ = writeln!(out, "{name}: {}", section.counts);
+            for issue in &section.issues {
+                let _ = writeln!(out, "{}", apply::format_issue(issue));
+            }
+        }
+        out
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "scope": self.scope,
+            "validation_summary": summary_json(self.total),
+            "reports": self.sections.iter().map(|section| json!({
+                "event_model": section.event_model,
+                "validation_summary": summary_json(section.counts),
+                "validation": section.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn summary_json(counts: branch::SeverityCounts) -> Value {
+    json!({
+        "errors": counts.errors,
+        "warnings": counts.warnings,
+        "info": counts.infos,
+    })
+}
+
 /// Exit code for a command whose output reports something short of success
-/// without being an error: drift a diff found, issues apply reported, a
-/// branch's remaining conflicts. Also used by `trogon-atlas fmt --check`.
+/// without being an error: drift a diff found, a branch's remaining
+/// conflicts. Also used by `trogon-atlas fmt --check`.
 const EXIT_FINDINGS: u8 = 1;
+
+/// Exit code for an answer the server could not finish: a `validate` /
+/// `validate-project` run with no Error finding whose coverage shows a
+/// suite or the snapshot was not fully examined, a protection read with
+/// unknown state, or a `backing-report` that leaves a subject unsettled.
+/// A gate never mistakes "nothing found in part of the model" for a pass.
+const EXIT_INCOMPLETE: u8 = 11;
+
+/// Exit code for a `classify-impact` run where no dependent provably breaks
+/// but at least one could not be proven bump-only, or the result is
+/// incomplete, so a gate never mistakes "unproven" for "safe".
+const EXIT_IMPACT_UNKNOWN: u8 = 12;
+
+fn exact_entity_ref(address: &str, role: &str) -> anyhow::Result<pb::EntityRef> {
+    let address = view::parse_address(address)?;
+    let version = address.version.ok_or_else(|| {
+        trogon_atlas_client::failure::invalid_input(format!("{role} requires an exact version"))
+    })?;
+    Ok(pb::EntityRef {
+        kind: address.kind as i32,
+        id: Some(pb::Id {
+            namespace: address.namespace,
+            slug: address.slug,
+            version,
+        }),
+    })
+}
+
+fn print_impact(classification: &trogon_atlas_client::impact::ImpactClassification) {
+    let response = classification.response();
+    let label = |value: i32| {
+        pb::DependentClassification::try_from(value).map_or("unknown", |c| match c {
+            pb::DependentClassification::Breaking => "breaking",
+            pb::DependentClassification::BumpOnly => "bump_only",
+            _ => "unknown",
+        })
+    };
+    println!("verdict: {}", classification.verdict().as_str());
+    println!("snapshot: {}", response.snapshot_id);
+    if classification.pages() == trogon_atlas_client::impact::PageSnapshots::Mixed {
+        println!("page snapshots: mixed");
+    }
+    for reason in &response.incompleteness {
+        let name =
+            pb::ImpactIncompleteness::try_from(*reason).map_or("unspecified", |r| r.as_str_name());
+        println!("incomplete: {name}");
+    }
+    for path in &response.uncovered_changes {
+        println!("uncovered change: {path}");
+    }
+    for dependent in &response.dependents {
+        let Some(entity) = dependent.dependent.as_ref() else {
+            continue;
+        };
+        let kind = pb::EntityKind::try_from(entity.kind).map_or("unspecified", |k| k.as_str_name());
+        let id = entity.id.as_ref().map_or_else(String::new, |id| {
+            format!("{}/{}@{}", id.namespace, id.slug, id.version)
+        });
+        println!(
+            "{} {kind} {id} (depth {})",
+            label(dependent.classification),
+            dependent.depth
+        );
+        for reason in &dependent.unknown_reasons {
+            let name = pb::ClassificationUnknownReason::try_from(*reason)
+                .map_or("CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED", |r| {
+                    r.as_str_name()
+                });
+            println!("  unknown: {name}");
+        }
+        for occurrence in &dependent.occurrences {
+            let site = occurrence
+                .reference
+                .as_ref()
+                .map_or("", |r| r.from_field.as_str());
+            let causes: Vec<&str> = occurrence
+                .causal_ops
+                .iter()
+                .map(|op| op.path.as_str())
+                .collect();
+            if causes.is_empty() {
+                println!("  {site}: {}", label(occurrence.classification));
+            } else {
+                println!(
+                    "  {site}: {} because {}",
+                    label(occurrence.classification),
+                    causes.join(", ")
+                );
+            }
+            for reason in &occurrence.unknown_reasons {
+                let name = pb::ClassificationUnknownReason::try_from(*reason)
+                    .map_or("CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED", |r| {
+                        r.as_str_name()
+                    });
+                println!("    unknown: {name}");
+            }
+        }
+    }
+}
+
+fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
+    match verdict {
+        validate::ValidationVerdict::Clean => ExitCode::SUCCESS,
+        validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
+        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_INCOMPLETE),
+    }
+}
+
+/// Report a bundle that verified. An incomplete one exits 11, the same
+/// code an incomplete `validate` run gets, so a gate that accepts only 0
+/// never takes it for a clean attestation.
+fn attested_outcome(
+    text: bool,
+    bundle: &pb::AttestedModelBundle,
+    verified: &trogon_atlas_core::attested_bundle::VerifiedBundle,
+    written: Option<&std::path::Path>,
+) -> (ExitCode, Option<Value>) {
+    let mut data = attested::outcome_json(bundle, verified);
+    if text {
+        if let Some(path) = written {
+            println!("wrote {}", path.display());
+        }
+        println!("bundle_digest: {}", verified.digest);
+        println!("authenticity: {}", verified.authenticity);
+        let reasons = attested::incomplete_reason_names(verified);
+        if reasons.is_empty() {
+            println!("complete");
+        }
+        for reason in &reasons {
+            println!("incomplete: {reason}");
+        }
+        for entity in &verified.unresolved {
+            println!(
+                "unresolved: {} ({})",
+                entity.key,
+                entity.cause.as_str_name()
+            );
+        }
+    }
+    if let Some(path) = written {
+        data["output"] = json!(path.display().to_string());
+    }
+    let code = if verified.completeness.is_complete() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_INCOMPLETE)
+    };
+    (code, Some(data))
+}
+
+fn print_backing_report(report: &trogon_atlas_client::backing::BackingReport) {
+    let response = report.response();
+    let totals = response.totals.unwrap_or_default();
+    let rate = totals.unbacked_rate.map_or_else(
+        || "not established".to_owned(),
+        |rate| format!("{:.1}%", rate * 100.0),
+    );
+    let scope = if response.namespaces.is_empty() {
+        "all visible namespaces".to_owned()
+    } else {
+        response.namespaces.join(", ")
+    };
+    println!(
+        "snapshot {}: {} subjects, {} backed, {} unbacked, {} unknown, unbacked rate {rate}",
+        response.snapshot_id, totals.total, totals.backed, totals.unbacked, totals.unknown
+    );
+    println!("subjects: {scope}");
+    for kind in &response.kinds {
+        let name = pb::EntityKind::try_from(kind.kind)
+            .map_or("unknown", |kind| kind.as_str_name())
+            .trim_start_matches("ENTITY_KIND_")
+            .to_lowercase();
+        let totals = kind.totals.unwrap_or_default();
+        println!(
+            "  {name}: {} subjects, {} backed, {} unbacked, {} unknown",
+            totals.total, totals.backed, totals.unbacked, totals.unknown
+        );
+    }
+    for reason in &response.incomplete_reasons {
+        let name = pb::BackingIncompleteReason::try_from(*reason)
+            .map_or("UNRECOGNIZED", |reason| reason.as_str_name())
+            .trim_start_matches("BACKING_INCOMPLETE_REASON_")
+            .to_lowercase();
+        println!("incomplete: {name}");
+    }
+    for issue in &response.findings {
+        println!("{}", apply::format_issue(issue));
+    }
+}
+
+fn print_coverage_gaps(completeness: &validate::Completeness) {
+    for gap in &completeness.gaps {
+        match gap {
+            validate::CoverageGap::CoverageAbsent => {
+                println!("incomplete: the server reported no validation coverage");
+            }
+            validate::CoverageGap::NoChecks => {
+                println!("incomplete: the server's validation coverage named no checks");
+            }
+            validate::CoverageGap::SnapshotTruncated => {
+                println!("incomplete: the validated snapshot was truncated");
+            }
+            validate::CoverageGap::Check {
+                check_id,
+                state,
+                reason,
+            } => println!("incomplete: {check_id} {state} {reason}"),
+        }
+    }
+}
 
 /// A clap usage error (missing/conflicting flags) exits 2 on its own,
 /// before `main` ever runs; nothing here needs to produce it.
@@ -373,7 +1132,7 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     let format = args.format;
     let mut operation_id = None;
-    match run(args, &mut operation_id).await {
+    match Box::pin(run(args, &mut operation_id)).await {
         Ok((code, data)) => {
             if format == Format::Json {
                 let mut outcome = data.map_or_else(CommandOutcome::ok_empty, CommandOutcome::ok);
@@ -473,6 +1232,145 @@ async fn connect_checked_client(
     Ok(client)
 }
 
+async fn run_protection(
+    cmd: ProtectionCmd,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    rpc_timeout_secs: u64,
+    branch: Option<String>,
+    text: bool,
+) -> Result<(ExitCode, Option<Value>)> {
+    use trogon_atlas_client::protection::{
+        self, Effect, ListingVerdict, NamespaceFilter, ProtectedIdentity, ProtectionReason,
+        RowRevision,
+    };
+    let refuse_branch = || -> Result<()> {
+        if let Some(branch) = &branch {
+            trogon_atlas_client::invalid_input!(
+                "protection applies to an identity on every branch; drop --branch {branch}"
+            );
+        }
+        Ok(())
+    };
+    let connect_admin = |validate_only: bool| async move {
+        let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            compat::MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await?;
+        anyhow::Ok(client)
+    };
+    match cmd {
+        ProtectionCmd::Protect {
+            identity,
+            reason,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let reason = ProtectionReason::new(&reason)?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::protect(
+                &mut client,
+                &identity,
+                &reason,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Unprotect {
+            identity,
+            if_match,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let if_match = if_match
+                .as_deref()
+                .map(str::parse::<RowRevision>)
+                .transpose()?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::unprotect(
+                &mut client,
+                &identity,
+                if_match,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Get { identity } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let lookup = protection::get_protection(&mut client, &identity).await?;
+            if text {
+                println!("{}", lookup.render());
+            }
+            let code = if lookup.is_unknown() {
+                ExitCode::from(EXIT_INCOMPLETE)
+            } else {
+                ExitCode::SUCCESS
+            };
+            Ok((code, Some(lookup.to_json())))
+        }
+        ProtectionCmd::List { namespace } => {
+            let namespace = namespace.as_deref().map(NamespaceFilter::new).transpose()?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let listing = protection::list_protections(&mut client, namespace.as_ref()).await?;
+            if text {
+                print!("{}", listing.render());
+            }
+            let code = match listing.verdict() {
+                ListingVerdict::Complete => ExitCode::SUCCESS,
+                ListingVerdict::Partial => ExitCode::from(EXIT_INCOMPLETE),
+            };
+            Ok((code, Some(listing.to_json())))
+        }
+    }
+}
+
+struct PreparedNativeOwner {
+    key: trogon_atlas_core::source_bundle::ResourceKey,
+    bytes: Vec<u8>,
+}
+
+impl PreparedNativeOwner {
+    fn read(owner: &str) -> Result<Self> {
+        use trogon_atlas_core::source_bundle::{
+            ResourceKey, SourceCategory, SourceLocalKey, MAX_FILE_BYTES,
+        };
+        let parts = owner.splitn(3, '=').collect::<Vec<_>>();
+        let [category, key, path] = parts.as_slice() else {
+            return Err(trogon_atlas_client::failure::invalid_input(
+                "native-owner requires category=source-key=manifest-path",
+            ));
+        };
+        let key = ResourceKey::new(
+            SourceCategory::new(category)
+                .map_err(|error| trogon_atlas_client::failure::invalid_input(error.to_string()))?,
+            SourceLocalKey::new(key)
+                .map_err(|error| trogon_atlas_client::failure::invalid_input(error.to_string()))?,
+        );
+        let bytes = trogon_atlas_client::source_input::read_bounded_file(
+            std::path::Path::new(path),
+            MAX_FILE_BYTES,
+        )?;
+        Ok(Self { key, bytes })
+    }
+}
+
 async fn run(
     args: Args,
     operation_id_out: &mut Option<String>,
@@ -489,6 +1387,109 @@ async fn run(
     // Local validation (paths, flags, kind parse) runs before connect so an
     // unreachable --endpoint cannot mask authoring errors.
     match cmd {
+        Cmd::Glossary { command } => {
+            let command = command.prepare()?;
+            let mut client = match command.mutation_preview() {
+                Some(validate_only) => {
+                    connect_mutating_client(
+                        &endpoint,
+                        auth_token.as_deref(),
+                        rpc_timeout_secs,
+                        branch,
+                        validate_only,
+                    )
+                    .await?
+                }
+                None => {
+                    connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
+                        .await?
+                }
+            };
+            let result = command.execute(&mut client).await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::Artifacts { command } => {
+            if let ArtifactCmd::Upload { ref file, .. } = command {
+                let metadata = std::fs::symlink_metadata(file).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("artifact file unavailable")
+                })?;
+                if !metadata.is_file()
+                    || metadata.len() > trogon_atlas_client::artifacts::MAX_TRANSFER_BYTES as u64
+                {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact must be a regular file within the client transfer limit",
+                    ));
+                }
+                if metadata.len() == 0 {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact file must not be empty",
+                    ));
+                }
+            }
+            let mut client = client::connect_with_options(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                client::ConnectOptions {
+                    request_id_prefix: Some("trogon-atlas-artifacts"),
+                    max_message_bytes: Some(trogon_atlas_client::artifacts::MAX_MESSAGE_BYTES),
+                    branch,
+                },
+            )
+            .await?;
+            let result = match command {
+                ArtifactCmd::Info => {
+                    trogon_atlas_client::artifacts::get_artifact_storage_info(
+                        &mut client,
+                        pb::GetArtifactStorageInfoRequest {},
+                    )
+                    .await?
+                }
+                ArtifactCmd::Upload {
+                    namespace,
+                    file,
+                    media_type,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::upload_file(
+                        &client,
+                        &namespace,
+                        &file,
+                        media_type.as_deref(),
+                        std::time::Duration::from_secs(rpc_timeout_secs),
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+                ArtifactCmd::Get { namespace, id } => {
+                    trogon_atlas_client::artifacts::get_artifact(
+                        &mut client,
+                        pb::GetArtifactRequest {
+                            namespace,
+                            artifact_id: id,
+                        },
+                    )
+                    .await?
+                }
+                ArtifactCmd::Download {
+                    namespace,
+                    id,
+                    output,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::download_file(
+                        &client, &namespace, &id, &output,
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+            };
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::Schema => {
             let schema = manifest_schema::generate()?;
             if text {
@@ -619,7 +1620,7 @@ async fn run(
         } => {
             let operation_id = resolve_operation_id(operation_id)?;
             *operation_id_out = Some(operation_id.clone());
-            let documents = manifest::read_paths(&filenames)?;
+            let files = manifest::read_paths(&filenames)?;
             let mut client = connect_planning_client(
                 &endpoint,
                 auth_token.as_deref(),
@@ -628,7 +1629,8 @@ async fn run(
                 dry_run,
             )
             .await?;
-            let resolved = manifest::load_with_tenant_types(&mut client, documents).await?;
+            apply::require_external(&mut client, files.external).await?;
+            let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
             let plan = apply::plan(&mut client, resolved.manifests).await?;
             let outcome = apply::apply(&mut client, plan, dry_run, Some(&operation_id)).await?;
             if text {
@@ -642,30 +1644,20 @@ async fn run(
                     }
                 }
             }
-            let has_errors = outcome.issues.iter().any(|issue| {
-                matches!(
-                    pb::validation_issue::Severity::try_from(issue.severity),
-                    Ok(pb::validation_issue::Severity::Error)
-                )
-            });
-            let data = json!({
+            let mut data = json!({
                 "lines": outcome.lines,
                 "issues": outcome.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
-            Ok((
-                if has_errors {
-                    ExitCode::from(EXIT_FINDINGS)
-                } else {
-                    ExitCode::SUCCESS
-                },
-                Some(data),
-            ))
+            apply::insert_coverage(&mut data, outcome.coverage.as_ref());
+            apply::insert_consequence_delta(&mut data, outcome.consequence_delta.as_ref());
+            Ok((ExitCode::SUCCESS, Some(data)))
         }
         Cmd::Diff { filenames } => {
-            let documents = manifest::read_paths(&filenames)?;
+            let files = manifest::read_paths(&filenames)?;
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
-            let resolved = manifest::load_with_tenant_types(&mut client, documents).await?;
+            apply::require_external(&mut client, files.external).await?;
+            let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
             let plan = apply::plan(&mut client, resolved.manifests).await?;
             let (diff, changed) = apply::render_diff(&plan, &resolved.types)?;
             if text {
@@ -739,6 +1731,1223 @@ async fn run(
                 },
                 Some(data),
             ))
+        }
+        Cmd::CreateSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CreateSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::create_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UpdateSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "UpdateSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::update_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::get_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRegistrations { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRegistrationsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_registrations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::DeleteSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "DeleteSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::delete_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::AcceptSourceSnapshot { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "AcceptSourceSnapshotRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::accept_source_snapshot(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceSnapshot { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceSnapshotRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_snapshot(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceSnapshots { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceSnapshotsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_snapshots(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::CreateSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CreateSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = Box::pin(
+                trogon_atlas_client::source_integration::create_source_mapping(
+                    &mut client,
+                    request,
+                ),
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UpdateSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "UpdateSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = Box::pin(
+                trogon_atlas_client::source_integration::update_source_mapping(
+                    &mut client,
+                    request,
+                ),
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_mapping(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceMappings { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceMappingsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::list_source_mappings(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::DeleteSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "DeleteSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::delete_source_mapping(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceOverlay { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceOverlayRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_overlay(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::PreviewSourceRun {
+            request,
+            native_owners,
+        } => {
+            let document = trogon_atlas_client::source_integration::prepare_preview_request(
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let native_owners = native_owners
+                .iter()
+                .map(|owner| PreparedNativeOwner::read(owner))
+                .collect::<Result<Vec<_>>>()?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let mut request = document.load(&mut client).await?;
+            for owner in native_owners {
+                let payload = trogon_atlas_client::source_integration::native_payload(
+                    &mut client,
+                    pb::SourceResourceKey {
+                        registration_id: request.registration_id.clone(),
+                        category: owner.key.category().as_str().to_owned(),
+                        key: owner.key.key().as_str().to_owned(),
+                    },
+                    &owner.bytes,
+                )
+                .await?;
+                request.native_payloads.push(payload);
+            }
+            let result =
+                trogon_atlas_client::source_integration::preview_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ApplySourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ApplySourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::apply_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::CancelSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CancelSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::cancel_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRuns { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::list_source_runs(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::RecoverSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "RecoverSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::recover_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRunResults { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunResultsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_run_results(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UploadSourceSnapshot {
+            registration_id,
+            registration_revision,
+            inventory,
+            files,
+        } => {
+            let files = files
+                .iter()
+                .map(|value| {
+                    let parts = value.splitn(3, '=').collect::<Vec<_>>();
+                    if parts.len() != 3 {
+                        return Err(trogon_atlas_client::failure::invalid_input(
+                            "file requires logical-name=media-type=explicit-path",
+                        ));
+                    }
+                    trogon_atlas_client::source_input::SuppliedFilePath::new(
+                        parts[0],
+                        parts[1],
+                        PathBuf::from(parts[2]),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let bundle =
+                trogon_atlas_client::source_input::read_supplied_bundle(&inventory, &files)?;
+            let request = trogon_atlas_client::source_integration::snapshot_request(
+                registration_id,
+                registration_revision,
+                &bundle,
+            );
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::accept_source_snapshot(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRunOperations { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunOperationsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_run_operations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListDecisionAmendments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListDecisionAmendmentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_decision_amendments(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDecisions { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListSubjectDecisionsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_subject_decisions(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDocuments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListSubjectDocumentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_subject_documents(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDecisionDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "GetDecisionDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::get_decision_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDocumentDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "GetDocumentDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::get_document_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDecisionDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListIncomingDecisionDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::list_incoming_decision_declarations(
+                    &mut client,
+                    request,
+                )
+                .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListTermDomainDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListTermDomainDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::term_domains::list_term_domain_declarations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDocumentDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListIncomingDocumentDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::list_incoming_document_declarations(
+                    &mut client,
+                    request,
+                )
+                .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::InspectHumanInteraction { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::human_interaction::parse_request(
+                "InspectHumanInteractionRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListChannelMessages { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::channel_messages::parse_request(
+                "ListChannelMessagesRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::channel_messages::list_channel_messages(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDesignGraphDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "GetDesignGraphDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::design_topology::get_design_graph_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDesignGraphs { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListSubjectDesignGraphsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::TraverseDesignGraphTopology { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "TraverseDesignGraphTopologyRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDesignGraphSubflows { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListIncomingDesignGraphSubflowsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ClassifyImpact {
+            current,
+            candidate,
+            max_depth,
+        } => {
+            let current = exact_entity_ref(&current, "current")?;
+            let candidate = exact_entity_ref(&candidate, "candidate")?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let classification =
+                trogon_atlas_client::impact::classify(&mut client, current, candidate, max_depth)
+                    .await?;
+            let result = classification.to_json()?;
+            if text {
+                print_impact(&classification);
+            }
+            let code = match classification.verdict() {
+                trogon_atlas_client::impact::ImpactVerdict::BumpOnly => ExitCode::SUCCESS,
+                trogon_atlas_client::impact::ImpactVerdict::Breaking => {
+                    ExitCode::from(EXIT_FINDINGS)
+                }
+                trogon_atlas_client::impact::ImpactVerdict::Unknown => {
+                    ExitCode::from(EXIT_IMPACT_UNKNOWN)
+                }
+            };
+            Ok((code, Some(result)))
+        }
+        Cmd::InspectDataProduct { entity } => {
+            let address = view::parse_address(&entity)?;
+            if address.kind != pb::EntityKind::DataProduct {
+                trogon_atlas_client::invalid_input!("expected a data_product address");
+            }
+            let version = address.version.ok_or_else(|| {
+                trogon_atlas_client::failure::invalid_input("inspection requires an exact version")
+            })?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::data_product::inspect(
+                &mut client,
+                pb::Id {
+                    namespace: address.namespace,
+                    slug: address.slug,
+                    version,
+                },
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectAssignments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListSubjectAssignmentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_subject_assignments(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListAssigneeResponsibilities { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListAssigneeResponsibilitiesRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::responsibility::list_assignee_responsibilities(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListTeamMembers { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListTeamMembersRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_team_members(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListPersonTeams { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListPersonTeamsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_person_teams(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetTeamContacts { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "GetTeamContactsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::get_team_contacts(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::Get { entity } => {
+            let address = view::parse_address(&entity)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let entity = view::fetch_entity(&mut client, &address).await?;
+            let types = view::entity_types(&mut client, &entity).await?;
+            let (manifest, yaml) = view::entity_manifest(&entity, &types)?;
+            if text {
+                print!("{yaml}");
+            }
+            Ok((ExitCode::SUCCESS, Some(json!({"manifest": manifest}))))
+        }
+        Cmd::Describe { entity } => {
+            let address = view::parse_address(&entity)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let entity = view::fetch_entity(&mut client, &address).await?;
+            let outgoing =
+                view::fetch_references(&mut client, &entity, view::Direction::Outgoing).await?;
+            let incoming =
+                view::fetch_references(&mut client, &entity, view::Direction::Incoming).await?;
+            let types = view::entity_types(&mut client, &entity).await?;
+            let description = view::describe(&entity, &types, &outgoing, &incoming)?;
+            if text {
+                print!("{}", view::render_description(&description));
+            }
+            Ok((ExitCode::SUCCESS, Some(serde_json::to_value(&description)?)))
+        }
+        Cmd::Namespaces => {
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let namespaces = view::fetch_namespaces(&mut client).await?;
+            if text {
+                print!("{}", view::render_namespaces(&namespaces));
+            }
+            Ok((ExitCode::SUCCESS, Some(view::namespaces_json(&namespaces))))
+        }
+        Cmd::BackingReport {
+            namespaces,
+            unbacked_findings,
+        } => {
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let report = trogon_atlas_client::backing::get_backing_report(
+                &mut client,
+                pb::GetBackingReportRequest {
+                    namespaces,
+                    include_unbacked_findings: unbacked_findings,
+                },
+            )
+            .await?;
+            if text {
+                print_backing_report(&report);
+            }
+            let code = if report.is_complete() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(EXIT_INCOMPLETE)
+            };
+            Ok((code, Some(report.to_json()?)))
+        }
+        Cmd::Validate { model } => {
+            let address = validate::parse_model_address(&model)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let (id, resp) = validate::validate_event_model(&mut client, &address).await?;
+            let issues = resp.issues;
+            let model = pb::canonical::id_string(pb::EntityKind::EventModel, &id);
+            let severities = branch::SeverityCounts::of(&issues);
+            let completeness = validate::Completeness::of(resp.coverage.as_ref());
+            let verdict = validate::ValidationVerdict::of(severities.errors, &completeness);
+            if text {
+                println!("{model}: {severities}");
+                for issue in &issues {
+                    println!("{}", apply::format_issue(issue));
+                }
+                print_coverage_gaps(&completeness);
+            }
+            let mut data = json!({
+                "event_model": model,
+                "validation_summary": {
+                    "errors": severities.errors,
+                    "warnings": severities.warnings,
+                    "info": severities.infos,
+                },
+                "validation": issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+            });
+            validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
+            Ok((exit_code_for_verdict(verdict), Some(data)))
+        }
+        Cmd::ExportAttested {
+            model,
+            output,
+            as_of_changeset,
+            allow_incomplete,
+        } => {
+            let request = attested::ExportRequest {
+                address: validate::parse_model_address(&model)?,
+                as_of_changeset,
+                allow_incomplete,
+            };
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let (bundle, verified) = attested::export_attested_model(&mut client, &request).await?;
+            let json = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)?;
+            std::fs::write(&output, format!("{json}\n"))
+                .map_err(|e| anyhow::anyhow!("writing {}: {e}", output.display()))?;
+            Ok(attested_outcome(text, &bundle, &verified, Some(&output)))
+        }
+        Cmd::Verify {
+            bundle,
+            trusted_keys,
+        } => {
+            let trusted = attested::read_trusted_keys(&trusted_keys)?;
+            let (bundle, verified) = attested::verify_file(&bundle, trusted.as_ref())?;
+            Ok(attested_outcome(text, &bundle, &verified, None))
+        }
+        Cmd::ValidateProject {
+            namespace,
+            domain,
+            project,
+        } => {
+            let (label, scope) = match (namespace, domain, project) {
+                (Some(ns), None, None) => (
+                    format!("namespace {ns}"),
+                    validate::ProjectScope::namespace(&ns)?,
+                ),
+                (None, Some(d), None) => {
+                    (format!("domain {d}"), validate::ProjectScope::domain(&d)?)
+                }
+                (None, None, Some(p)) => {
+                    (format!("project {p}"), validate::ProjectScope::project(&p)?)
+                }
+                _ => unreachable!("clap requires exactly one of --namespace, --domain, --project"),
+            };
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let resp = validate::validate_project(&mut client, &scope).await?;
+            let report = ProjectValidation::of(&label, &resp);
+            let completeness = validate::Completeness::of(resp.coverage.as_ref());
+            let verdict = validate::ValidationVerdict::of(report.total.errors, &completeness);
+            if text {
+                print!("{}", report.render());
+                print_coverage_gaps(&completeness);
+            }
+            let mut data = report.to_json();
+            validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
+            Ok((exit_code_for_verdict(verdict), Some(data)))
+        }
+        Cmd::Tree { namespace } => {
+            if let Some(namespace) = &namespace {
+                trogon_atlas_core::validate_id_component(namespace).map_err(|e| {
+                    trogon_atlas_client::failure::invalid_input(format!("namespace {e}"))
+                })?;
+            }
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            // Without a namespace, skip empty ones: the export fetch refuses
+            // a namespace with no entities, and an empty tree says nothing.
+            let namespaces = match namespace {
+                Some(namespace) => vec![namespace],
+                None => view::fetch_namespaces(&mut client)
+                    .await?
+                    .into_iter()
+                    .filter(|n| n.entity_count > 0)
+                    .map(|n| n.id)
+                    .collect(),
+            };
+            let mut trees = Vec::new();
+            for namespace in &namespaces {
+                let entities = export::fetch_namespace_entities(&mut client, namespace).await?;
+                trees.push(view::namespace_tree(namespace, &entities));
+            }
+            if text {
+                let rendered: Vec<String> = trees.iter().map(view::render_tree).collect();
+                print!("{}", rendered.join("\n"));
+            }
+            Ok((ExitCode::SUCCESS, Some(json!({"trees": trees}))))
         }
         Cmd::Openslo {
             cmd:
@@ -824,6 +3033,17 @@ async fn run(
                 "rejection_message": resp.rejection_message,
             });
             Ok((ExitCode::SUCCESS, Some(data)))
+        }
+        Cmd::Protection { cmd } => {
+            run_protection(
+                cmd,
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch,
+                text,
+            )
+            .await
         }
         Cmd::Branch { cmd } => match cmd {
             BranchCmd::Create { name, doc } => {
@@ -938,22 +3158,63 @@ async fn run(
                 use pb::merge_branch_response::Status;
                 match Status::try_from(resp.status).unwrap_or(Status::Unspecified) {
                     Status::Applied => {
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             println!("{name} merged ({} entities applied)", resp.applied_count);
+                            if !resp.validation.is_empty() {
+                                println!("validation after merge: {severities}");
+                                for issue in &resp.validation {
+                                    println!("{}", apply::format_issue(issue));
+                                }
+                            }
                         }
-                        let data =
-                            json!({"status": "applied", "applied_count": resp.applied_count});
+                        let counts = branch::MergeCounts::of(&resp);
+                        let mut data = json!({
+                            "status": "applied",
+                            "applied_count": resp.applied_count,
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
+                            "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+                        });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Validated => {
+                        let counts = branch::MergeCounts::of(&resp);
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             println!(
-                                "{name} would merge cleanly ({} entities, dry run)",
+                                "{name} would merge cleanly (dry run): {} entities ({counts})",
                                 resp.applied_count
                             );
+                            println!("validation after merge: {severities}");
+                            for issue in &resp.validation {
+                                println!("{}", apply::format_issue(issue));
+                            }
                         }
-                        let data =
-                            json!({"status": "validated", "applied_count": resp.applied_count});
+                        let mut data = json!({
+                            "status": "validated",
+                            "applied_count": resp.applied_count,
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
+                            "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+                        });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {
@@ -962,20 +3223,36 @@ async fn run(
                             eprintln!("{name} has conflicts, nothing merged:");
                             print!("{diff}");
                         }
-                        let data = json!({"status": "conflicts", "diff": diff});
+                        let mut data = json!({"status": "conflicts", "diff": diff});
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Invalid => {
+                        let counts = branch::MergeCounts::of(&resp);
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             eprintln!("{name} would leave baseline invalid, nothing merged:");
+                            eprintln!("would have landed: {counts}");
+                            eprintln!("validation after merge: {severities}");
                             for issue in &resp.validation {
                                 eprintln!("{}", apply::format_issue(issue));
                             }
                         }
-                        let data = json!({
+                        let mut data = json!({
                             "status": "invalid",
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Unspecified => {
@@ -1086,10 +3363,12 @@ async fn run(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use trogon_atlas_client::failure::FailureCategory as Category;
+    use trogon_atlas_proto as pb;
 
-    use super::exit_code_for_category;
+    use super::{exit_code_for_category, exit_code_for_verdict, ProjectValidation};
 
     // `ExitCode` has no public accessor for the raw code, so compare
     // through `Debug` formatting against `ExitCode::from(expected)` built
@@ -1118,5 +3397,312 @@ mod tests {
                 "{category:?} should exit {expected}"
             );
         }
+    }
+
+    fn issue(severity: pb::validation_issue::Severity, code: &str) -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: severity as i32,
+            code: code.into(),
+            message: "m".into(),
+            ..Default::default()
+        }
+    }
+
+    fn project_response() -> pb::ValidateProjectResponse {
+        use pb::validation_issue::Severity;
+        pb::ValidateProjectResponse {
+            reports: vec![
+                pb::validate_project_response::ModelReport {
+                    event_model_id: Some(pb::Id {
+                        namespace: "shop".into(),
+                        slug: "checkout".into(),
+                        version: 1,
+                    }),
+                    issues: vec![issue(Severity::Info, "OPEN_QUESTION_PRESENT")],
+                },
+                pb::validate_project_response::ModelReport {
+                    event_model_id: None,
+                    issues: vec![
+                        issue(Severity::Warning, "DOMAIN_IN_CONTEXT_NAMESPACE"),
+                        issue(Severity::Error, "DOMAIN_SLUG_MISMATCH"),
+                    ],
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn project_validation_prints_per_model_and_store_level_sections() {
+        let report = ProjectValidation::of("namespace shop", &project_response());
+        assert_eq!(report.total.errors, 1);
+        assert_eq!(report.total.warnings, 1);
+        assert_eq!(report.total.infos, 1);
+        let text = report.render();
+        assert!(
+            text.starts_with("namespace shop: 1 errors, 1 warnings, 1 info\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("event_model:shop/checkout@1: 0 errors, 0 warnings, 1 info"),
+            "{text}"
+        );
+        assert!(
+            text.contains("store-level: 1 errors, 1 warnings, 0 info"),
+            "{text}"
+        );
+        assert!(
+            text.contains("warning DOMAIN_IN_CONTEXT_NAMESPACE"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn project_validation_json_keeps_store_level_report_with_null_model() {
+        let json = ProjectValidation::of("namespace shop", &project_response()).to_json();
+        assert_eq!(json["scope"], "namespace shop");
+        assert_eq!(json["validation_summary"]["errors"], 1);
+        let reports = json["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["event_model"], "event_model:shop/checkout@1");
+        assert!(reports[1]["event_model"].is_null());
+        assert_eq!(
+            reports[1]["validation"][0]["code"],
+            "DOMAIN_IN_CONTEXT_NAMESPACE"
+        );
+    }
+
+    fn check(
+        check_id: &str,
+        state: pb::validation_check_result::State,
+        reason: &str,
+    ) -> pb::ValidationCheckResult {
+        pb::ValidationCheckResult {
+            check_id: check_id.into(),
+            state: state as i32,
+            reason: reason.into(),
+            subjects_examined: 1,
+        }
+    }
+
+    fn validate_exit(errors: usize, coverage: Option<&pb::ValidationCoverage>) -> String {
+        use trogon_atlas_client::validate::{Completeness, ValidationVerdict};
+        let verdict = ValidationVerdict::of(errors, &Completeness::of(coverage));
+        format!("{:?}", exit_code_for_verdict(verdict))
+    }
+
+    #[test]
+    fn validate_exit_codes_follow_findings_then_coverage() {
+        use std::process::ExitCode;
+
+        use pb::validation_check_result::State;
+        use trogon_atlas_server::validation as server;
+
+        let with =
+            |checks: Vec<pb::ValidationCheckResult>, truncated: bool| pb::ValidationCoverage {
+                checks,
+                snapshot_truncated: truncated,
+                ..Default::default()
+            };
+        let complete = with(
+            vec![check(server::CHECK_MODEL, State::Completed, "")],
+            false,
+        );
+        let partial = with(
+            vec![check(
+                server::CHECK_MODEL,
+                State::Partial,
+                "snapshot_truncated",
+            )],
+            true,
+        );
+        let errored = with(vec![check(server::CHECK_MODEL, State::Error, "")], false);
+        let truncated = with(vec![check(server::CHECK_MODEL, State::Completed, "")], true);
+        let by_design = with(
+            vec![
+                check(server::CHECK_MODEL, State::Completed, ""),
+                check(
+                    server::CHECK_STORE_HYGIENE,
+                    State::Skipped,
+                    server::REASON_WRITE_PATH,
+                ),
+                check(
+                    server::CHECK_SCENARIOS,
+                    State::Skipped,
+                    server::REASON_MERGE_PATH,
+                ),
+                check(
+                    server::CHECK_ARCHITECTURE,
+                    State::Skipped,
+                    server::REASON_KIND_NOT_APPLICABLE,
+                ),
+                check(
+                    server::CHECK_STRATEGIC,
+                    State::Skipped,
+                    "event_model_id_absent",
+                ),
+            ],
+            false,
+        );
+        let blocked = |reason| {
+            with(
+                vec![check(server::CHECK_STRATEGIC, State::Skipped, reason)],
+                false,
+            )
+        };
+        let hygiene = blocked(server::REASON_BLOCKED_BY_HYGIENE);
+        let scenarios = blocked(server::REASON_BLOCKED_BY_SCENARIOS);
+        let cases: [(&str, usize, Option<&pb::ValidationCoverage>, u8); 11] = [
+            ("clean and complete", 0, Some(&complete), 0),
+            ("errors", 1, Some(&complete), 1),
+            ("errors and incomplete", 1, Some(&partial), 1),
+            ("clean and partial", 0, Some(&partial), 11),
+            ("clean and errored check", 0, Some(&errored), 11),
+            ("clean and truncated", 0, Some(&truncated), 11),
+            ("clean and by-design skips", 0, Some(&by_design), 0),
+            ("clean and blocked by hygiene", 0, Some(&hygiene), 11),
+            ("clean and blocked by scenarios", 0, Some(&scenarios), 11),
+            ("clean and absent coverage", 0, None, 11),
+            ("errors and absent coverage", 1, None, 1),
+        ];
+        for (name, errors, coverage, expected) in cases {
+            assert_eq!(
+                validate_exit(errors, coverage),
+                format!("{:?}", ExitCode::from(expected)),
+                "{name} should exit {expected}"
+            );
+        }
+    }
+}
+
+/// Structural guard behind `tests/secret_help_output.rs`: clap prints the live
+/// value of an env-backed argument in `--help` unless the argument hides it, so
+/// every secret-looking env var must set `hide_env_values = true`.
+#[cfg(test)]
+mod secret_env_help_guard {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    /// Env var name fragments that mark an argument as secret-bearing, or as a
+    /// connection string that may embed credentials.
+    const SECRET_MARKERS: &[&str] = &[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRESHARED",
+        "DSN",
+        "URL",
+        "ENDPOINT",
+    ];
+
+    /// Matches a marker but carries no secret (a path to a key file, a count,
+    /// a file path, an interval). Adding a name here is a deliberate decision.
+    const PUBLIC_ENV: &[&str] = &[];
+
+    fn collect(
+        cmd: &clap::Command,
+        path: &str,
+        checked: &mut Vec<String>,
+        offenders: &mut Vec<String>,
+    ) {
+        for arg in cmd.get_arguments() {
+            let Some(env) = arg.get_env().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let upper = env.to_ascii_uppercase();
+            let secretish = SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
+                && !PUBLIC_ENV.contains(&env);
+            if !secretish {
+                continue;
+            }
+            checked.push(env.to_owned());
+            if !arg.is_hide_env_values_set() {
+                offenders.push(format!("{env} on `{path}`"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            collect(
+                sub,
+                &format!("{path} {}", sub.get_name()),
+                checked,
+                offenders,
+            );
+        }
+    }
+
+    #[test]
+    fn secret_env_arguments_hide_their_values_in_help() {
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        let cmd = Args::command();
+        collect(&cmd, cmd.get_name(), &mut checked, &mut offenders);
+        assert!(
+            checked.iter().any(|name| name == "TROGON_ATLAS_AUTH_TOKEN"),
+            "guard must see the auth token argument, saw {checked:?}"
+        );
+        assert!(
+            offenders.is_empty(),
+            "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod artifact_command_tests {
+    use clap::Parser;
+
+    use super::{Args, ArtifactCmd, Cmd};
+
+    #[test]
+    fn artifact_upload_requires_local_file_and_namespace_without_backend_credentials() {
+        let args = Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample",
+            "--file",
+            "capture.png",
+        ])
+        .unwrap_or_else(|error| panic!("artifact upload should parse: {error}"));
+        assert!(matches!(
+            args.cmd,
+            Cmd::Artifacts {
+                command: ArtifactCmd::Upload { .. }
+            }
+        ));
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--file",
+            "capture.png"
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn artifact_download_requires_explicit_destination() {
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "download",
+            "--namespace",
+            "sample",
+            "--id",
+            "capture",
+        ])
+        .is_err());
     }
 }

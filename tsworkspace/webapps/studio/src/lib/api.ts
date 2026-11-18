@@ -1,5 +1,26 @@
+import type { HumanInteractionRequest, HumanInteractionResponse } from '@/lib/human-interaction';
+import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib/decision-document';
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
+import type {
+  GlossaryComparison,
+  GlossaryDocumentRef,
+  GlossaryIndex,
+  GlossaryRefresh,
+  GlossarySelection,
+  GlossarySources,
+  GlossaryTermDetail,
+  GlossaryTermRef,
+} from '@/lib/glossary';
+import type {
+  AssigneeResponsibilitiesRequest,
+  DirectoryRef,
+  ResponsibilityAssignments,
+  ResponsibilityContacts,
+  ResponsibilityMemberships,
+  SubjectAssignmentsRequest,
+} from '@/lib/responsibility';
+import { activeSnapshot, notInSnapshot, snapshotResponse } from '@/lib/snapshot';
 
 // Hard ceiling on every browser → gateway request. Long-running RPCs are
 // expected to stream (SSE / NATS WS); a 30 s wall clock for a single JSON
@@ -98,6 +119,8 @@ function isTimeoutAbort(timeoutSignal: AbortSignal, callerSignal: AbortSignal | 
 }
 
 async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
+  const snapshot = activeSnapshot();
+  if (snapshot) return snapshotResponse(snapshot, url) as T;
   // Compose the caller's signal (if any) with our internal timeout so an
   // unmount-during-fetch cancels the network call, not just the rendered
   // state. Native AbortSignal.any is widely supported but not universal yet,
@@ -133,6 +156,7 @@ async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 }
 
 async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}): Promise<T> {
+  if (activeSnapshot()) throw notInSnapshot(url);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutCtrl = new AbortController();
   const timer =
@@ -226,6 +250,48 @@ export interface BranchDiffEntry {
   conflictFieldPaths: string[];
 }
 
+/** One write to one entity, as GetEntityHistory records it. `before` is null on create, `after` on delete. */
+export interface EntityRevision {
+  changesetId: string;
+  author: string;
+  at: string;
+  rpc: string;
+  branch: string;
+  kind: string;
+  before: WireEntityEnvelope | null;
+  after: WireEntityEnvelope | null;
+}
+
+export interface EntityHistoryPage {
+  revisions: EntityRevision[];
+  /** Empty when there are no older revisions. */
+  nextPageToken: string;
+}
+
+/** One entity a changeset wrote. `kind` is the wire op kind (`KIND_PUT` / `KIND_DELETED`). */
+export interface ChangesetOpView {
+  kind: string;
+  /** `entity.kind` is the wire `ENTITY_KIND_*` name. */
+  entity: { kind: string; namespace: string; slug: string; version: string };
+}
+
+/** One mutation RPC's worth of writes, as ListChangesets records it. `branch` is empty on baseline. */
+export interface ChangesetView {
+  id: string;
+  author: string;
+  at: string;
+  message: string;
+  branch: string;
+  rpc: string;
+  ops: ChangesetOpView[];
+}
+
+export interface ChangesetsPage {
+  changesets: ChangesetView[];
+  /** Empty when there are no older changesets. */
+  nextPageToken: string;
+}
+
 export interface ValidateProjectScope {
   projectNamespace?: string;
   projectSlug?: string;
@@ -233,6 +299,8 @@ export interface ValidateProjectScope {
   domainNamespace?: string;
   domainSlug?: string;
   domainVersion?: string;
+  /** Every EventModel in this namespace, whether or not a Domain claims it. */
+  namespace?: string;
 }
 
 function buildQuery(params: Record<string, string | number | undefined>): string {
@@ -284,13 +352,27 @@ export interface CompileTypeLibraryResult {
   compatibilityViolations?: { message?: string }[];
 }
 
-export interface TypeLibraryMessage {
-  fullName: string;
-  library?: EntityId;
+/** An event model as `trogon-atlas apply` manifests. Empty fields are omitted on the wire. */
+export interface BoardManifests {
+  /** The board and everything it reaches in its own namespace, as multi-document YAML. */
+  manifests?: string;
+  /** Entities in other namespaces the board references directly. */
+  externalManifests?: string;
+  skipped?: { entity?: EntityRefWire; reason?: string }[];
+  truncated?: boolean;
 }
 
+/** The paths a board page reads. A snapshot records its responses under these keys. */
+export const boardPaths = {
+  info: () => '/api/info',
+  eventModel: (namespace: string, slug: string) =>
+    `/api/event-model/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}`,
+  validate: (id: { namespace: string; slug: string; version?: string }) =>
+    `/api/validate${buildQuery({ namespace: id.namespace, slug: id.slug, version: id.version })}`,
+};
+
 export const api = {
-  info: (opts?: Omit<FetchOptions, 'branch'>) => getJson<ServerInfo>('/api/info', opts),
+  info: (opts?: Omit<FetchOptions, 'branch'>) => getJson<ServerInfo>(boardPaths.info(), opts),
   // `namespaces` are NamespaceIds, which is what every other endpoint
   // filters on; `labels` maps each to the name to show a person.
   namespaces: (opts?: FetchOptions) =>
@@ -324,27 +406,31 @@ export const api = {
   },
   overview: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/overview', opts),
   eventModels: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/event-models', opts),
-  eventModel: (namespace: string, slug: string, opts?: FetchOptions) =>
-    getJson<{ entities: WireEntityEnvelope[] }>(
-      `/api/event-model/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}`,
+  /** `asOf` reads the board right after that baseline changeset; it cannot be combined with `branch`. */
+  /** `incomplete` marks an as-of board whose rewound closure was clipped before every member and halo event. */
+  eventModel: (namespace: string, slug: string, opts?: FetchOptions & { asOf?: string }) =>
+    getJson<{ entities: WireEntityEnvelope[]; incomplete?: boolean }>(
+      `${boardPaths.eventModel(namespace, slug)}${buildQuery({ asOf: opts?.asOf })}`,
       opts,
     ),
   branches: (opts?: Omit<FetchOptions, 'branch'>) => getJson<{ branches: BranchInfo[] }>('/api/branches', opts),
   branchDiff: (name: string, opts?: Omit<FetchOptions, 'branch'>) =>
     getJson<{ entries: BranchDiffEntry[] }>(`/api/branch-diff?name=${encodeURIComponent(name)}`, opts),
+  entityHistory: (
+    ref: { kind: string; namespace: string; slug: string; version?: string },
+    pageToken?: string,
+    opts?: FetchOptions,
+  ) => getJson<EntityHistoryPage>(`/api/entity-history${buildQuery({ ...ref, pageToken })}`, opts),
+  changesets: (namespace: string, pageToken?: string, opts?: FetchOptions) =>
+    getJson<ChangesetsPage>(`/api/changesets${buildQuery({ namespace, pageToken })}`, opts),
+  changeset: (id: string, opts?: Omit<FetchOptions, 'branch'>) =>
+    getJson<{ changeset: ChangesetView | null }>(`/api/changesets/${encodeURIComponent(id)}`, opts),
   validate: (id: { namespace: string; slug: string; version?: string }, opts?: FetchOptions) =>
-    getJson<{ issues?: unknown[] }>(
-      `/api/validate${buildQuery({
-        namespace: id.namespace,
-        slug: id.slug,
-        version: id.version,
-      })}`,
-      opts,
-    ),
+    getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
+  manifests: (namespace: string, slug: string, opts?: FetchOptions) =>
+    getJson<BoardManifests>(`${boardPaths.eventModel(namespace, slug)}/manifests`, opts),
   compileTypeLibrary: (library: TypeLibraryWire, opts?: FetchOptions) =>
     postJson<CompileTypeLibraryResult>('/api/type-libraries/compile', { library }, opts),
-  typeMessages: (namespace: string, opts?: FetchOptions) =>
-    getJson<{ messages?: TypeLibraryMessage[] }>(`/api/type-libraries/messages${buildQuery({ namespace })}`, opts),
   validateProject: (scope: ValidateProjectScope, opts?: FetchOptions) =>
     getJson<{ reports?: unknown[]; totalErrors?: number; totalWarnings?: number; totalInfo?: number }>(
       `/api/validate-project${buildQuery({
@@ -354,7 +440,175 @@ export const api = {
         domainNamespace: scope.domainNamespace,
         domainSlug: scope.domainSlug,
         domainVersion: scope.domainVersion,
+        namespace: scope.namespace,
       })}`,
       opts,
     ),
 };
+
+export interface DataProductPortState {
+  port?: { portId?: { value?: string }; direction?: string };
+  data?: string;
+  contract?: string;
+  lineage?: string;
+  access?: { declaration?: Record<string, unknown>; state?: string; provider?: string }[];
+  incomplete?: boolean;
+}
+
+export interface DataProductInspection {
+  product?: Record<string, unknown>;
+  etag?: string;
+  scope?: { branch?: string; revision?: string; authorizedNamespaces?: string[]; visited?: unknown[] };
+  ports?: DataProductPortState[];
+  emissions?: unknown[];
+  producing?: unknown[];
+  incomplete?: boolean;
+  offering?: string;
+}
+
+export function inspectDataProduct(id: EntityId, opts: FetchOptions = {}): Promise<DataProductInspection> {
+  return getJson(
+    `/api/data-product/${encodeURIComponent(id.namespace)}/${encodeURIComponent(id.slug)}/inspect?version=${encodeURIComponent(id.version)}`,
+    opts,
+  );
+}
+
+function responsibilityQuery<T>(query: string, request: unknown, opts: FetchOptions): Promise<T> {
+  return getJson(`/api/responsibility/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function listSubjectAssignments(request: SubjectAssignmentsRequest, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityAssignments>('subject-assignments', request, opts);
+}
+export function listAssigneeResponsibilities(request: AssigneeResponsibilitiesRequest, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityAssignments>('assignee-responsibilities', request, opts);
+}
+export function listTeamMembers(team: DirectoryRef, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityMemberships>('team-members', { team }, opts);
+}
+export function listPersonTeams(person: DirectoryRef, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityMemberships>('person-teams', { person }, opts);
+}
+export function getTeamContacts(team: DirectoryRef, includeMembers = false, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityContacts>('team-contacts', { team, includeMembers }, opts);
+}
+
+function catalogQuery(query: string, request: unknown, opts: FetchOptions): Promise<CatalogInspection> {
+  return getJson(`/api/catalog/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+
+export function listGlossaryEntries(
+  request: { selection: GlossarySelection; pageSize?: number; pageToken?: string },
+  opts: FetchOptions = {},
+): Promise<GlossaryIndex> {
+  return getJson(`/api/glossary/entries?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function getGlossaryTerm(
+  request: { term: GlossaryTermRef },
+  opts: FetchOptions = {},
+): Promise<GlossaryTermDetail> {
+  return getJson(`/api/glossary/term?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function inspectGlossarySources(
+  request: { documents: readonly GlossaryDocumentRef[] },
+  opts: FetchOptions = {},
+): Promise<GlossarySources> {
+  return getJson(`/api/glossary/sources?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function compareGlossaries(
+  request: { left: GlossarySelection; right: GlossarySelection },
+  opts: FetchOptions = {},
+): Promise<GlossaryComparison> {
+  return getJson(`/api/glossary/compare?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function inspectGlossaryRefresh(
+  request: { selection: GlossarySelection; documents: readonly GlossaryDocumentRef[]; generationRevision: string },
+  opts: FetchOptions = {},
+): Promise<GlossaryRefresh> {
+  return getJson(`/api/glossary/refresh?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function getGlossaryUsage(
+  request: { kind: string; id: EntityId },
+  opts: FetchOptions = {},
+): Promise<{ entity?: WireEntityEnvelope; etag?: string }> {
+  return getJson(`/api/glossary/usage?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
+  return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);
+}
+export function listSubjectDocuments(subject: CatalogSubject, opts: FetchOptions = {}) {
+  return catalogQuery('subject-documents', { subject }, opts);
+}
+export function listDecisionAmendments(
+  decision: { id: EntityId },
+  direction: 'DECISION_AMENDMENT_DIRECTION_OUTGOING' | 'DECISION_AMENDMENT_DIRECTION_INCOMING',
+  pageToken = '',
+  opts: FetchOptions = {},
+) {
+  return catalogQuery('decision-amendments', { decision, direction, pageSize: 100, pageToken }, opts);
+}
+export function getDecisionDetail(decision: { id: EntityId }, followReplacement = false, opts: FetchOptions = {}) {
+  return catalogQuery('decision-detail', { decision, followReplacement }, opts);
+}
+export function getDocumentDetail(document: DocumentSelection, opts: FetchOptions = {}) {
+  return catalogQuery('document-detail', { document }, opts);
+}
+export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-decisions', { decision }, opts);
+}
+export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-documents', { document }, opts);
+}
+export function inspectHumanInteraction(
+  request: HumanInteractionRequest,
+  opts: FetchOptions = {},
+): Promise<HumanInteractionResponse> {
+  return getJson(`/api/catalog/human-interaction?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function getDesignGraphDetail(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('design-graph-detail', { graph }, opts);
+}
+export function listSubjectDesignGraphs(subject: CatalogSubject, opts: FetchOptions = {}) {
+  return catalogQuery('subject-design-graphs', { subject }, opts);
+}
+export function traverseDesignGraphTopology(
+  root: { id: EntityId },
+  options: { followSubflows?: boolean; maxDepth?: number } = {},
+  opts: FetchOptions = {},
+) {
+  return catalogQuery('design-topology', { root, ...options }, opts);
+}
+export function listIncomingDesignGraphSubflows(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-subflows', { graph }, opts);
+}
+
+export type SourceQuery =
+  | 'registration'
+  | 'registrations'
+  | 'snapshot'
+  | 'snapshots'
+  | 'mapping'
+  | 'mappings'
+  | 'overlay'
+  | 'run'
+  | 'runs'
+  | 'run-results'
+  | 'run-operations';
+export interface SourceInspection {
+  registration?: Record<string, unknown>;
+  snapshot?: Record<string, unknown>;
+  overlay?: Record<string, unknown>;
+  run?: Record<string, unknown>;
+  fidelity?: Record<string, unknown>;
+  incomplete?: boolean;
+  nextPageToken?: string;
+  runRevision?: string;
+  previewDigest?: string;
+  [key: string]: unknown;
+}
+export function inspectSource(
+  query: SourceQuery,
+  request: Record<string, unknown>,
+  opts: FetchOptions = {},
+): Promise<SourceInspection> {
+  return getJson(`/api/source/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}

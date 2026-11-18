@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/responsibility.proto";
+
+message ResponsibilityAssignee {
+  oneof selection {
+    trogonatlas.eventmodel.v1alpha1.TeamRef team = 1;
+    trogonatlas.eventmodel.v1alpha1.PersonRef person = 2;
+  }
+}
+enum ResponsibilityResolutionState {
+  RESPONSIBILITY_RESOLUTION_STATE_UNSPECIFIED = 0;
+  RESPONSIBILITY_RESOLUTION_STATE_RESOLVED = 1;
+  RESPONSIBILITY_RESOLUTION_STATE_UNRESOLVED = 2;
+  RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE = 3;
+}
+message ResponsibilityCheckedScope {
+  optional string branch = 1;
+  repeated string authorized_namespaces = 2;
+  string revision = 3;
+  repeated trogonatlas.eventmodel.v1alpha1.EntityRef visited = 4;
+  repeated trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject visited_subjects = 5;
+}
+message ResponsibilityAssignment {
+  ResponsibilityAssignee assignee = 1;
+  string assignee_uid = 2;
+  trogonatlas.eventmodel.v1alpha1.Responsibility assignment = 3;
+  ResponsibilityResolutionState state = 4;
+}
+message ResponsibilityMembership {
+  trogonatlas.eventmodel.v1alpha1.TeamRef team = 1;
+  string team_uid = 2;
+  trogonatlas.eventmodel.v1alpha1.TeamMember membership = 3;
+  ResponsibilityResolutionState state = 4;
+}
+message ResponsibilityContact {
+  trogonatlas.eventmodel.v1alpha1.TeamRef team = 1;
+  string team_uid = 2;
+  trogonatlas.type.v1alpha1.ConnectionId membership_id = 3;
+  trogonatlas.eventmodel.v1alpha1.PersonRef person = 4;
+  trogonatlas.eventmodel.v1alpha1.ContactPoint contact = 5;
+  ResponsibilityResolutionState state = 6;
+}
+message ListSubjectAssignmentsRequest {
+  trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject subject = 1;
+  optional trogonatlas.eventmodel.v1alpha1.ResponsibilityKind kind = 2;
+}
+message ListSubjectAssignmentsResponse {
+  repeated ResponsibilityAssignment assignments = 1;
+  ResponsibilityCheckedScope scope = 2;
+  bool incomplete = 3;
+  ResponsibilityResolutionState subject_state = 4;
+}
+message ListAssigneeResponsibilitiesRequest {
+  ResponsibilityAssignee assignee = 1;
+  optional trogonatlas.eventmodel.v1alpha1.ResponsibilityKind kind = 2;
+}
+message ListAssigneeResponsibilitiesResponse {
+  repeated ResponsibilityAssignment assignments = 1;
+  ResponsibilityCheckedScope scope = 2;
+  bool incomplete = 3;
+}
+message ListTeamMembersRequest {
+  trogonatlas.eventmodel.v1alpha1.TeamRef team = 1;
+}
+message ListTeamMembersResponse {
+  repeated ResponsibilityMembership memberships = 1;
+  ResponsibilityCheckedScope scope = 2;
+  bool incomplete = 3;
+}
+message ListPersonTeamsRequest {
+  trogonatlas.eventmodel.v1alpha1.PersonRef person = 1;
+}
+message ListPersonTeamsResponse {
+  repeated ResponsibilityMembership memberships = 1;
+  ResponsibilityCheckedScope scope = 2;
+  bool incomplete = 3;
+}
+message GetTeamContactsRequest {
+  trogonatlas.eventmodel.v1alpha1.TeamRef team = 1;
+  bool include_members = 2;
+}
+message GetTeamContactsResponse {
+  repeated ResponsibilityContact team_contacts = 1;
+  repeated ResponsibilityContact member_contacts = 2;
+  ResponsibilityCheckedScope scope = 3;
+  bool incomplete = 4;
+}

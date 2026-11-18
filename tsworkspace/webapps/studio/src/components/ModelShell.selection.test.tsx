@@ -9,14 +9,33 @@ vi.mock('@/lib/api', () => ({
     model: vi.fn(),
     branches: vi.fn(),
     branchDiff: vi.fn(),
+    changesets: vi.fn(),
+    changeset: vi.fn(),
   },
 }));
 vi.mock('@/lib/realtime', () => ({
   watchEntities: vi.fn(() => new Promise(() => {})),
 }));
 vi.mock('@/components/canvas/Board', () => ({
-  Board: ({ focus, selections }: { focus?: { key: string; n: number }; selections: unknown[] }) => (
-    <div data-testid="board" data-focus={JSON.stringify(focus)} data-selections={JSON.stringify(selections)} />
+  Board: ({
+    focus,
+    selections,
+    onSelect,
+    onSelectEdge,
+  }: {
+    focus?: { key: string; n: number };
+    selections: unknown[];
+    onSelect: (key: string) => void;
+    onSelectEdge?: (edge: { id: string; data: unknown }, additive?: boolean) => void;
+  }) => (
+    <div data-testid="board" data-focus={JSON.stringify(focus)} data-selections={JSON.stringify(selections)}>
+      <button type="button" onClick={() => onSelect('event:shop/order.placed@1')}>
+        Board select order placed
+      </button>
+      <button type="button" onClick={() => onSelectEdge?.({ id: 'edge-1', data: {} })}>
+        Board select edge
+      </button>
+    </div>
   ),
 }));
 vi.mock('@/components/canvas/SequenceBoard', () => ({ SequenceBoard: () => null }));
@@ -29,10 +48,23 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 });
 vi.mock('@tanstack/react-hotkeys', () => ({ useHotkey: vi.fn() }));
 vi.mock('@/components/Inspector', () => ({
-  Inspector: ({ entity, onClose }: { entity: { title: string }; onClose: () => void }) => (
-    <div data-testid="inspector">
+  Inspector: ({
+    entity,
+    tab,
+    onTabChange,
+    onClose,
+    asOf,
+  }: {
+    entity: { title: string };
+    asOf?: string;
+    tab?: string;
+    onTabChange?: (tab: string) => void;
+    onClose: () => void;
+  }) => (
+    <div data-testid="inspector" data-tab={tab} data-as-of={asOf}>
       {entity.title}
       <button type="button" aria-label="Close inspector" onClick={onClose} />
+      <button type="button" aria-label="Inspector tab details" onClick={() => onTabChange?.('details')} />
     </div>
   ),
 }));
@@ -56,8 +88,38 @@ describe('ModelShell selection drawer routing', () => {
     (api.model as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [] });
     (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({ branches: [] });
     (api.branchDiff as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: [] });
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    (api.changeset as ReturnType<typeof vi.fn>).mockResolvedValue({ changeset: null });
   });
   afterEach(cleanup);
+
+  it.each([
+    ['decision', 'delivery-choice', 'Delivery choice'],
+    ['document', 'delivery-note', 'Delivery note'],
+  ] as const)('opens the inspector from a %s focus deep link', async (kind, slug, title) => {
+    const model = buildModel([{ [kind]: { id: { namespace: 'shop', slug }, title: { value: title } } }]);
+    const entity = model.entities[0];
+    expect(entity.kind).toBe(kind);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: `?focus=${kind}:shop/${slug}` }),
+    });
+
+    await waitFor(() => expect(screen.getByTestId('inspector').textContent).toBe(title));
+    const board = screen.getByTestId('board');
+    expect(JSON.parse(board.getAttribute('data-selections') ?? 'null')).toEqual([{ type: 'entity', key: entity.key }]);
+    expect(JSON.parse(board.getAttribute('data-focus') ?? 'null')).toEqual({ key: entity.key, n: 1 });
+  });
+
+  it('passes retained historical context to the inspector before the URL catches up', async () => {
+    const model = buildModel([
+      { event: { id: { namespace: 'shop', slug: 'order.placed', version: '1' }, title: 'Retained event' } },
+    ]);
+    const asOf = '11111111-1111-4111-8111-111111111111';
+    rtlRender(<ModelShell model={model} scopedTitle="History" asOf={asOf} />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?selected=event:shop/order.placed@1' }),
+    });
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-as-of')).toBe(asOf));
+  });
 
   it('opens finding details and jumps to its entity using the shared focus request', async () => {
     const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
@@ -166,5 +228,152 @@ describe('ModelShell selection drawer routing', () => {
     });
     expect(screen.queryByTestId('multi-inspector')).toBeNull();
     expect(screen.getByTestId('inspector').textContent).toBe('Order placed');
+  });
+
+  it('jumps the Inspector to the Validation tab from a finding, and resets to Details on a fresh selection', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    const issues = buildIssueIndex([
+      {
+        severity: 'SEVERITY_ERROR',
+        code: 'MISSING_EVENT_FIELD',
+        message: 'Order placed needs a customer identifier.',
+        subject: { kind: 'ENTITY_KIND_EVENT', id },
+        subjectField: 'schema.fields',
+      },
+    ]);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" issues={issues} />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /validation findings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed@1/ }));
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('validation'));
+
+    // The Inspector reports its own tab changes back up; ModelShell must keep
+    // its state in sync rather than only pushing `tab` one way down.
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector tab details' }));
+    expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('details');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validation findings' }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed@1/ }));
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('validation'));
+
+    // A fresh selection from the board is a new look at an entity, not a
+    // continuation of the validation jump: it must land back on Details.
+    fireEvent.click(screen.getByRole('button', { name: 'Board select order placed' }));
+    expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('details');
+  });
+
+  it('opens namespace history from the top bar and jumps to an op on the Inspector History tab', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-00000000beef',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          message: 'put event shop/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', ...id } }],
+        },
+      ],
+      nextPageToken: '',
+    });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    expect(api.changesets).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    expect(screen.getByRole('complementary', { name: 'Namespace history' })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: /PutEntity/ }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed/ }));
+
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('history'));
+    expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull();
+    expect(JSON.parse(screen.getByTestId('board').getAttribute('data-selections') ?? 'null')).toEqual([
+      { type: 'entity', key: 'event:shop/order.placed@1' },
+    ]);
+  });
+
+  it('moves to a baseline changeset from history and exits from the as-of tag', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-00000000beef',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          message: 'put event shop/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', ...id } }],
+        },
+      ],
+      nextPageToken: '',
+    });
+    const onAsOfChange = vi.fn();
+    const { rerender } = rtlRender(
+      <ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" onAsOfChange={onAsOfChange} />,
+      { wrapper: withNuqsTestingAdapter() },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    fireEvent.click(await screen.findByRole('button', { name: /PutEntity/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'View board as of this' }));
+    expect(onAsOfChange).toHaveBeenCalledWith('0192f000-0000-7000-8000-00000000beef');
+
+    rerender(
+      <ModelShell
+        model={model}
+        scopedTitle="Shop"
+        historyNamespace="shop"
+        asOf="0192f000-0000-7000-8000-00000000beef"
+        onAsOfChange={onAsOfChange}
+      />,
+    );
+    expect(screen.getByRole('status', { name: 'As of' })).toBeDefined();
+    fireEvent.click(screen.getByRole('link', { name: 'Exit' }));
+    expect(onAsOfChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('closes namespace history when an edge is selected so its inspector shows', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    expect(screen.getByRole('complementary', { name: 'Namespace history' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Board select edge' }));
+
+    await waitFor(() => expect(screen.getByTestId('edge-inspector')).toBeDefined());
+    expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull();
+  });
+
+  it('returns focus to the history button when the drawer closes', async () => {
+    const model = buildModel([]);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    const trigger = screen.getByRole('button', { name: 'Namespace history' });
+
+    fireEvent.click(trigger);
+    const close = await screen.findByRole('button', { name: 'Close namespace history' });
+    close.focus();
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('offers no history button without a namespace to read', () => {
+    const model = buildModel([]);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" />, { wrapper: withNuqsTestingAdapter() });
+    expect(screen.queryByRole('button', { name: 'Namespace history' })).toBeNull();
   });
 });

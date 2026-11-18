@@ -1,37 +1,71 @@
 # trogon-atlas-mcp
 
-Model Context Protocol (MCP) adapter: a stdio bridge that exposes
-each `EventModelService` gRPC RPC as an MCP tool that an AI agent
-can call directly.
+Model Context Protocol (MCP) tools over Streamable HTTP that expose each
+`EventModelService` gRPC RPC as an MCP tool that an AI agent can call
+directly. This crate is a library: `trogon-atlas-server` serves it at `/mcp`
+on the same listener as gRPC and runs every tool call through the same
+authentication and authorization as a gRPC caller.
 
-## Running
+## Connecting
 
-```sh
-# Defaults: gRPC at http://127.0.0.1:50069, no auth.
-trogon-atlas-mcp
+Enable it on the server with `TROGON_ATLAS_MCP` (see the
+[server README](../trogon-atlas-server/README.md)), then point an MCP client
+at `http://<host>:<grpc-port>/mcp`. The endpoint is stateless, so any replica
+can answer any request.
+[Connect an MCP client](../../../docs/how-to/connect-an-mcp-client.md)
+walks through installing the example client configuration.
 
-# Pointing at a remote server with a bearer token.
-trogon-atlas-mcp \
-  --grpc https://trogon-atlas.example.com:443 \
-  --auth-token "$TROGON_ATLAS_AUTH_TOKEN"
-```
+The endpoint holds no credential of its own. Each MCP request acts as its
+own `Authorization: Bearer <token>` header, so the server authenticates and
+authorizes the calling client, and `tools/list` shows only the tools that
+client's role can call. A request without the header is refused unless the
+server allows anonymous callers; a header that is not a bearer token is
+rejected.
 
-The adapter speaks MCP over stdio (the canonical transport). It is
-typically launched as a sub-process by an MCP-aware host (Claude Code,
-custom agent harness, etc.) rather than invoked directly.
+The [MCP tool reference](../../../docs/reference/mcp-tools.md) lists every
+tool with its minimum role, effect, gRPC methods and parameters. It is
+generated from the tool registry; regenerate it with
+`mise run rust:mcp-reference` after adding, removing or changing a tool.
+
+## Discovering a manifest schema
+
+`get_entity_schema` returns the JSON Schema for one entity kind's manifest,
+cut from the same generator as `trogon-atlas schema`, so the tool and the
+CLI never describe different shapes. `schema_sha256` identifies the schema
+so a client can cache it. The response also carries a minimal skeleton, the
+JSON pointers of the placeholders in it, and the validation rules whose
+subject is that kind.
+
+The skeleton satisfies the schema only (`skeleton_validity: "schema_only"`).
+Replace every placeholder and add the references and context the kind
+needs; apply_manifests refuses a manifest that still holds a placeholder.
+Tenant types from a registered type library are not inlined; resolve them
+with `resolve_type`. An unknown kind is `invalid_params`; `list_entity_kinds`
+names every kind.
+
+Send `x-trogon-atlas-profile: <profile>` to narrow a session to one task's
+tools, or fix every session to one with the server's `--mcp-profile`. See
+[MCP tool profiles](../../../docs/reference/mcp-tool-profiles.md).
+
+Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
+to that branch. Omit it for baseline.
 
 For validation repairs, use the
 [repair playbook](../../../docs/how-to/repair-validation-findings.md), which
 covers dependency discovery, guarded mutations, verification, and preserving
 the procedure for future runs.
 
-## Configuration
+## Task prompts
 
-| Flag / Env var | Default | Description |
-|---|---|---|
-| `--grpc` / `TROGON_ATLAS_GRPC` | `http://127.0.0.1:50069` | gRPC endpoint. `https://` endpoints use TLS with native roots. |
-| `--auth-token` / `TROGON_ATLAS_AUTH_TOKEN` | _(none)_ | Shared bearer token matching the server's `TROGON_ATLAS_AUTH_TOKEN`. The value is redacted from logs and `--help` output. |
-| `--max-message-bytes` / `TROGON_ATLAS_MCP_MAX_MESSAGE_BYTES` | `4194304` (4 MiB) | Maximum gRPC message size for encoding and decoding. Must match the server's cap; set both sides in lock-step when raising the limit. Startup fails with a clear error if the env var is set to a non-numeric value. |
+The server instructions stay within `SERVER_INSTRUCTIONS_BUDGET_BYTES`
+because every session receives them. Task procedures, such as the storyboard
+authoring rules or the validation repair procedure, are MCP prompts instead:
+a session fetches the one for its task with `prompts/get`. Each prompt lives
+in `prompts/` and declares the tools its body names. Crate tests fail when a
+prompt names a tool it does not declare, declares one the registry lacks, or
+is hidden by the profile its task belongs to, and when the instructions name a tool some profile
+hides. The [MCP tool reference](../../../docs/reference/mcp-tools.md#task-prompts)
+lists the prompts.
 
 ## What the tools return
 
@@ -45,6 +79,67 @@ Clients decode the protobuf (or use the matching `*_json` tool when a
 JSON view is easier to consume). The previous behavior, embedding
 Rust's `Debug` output alongside the binpb, was removed because that
 format is not wire-stable.
+
+Mutating entity tools (`put_entity`, `put_entity_json`, `batch_mutate`,
+`batch_mutate_json`, `delete_entity`, `delete_by_query`,
+`retarget_references`, `revert_changeset`, `apply_manifests`) add the scope
+the write landed in, because a branch write keeps no durable receipt:
+
+```json
+{ "scope": "branch", "branch": "acme-del", "binpb_base64": "..." }
+```
+
+`scope` is `baseline` and `branch` is `null` when no branch applies.
+
+The entity protection tools (`protect_entity`, `unprotect_entity`,
+`get_entity_protection`, `list_entity_protections`) return plain JSON instead
+of `binpb_base64` and carry no `scope`, because protection is baseline-only
+and the same on every branch. `protect_entity` and `unprotect_entity` refuse
+to run while a branch is set. A listing reports `verdict: "partial"` when the
+server could not read every row or enumerate the whole registry. See
+[the entity protection command reference](../../../docs/reference/entity-protection-commands.md).
+
+`put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate` and
+`batch_mutate_json` also return the server's validation findings as a JSON
+`issues` array next to `binpb_base64`, so an agent reads them without decoding
+the protobuf. Findings
+are non-blocking, strategic ones included (BoundedContext, Domain and Subdomain
+rules), and `validate_only` dry runs return them too:
+
+```json
+{
+  "scope": "baseline",
+  "branch": null,
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "DOMAIN_IN_CONTEXT_NAMESPACE",
+      "message": "...",
+      "subject": "domain:shop/shop@1",
+      "field": null
+    }
+  ],
+  "binpb_base64": "..."
+}
+```
+
+`severity` is `error`, `warning` or `info`; `subject` and `field` are `null`
+when the finding names no entity or path. Batch findings also carry
+`op_index` (zero-based position of the put or delete op) and `op_entity` (the
+entity that op wrote or deleted). `delete_entity` returns what the delete leaves
+behind, such as `REALIZES_DANGLING` after force-deleting a realized Subdomain,
+and `mode: dry_run` previews it. `merge_branch` adds the same `issues` array from the response's
+post-merge validation. Fix every warning and error that comes back.
+
+`apply_manifests` returns the same objects in `issues`, so one shape covers
+every mutating tool. `op_index` is the position among the changed manifests
+sent in the batch (unchanged manifests are skipped) and `op_entity` is the
+manifest's entity id.
+
+Strategic findings also appear once on the store-level report of
+`validate_project` (an empty `event_model_id`). After editing only Project,
+Domain, Subdomain or BoundedContext entities, run `validate_project` with the
+namespace or project scope, since there may be no EventModel to validate.
 
 Tools built on `trogon-atlas-client` rather than a single RPC
 (`apply_manifests`, `diff_manifests`, `export_namespace`, `export_openslo`,

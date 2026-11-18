@@ -173,6 +173,7 @@ export function entityContext(model: Model, entity: Entity, momentKey?: string, 
       for (const t of sc.thenEmits) lines.push(`- THEN ${ex(t)}`);
       if (sc.thenState) lines.push(`- THEN state ${ex(sc.thenState)}`);
       if (sc.thenCommand) lines.push(`- THEN ${ex(sc.thenCommand)}`);
+      if (sc.noCommand) lines.push(`- THEN no command${sc.noCommand.doc ? `: ${sc.noCommand.doc}` : ''}`);
       for (const a of sc.annotations) lines.push(`- ${a.type}: ${JSON.stringify(a.data)}`);
     }
   }

@@ -3,6 +3,7 @@ syntax = "proto3";
 package trogonatlas.eventmodel.v1alpha1;
 
 import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 
 // One typed edge message per type kind. An Edge is a Ref + free-form doc +
@@ -15,34 +16,40 @@ message EventEdge {
   EventRef event = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }
 
 message CommandEdge {
   CommandRef command = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }
 
 message ReadModelEdge {
   ReadModelRef read_model = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }
 
 message ProcessorEdge {
   ProcessorRef processor = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }
 
 message UIEdge {
   UIRef ui = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }
 
 message PersonaEdge {
   PersonaRef persona = 1;
   string doc = 2;
   repeated google.protobuf.Any metadata = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
 }

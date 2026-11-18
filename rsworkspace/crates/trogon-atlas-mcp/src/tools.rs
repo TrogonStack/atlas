@@ -17,7 +17,7 @@ struct EntitySpecDe {
 #[serde(deny_unknown_fields)]
 pub struct EntitySpec {
     #[schemars(
-        description = "Entity kind: event, command, read_model, processor, ui, persona, swimlane, command_slice, read_model_slice, automation_slice, ui_slice, storyboard, event_model"
+        description = "Entity kind in snake_case, e.g. event, read_model, event_model or specification. Call list_entity_kinds for every kind."
     )]
     pub kind: String,
     pub namespace: String,
@@ -51,6 +51,11 @@ pub struct ListEntitiesParams {
     #[schemars(description = "Restrict by entity kind (optional)")]
     pub kind: Option<String>,
     pub namespace: Option<String>,
+    #[schemars(
+        description = "Return only the highest stored version per identity. This does not imply review or publication. Defaults to false."
+    )]
+    #[serde(default)]
+    pub latest_versions_only: bool,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -72,6 +77,15 @@ pub struct ListEntitiesParams {
 pub struct BatchGetParams {
     #[schemars(description = "Entity refs to fetch. Maximum 100 refs per request.")]
     pub refs: Vec<EntitySpec>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EntitySchemaParams {
+    #[schemars(
+        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
+    )]
+    pub kind: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -123,6 +137,8 @@ struct ImpactParamsDe {
     max_depth: u32,
     #[serde(default)]
     filter_kinds: Option<Vec<String>>,
+    #[serde(default)]
+    include_containers: bool,
 }
 
 #[derive(Debug, schemars::JsonSchema)]
@@ -139,6 +155,25 @@ pub struct ImpactParams {
     #[serde(default)]
     pub max_depth: u32,
     pub filter_kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Also walk down through every member of event models and components reached. Default false, so unrelated sibling members are not reported."
+    )]
+    #[serde(default)]
+    pub include_containers: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClassifyImpactParams {
+    #[schemars(description = "The exact version dependents pin today.")]
+    pub current: EntitySpec,
+    #[schemars(description = "The exact version of the same kind that would replace it.")]
+    pub candidate: EntitySpec,
+    #[schemars(
+        description = "Max referrer hops from current. 0 = server default (16). Values above 16 are capped at 16."
+    )]
+    #[serde(default)]
+    pub max_depth: u32,
 }
 
 impl<'de> Deserialize<'de> for ImpactParams {
@@ -154,6 +189,7 @@ impl<'de> Deserialize<'de> for ImpactParams {
             version: raw.version,
             max_depth: raw.max_depth,
             filter_kinds: raw.filter_kinds,
+            include_containers: raw.include_containers,
         })
     }
 }
@@ -166,6 +202,28 @@ pub struct ProjectionParams {
     pub version: u64,
     #[serde(default)]
     pub include_cross_model: bool,
+}
+
+/// Its own type rather than [`ProjectionParams`] so the storyboard tool does
+/// not advertise an as-of field its RPC has no way to honour.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventModelProjectionParams {
+    pub namespace: String,
+    pub slug: String,
+    pub version: u64,
+    #[serde(default)]
+    pub include_cross_model: bool,
+    #[schemars(
+        description = "Changeset id from list_changesets. Returns the model as it was right after that baseline changeset landed. Not allowed with a branch."
+    )]
+    #[serde(default)]
+    pub as_of_changeset: Option<String>,
+    #[schemars(
+        description = "RFC 3339 instant. Returns the baseline model as of the newest changeset recorded at or before it, at millisecond precision; the response names that changeset. Not allowed with as_of_changeset or a branch, or later than the server clock."
+    )]
+    #[serde(default)]
+    pub as_of_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -203,6 +261,10 @@ pub struct SearchParams {
     #[schemars(description = "Full-text search query. Maximum 2048 bytes.")]
     pub q: String,
     pub kinds: Option<Vec<String>>,
+    #[schemars(
+        description = "Restrict search to these exact namespaces. Omit or pass an empty list for every namespace visible to the caller."
+    )]
+    pub namespaces: Option<Vec<String>>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -224,6 +286,10 @@ pub struct ListChangesetsParams {
     pub page_token: Option<String>,
     #[schemars(description = "Restrict to changesets recorded on this branch. Omit for all.")]
     pub branch: Option<String>,
+    #[schemars(
+        description = "Restrict to changesets with at least one op in this namespace. Omit for all."
+    )]
+    pub namespace: Option<String>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,
@@ -306,6 +372,8 @@ struct ValidateProjectParamsDe {
     #[serde(default)]
     domain_version: Option<u64>,
     #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
     json: Option<bool>,
 }
 
@@ -324,6 +392,9 @@ pub struct ValidateProjectParams {
     pub domain_slug: Option<String>,
     /// Required (>0) when domain_namespace+domain_slug are set. Omitted must not become 0.
     pub domain_version: Option<u64>,
+    /// Validate every EventModel in this namespace. Exclusive with the project and domain scopes.
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -341,9 +412,15 @@ impl TryFrom<ValidateProjectParamsDe> for ValidateProjectParams {
     fn try_from(raw: ValidateProjectParamsDe) -> Result<Self, Self::Error> {
         let has_project = raw.project_namespace.is_some() || raw.project_slug.is_some();
         let has_domain = raw.domain_namespace.is_some() || raw.domain_slug.is_some();
-        if has_project && has_domain {
+        let has_namespace = raw.namespace.is_some();
+        if [has_project, has_domain, has_namespace]
+            .into_iter()
+            .filter(|set| *set)
+            .count()
+            > 1
+        {
             return Err(
-                "scope is exclusive: set project_namespace+project_slug OR domain_namespace+domain_slug, not both",
+                "scope is exclusive: set project_namespace+project_slug, domain_namespace+domain_slug OR namespace, not several",
             );
         }
         if has_project {
@@ -377,6 +454,7 @@ impl TryFrom<ValidateProjectParamsDe> for ValidateProjectParams {
             domain_namespace: raw.domain_namespace,
             domain_slug: raw.domain_slug,
             domain_version: raw.domain_version,
+            namespace: raw.namespace,
             json: raw.json,
         })
     }
@@ -562,13 +640,40 @@ pub struct PutEntityParams {
     pub operation_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct JsonPayload(serde_json::Value);
+
+impl schemars::JsonSchema for JsonPayload {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "JsonPayload".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": ["object", "string"] })
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+}
+
+impl JsonPayload {
+    pub fn to_json_text(&self) -> String {
+        match &self.0 {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutEntityJsonParams {
     #[schemars(
-        description = "proto3 JSON of an Entity message, e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}"
+        description = "proto3 JSON of an Entity message as a JSON object (a JSON-encoded string is also accepted), e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}"
     )]
-    pub entity_json: String,
+    pub entity_json: JsonPayload,
     #[serde(default)]
     pub create_only: bool,
     #[serde(default)]
@@ -590,8 +695,10 @@ pub struct PutEntityJsonParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchMutateJsonParams {
-    #[schemars(description = "proto3 JSON of a BatchMutateRequest message")]
-    pub request_json: String,
+    #[schemars(
+        description = "proto3 JSON of a BatchMutateRequest message as a JSON object (a JSON-encoded string is also accepted)"
+    )]
+    pub request_json: JsonPayload,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -812,6 +919,34 @@ pub struct MoveNamespaceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DeleteNamespaceParams {
+    #[schemars(
+        description = "Namespace id, not name; list_namespaces reports the id. The namespace must hold no entity on baseline or on any branch."
+    )]
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetBackingReportParams {
+    #[schemars(
+        description = "Count only subjects in these namespace ids. Omit for every visible namespace. Evidence is read from the whole visible model either way."
+    )]
+    #[serde(default)]
+    pub namespaces: Option<Vec<String>>,
+    #[schemars(
+        description = "Also return an ENTITY_UNBACKED Info finding per subject settled as unbacked. Off by default."
+    )]
+    #[serde(default)]
+    pub include_unbacked_findings: bool,
+    /// When true, return the response as proto3-rendered JSON inside a
+    /// `{ "json": "..." }` envelope instead of `{ "binpb_base64": "..." }`.
+    #[serde(default)]
+    pub json: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetSnapshotIdParams {
     #[schemars(
         description = "Restrict the snapshot to these namespaces. Omit for every namespace. Two snapshot ids are comparable only when taken over the same scope."
@@ -975,6 +1110,57 @@ mod deny_unknown_params_tests {
     }
 
     #[test]
+    fn put_entity_json_accepts_an_object_or_a_json_string() {
+        let entity = serde_json::json!({"event": {"title": "Order placed"}});
+        let from_object = serde_json::from_value::<PutEntityJsonParams>(
+            serde_json::json!({ "entity_json": entity }),
+        )
+        .unwrap();
+        let from_string = serde_json::from_value::<PutEntityJsonParams>(
+            serde_json::json!({ "entity_json": entity.to_string() }),
+        )
+        .unwrap();
+        let parse = |p: &PutEntityJsonParams| {
+            serde_json::from_str::<serde_json::Value>(&p.entity_json.to_json_text()).unwrap()
+        };
+        assert_eq!(parse(&from_object), entity);
+        assert_eq!(parse(&from_string), entity);
+    }
+
+    #[test]
+    fn batch_mutate_json_accepts_an_object_or_a_json_string() {
+        let request = serde_json::json!({"validateOnly": true, "ops": []});
+        let from_object = serde_json::from_value::<BatchMutateJsonParams>(
+            serde_json::json!({ "request_json": request }),
+        )
+        .unwrap();
+        let from_string = serde_json::from_value::<BatchMutateJsonParams>(
+            serde_json::json!({ "request_json": request.to_string() }),
+        )
+        .unwrap();
+        let parse = |p: &BatchMutateJsonParams| {
+            serde_json::from_str::<serde_json::Value>(&p.request_json.to_json_text()).unwrap()
+        };
+        assert_eq!(parse(&from_object), request);
+        assert_eq!(parse(&from_string), request);
+    }
+
+    #[test]
+    fn json_payload_arguments_advertise_object_and_string() {
+        for (schema, field) in [
+            (schemars::schema_for!(PutEntityJsonParams), "entity_json"),
+            (schemars::schema_for!(BatchMutateJsonParams), "request_json"),
+        ] {
+            let types = &schema.as_value()["properties"][field]["type"];
+            assert_eq!(
+                *types,
+                serde_json::json!(["object", "string"]),
+                "{schema:?}"
+            );
+        }
+    }
+
+    #[test]
     fn apply_manifests_params_reject_unknown_field() {
         let err = serde_json::from_value::<ApplyManifestsParams>(serde_json::json!({
             "manifests_yaml": "...",
@@ -1006,10 +1192,10 @@ mod deny_unknown_params_tests {
         }));
         if let Ok(p) = parsed {
             assert_ne!(
-            p.project_version,
-            Some(0),
-            "omitted project_version silently became 0; agents will look up a non-existent @0 id"
-        );
+                p.project_version,
+                Some(0),
+                "omitted project_version silently became 0; agents will look up a non-existent @0 id"
+            );
         }
     }
 
@@ -1029,6 +1215,26 @@ mod deny_unknown_params_tests {
             parsed.is_err(),
             "both project and domain scope must be rejected at the schema boundary; got {parsed:?}"
         );
+    }
+
+    #[test]
+    fn validate_project_params_accept_a_namespace_scope() {
+        let parsed = serde_json::from_value::<ValidateProjectParams>(serde_json::json!({
+            "namespace": "acme"
+        }))
+        .unwrap();
+        assert_eq!(parsed.namespace.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn validate_project_params_reject_a_namespace_beside_another_scope() {
+        let parsed = serde_json::from_value::<ValidateProjectParams>(serde_json::json!({
+            "namespace": "acme",
+            "domain_namespace": "acme",
+            "domain_slug": "commerce",
+            "domain_version": 1
+        }));
+        assert!(parsed.is_err(), "got {parsed:?}");
     }
 
     // Server DeleteByQuery rejects max_deletes=0 (FailedPrecondition); the MCP
@@ -1168,4 +1374,130 @@ pub struct ResolveTypeParams {
         description = "Any type_url naming the message, e.g. type.googleapis.com/acme.orders.v1.OrderPlaced"
     )]
     pub type_url: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsibilityQueryParams {
+    #[schemars(
+        description = "Exact proto3 JSON request for this query RPC. Preserve typed subject alternatives, owner UID, local IDs, direction and optional digest pins. No shorthand or inferred ownership."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogQueryParams {
+    #[schemars(
+        description = "Exact native query request in proto3 JSON. Preserve selector alternatives, UID, local identity, digest pin presence and checked scope. No inferred historical hydration."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GlossaryRequestParams {
+    #[schemars(
+        description = "Exact glossary RPC request in proto3 JSON. Preserve context selection, exact versions and evidence pins. Review requires an authenticated User writer, current ifMatch, disposition and reason; review actor/time/digest are server-owned."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRequestParams {
+    #[schemars(
+        description = "Exact artifact gRPC request in proto3 JSON. begin_artifact_upload requires namespace, filename, mediaType, size in bytes and sha256. complete_artifact_upload requires namespace and uploadId. get_artifact and get_artifact_download require namespace and artifactId. get_artifact_storage_info accepts an empty object. Only directUpload=true allows HTTP PUT to a direct S3 presigned URL. When false or omitted, use UploadArtifactContent gRPC through an SDK or the CLI; no Atlas HTTP transfer endpoint exists. Remote MCP cannot read caller-local file paths."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRequestParams {
+    #[schemars(
+        description = "Exact source RPC proto3 JSON request. Supply complete native owners explicitly; preserve typed selectors, adoption, field ownership, guards and branch. Source pointers are inert; no source fetch or execution."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportAttestedModelParams {
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "EventModel version (>0). Call get_latest_version for the newest.")]
+    pub version: u64,
+    #[schemars(
+        description = "Changeset id from list_changesets. Describes baseline as it stood right after that changeset landed instead of its current state. Not allowed with a branch."
+    )]
+    #[serde(default)]
+    pub as_of_changeset: Option<String>,
+    #[schemars(
+        description = "Return a bundle that does not cover its whole scope, marked incomplete with its reasons and unresolved entities, instead of refusing with EXPORT_INCOMPLETE. Defaults to false."
+    )]
+    #[serde(default)]
+    pub allow_incomplete: bool,
+    #[schemars(
+        description = "Include the sealed bundle as proto3 JSON in bundle_json, the input verify_attested_bundle takes. Off by default because a bundle carries every manifest and finding; a bundle over 4 MiB is left out and bundle_omitted says so."
+    )]
+    #[serde(default)]
+    pub include_bundle: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "Why the identity is frozen; every refused writer is shown it.")]
+    pub reason: String,
+    #[serde(default)]
+    #[schemars(description = "Check the request without protecting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAttestedBundleParams {
+    #[schemars(
+        description = "The bundle's proto3 JSON, as export_attested_model returns in bundle_json or trogon-atlas export-attested saves. At most 4 MiB."
+    )]
+    pub bundle_json: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnprotectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Lift only the row at this revision, as get_entity_protection or list_entity_protections report it; refused with STALE_PRECONDITION once the row has moved. Also how an unreadable row is lifted. Omit to lift whatever is current."
+    )]
+    pub if_match: Option<u64>,
+    #[serde(default)]
+    #[schemars(description = "Check the request without lifting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetEntityProtectionParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListEntityProtectionsParams {
+    #[serde(default)]
+    #[schemars(description = "Only identities in this namespace. Omit for every visible one.")]
+    pub namespace: Option<String>,
 }

@@ -21,7 +21,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::{entity_json_value, LoadedManifest},
+    manifest::{entity_json_value, LoadedManifest, ManifestDocument},
     precondition::{Revision, StalePlan},
 };
 
@@ -66,6 +66,13 @@ pub fn classify(desired: &pb::Entity, current: Option<&pb::Entity>) -> Action {
         Some(current) => {
             let (cur, want) = (strip_system(current), strip_system(desired));
             if cur.encode_to_vec() == want.encode_to_vec() {
+                return Action::Unchanged;
+            }
+            if trogon_atlas_core::decision_document::equivalent_manifest(&cur, &want)
+                .unwrap_or(false)
+                || trogon_atlas_core::connections::equivalent_with_unassigned_ids(&cur, &want)
+                    .unwrap_or(false)
+            {
                 return Action::Unchanged;
             }
             match (entity_json_value(&cur), entity_json_value(&want)) {
@@ -159,12 +166,21 @@ pub async fn plan(
     manifests
         .into_iter()
         .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
-        .map(|(manifest, ((entity, found), etag))| {
+        .map(|(mut manifest, ((entity, found), etag))| {
             let observed = match Revision::from_wire(&etag)? {
                 Revision::Absent if found => None,
                 revision => Some(revision),
             };
             let current = found.then_some(entity);
+            if let Some(current) = &current {
+                // A manifest authored without connection IDs adopts the stored
+                // ones. A rejected entity is left untouched for the server to
+                // report.
+                let _ = trogon_atlas_core::connections::adopt_connection_ids(
+                    current,
+                    &mut manifest.entity,
+                );
+            }
             let action = classify(&manifest.entity, current.as_ref());
             Ok(PlannedChange {
                 manifest,
@@ -174,6 +190,49 @@ pub async fn plan(
             })
         })
         .collect()
+}
+
+/// Refuse a board import whose target lacks a foreign entity the board
+/// references. Another namespace owns those entities, so the import never
+/// writes them, and only their identity is checked: a bundled spec that no
+/// longer transcodes must not hide a missing entity or block a present one.
+pub async fn require_external(client: &mut Client, external: Vec<ManifestDocument>) -> Result<()> {
+    if external.is_empty() {
+        return Ok(());
+    }
+    let keys = external
+        .iter()
+        .map(|d| pb::EntityRef {
+            kind: d.kind as i32,
+            id: Some(d.id.clone()),
+        })
+        .collect();
+    let found = client
+        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
+        .await
+        .context("BatchGetEntities failed")?
+        .into_inner()
+        .found;
+    if found.len() != external.len() {
+        bail!(
+            "server returned {} found flags for {} keys",
+            found.len(),
+            external.len()
+        );
+    }
+    let missing: Vec<String> = external
+        .iter()
+        .zip(found)
+        .filter(|(_, found)| !found)
+        .map(|(d, _)| pb::canonical::id_string(d.kind, &d.id))
+        .collect();
+    if !missing.is_empty() {
+        crate::invalid_input!(
+            "the target is missing external entities this board references; apply them from their own namespace first: {}",
+            missing.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// A batch was refused (`BatchMutateResponse.status == FAILED`) for a reason
@@ -188,15 +247,18 @@ pub struct ApplyRejected {
     /// happen for a well-formed response).
     pub failed: String,
     pub issues: Vec<pb::ValidationIssue>,
+    pub coverage: Option<pb::ValidationCoverage>,
 }
 
 impl ApplyRejected {
     #[must_use]
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut body = json!({
             "failed": self.failed,
             "issues": self.issues.iter().map(issue_to_json).collect::<Vec<_>>(),
-        })
+        });
+        insert_coverage(&mut body, self.coverage.as_ref());
+        body
     }
 }
 
@@ -222,16 +284,59 @@ impl std::error::Error for ApplyRejected {}
 /// to render issues without string-matching their text.
 #[must_use]
 pub fn issue_to_json(issue: &pb::ValidationIssue) -> Value {
-    let subject = issue.subject.as_ref().and_then(|s| {
-        let kind = pb::EntityKind::try_from(s.kind).ok()?;
-        let id = s.id.as_ref()?;
-        Some(pb::canonical::id_string(kind, id))
-    });
     json!({
+        "severity": severity_name(issue),
         "code": issue.code,
         "message": issue.message,
-        "subject": subject,
+        "subject": ref_string(issue.subject.as_ref()),
+        "evidence": issue.evidence.iter().map(evidence_to_json).collect::<Vec<_>>(),
+        "acknowledged": issue.acknowledged,
     })
+}
+
+/// JSON shape for one finding cause, in the order the server sent it:
+/// `{role, entity, field, target, occurrence: {storyboard, position}, detail}`
+/// with absent parts as `null`.
+#[must_use]
+pub fn evidence_to_json(evidence: &pb::ValidationEvidence) -> Value {
+    json!({
+        "role": evidence_role_name(evidence),
+        "entity": ref_string(evidence.entity.as_ref()),
+        "field": (!evidence.field.is_empty()).then_some(evidence.field.as_str()),
+        "target": ref_string(evidence.target.as_ref()),
+        "occurrence": evidence.occurrence.as_ref().map(|o| json!({
+            "storyboard": o
+                .storyboard
+                .as_ref()
+                .map(|id| pb::canonical::id_string(pb::EntityKind::Storyboard, id)),
+            "position": o.position,
+        })),
+        "detail": (!evidence.detail.is_empty()).then_some(evidence.detail.as_str()),
+    })
+}
+
+fn ref_string(r: Option<&pb::EntityRef>) -> Option<String> {
+    let r = r?;
+    let kind = pb::EntityKind::try_from(r.kind).ok()?;
+    Some(pb::canonical::id_string(kind, r.id.as_ref()?))
+}
+
+fn evidence_role_name(evidence: &pb::ValidationEvidence) -> String {
+    pb::validation_evidence::Role::try_from(evidence.role)
+        .unwrap_or_default()
+        .as_str_name()
+        .trim_start_matches("ROLE_")
+        .to_lowercase()
+}
+
+/// The validation findings one batch op produced, with the op's position in
+/// the batch and the canonical id of the entity it wrote.
+pub struct OpIssues {
+    /// Zero-based position among the batch's ops (unchanged manifests are
+    /// not sent, so this is not the manifest index).
+    pub op_index: usize,
+    pub op_entity: String,
+    pub issues: Vec<pb::ValidationIssue>,
 }
 
 pub struct ApplyOutcome {
@@ -239,9 +344,172 @@ pub struct ApplyOutcome {
     pub lines: Vec<String>,
     /// Validation issues the server reported for applied/validated ops.
     pub issues: Vec<pb::ValidationIssue>,
+    /// The same findings grouped by the op that produced them; ops with no
+    /// findings are omitted.
+    pub op_issues: Vec<OpIssues>,
     /// The batch's idempotency receipt, present only when the caller passed
     /// an `operation_id` to `apply` and at least one op ran.
     pub operation_receipt: Option<pb::OperationReceipt>,
+    /// Server-reported suite coverage for the batch. Absent when no ops ran
+    /// or the server omitted it (for example operation_id replay). Never
+    /// invent coverage client-side.
+    pub coverage: Option<pb::ValidationCoverage>,
+    /// How a dry run would move the model's findings. Present only for a
+    /// dry run that reached validation.
+    pub consequence_delta: Option<pb::ConsequenceDelta>,
+}
+
+/// Adds a server-reported consequence delta to a JSON object. An absent
+/// delta stays absent: no delta is not the same as no change.
+pub fn insert_consequence_delta(body: &mut Value, delta: Option<&pb::ConsequenceDelta>) {
+    if let (Some(fields), Some(delta)) = (body.as_object_mut(), delta) {
+        fields.insert("consequence_delta".into(), consequence_delta_to_json(delta));
+    }
+}
+
+/// Adds the server's advisory change assessment to a JSON object. An absent
+/// assessment stays absent: it is never a verdict of `land`.
+pub fn insert_change_assessment(body: &mut Value, assessment: Option<&pb::ChangeAssessment>) {
+    if let (Some(fields), Some(assessment)) = (body.as_object_mut(), assessment) {
+        fields.insert(
+            "change_assessment".into(),
+            change_assessment_to_json(assessment),
+        );
+    }
+}
+
+/// JSON shape for [`pb::ChangeAssessment`]: the verdict and reason codes as
+/// lowercase names without their enum prefix, e.g. `needs_review`.
+#[must_use]
+pub fn change_assessment_to_json(assessment: &pb::ChangeAssessment) -> Value {
+    use pb::change_assessment::{Reason, Verdict};
+    let code = |name: &str, prefix: &str| {
+        name.strip_prefix(prefix)
+            .unwrap_or(name)
+            .to_ascii_lowercase()
+    };
+    let binding = assessment.binding.as_ref();
+    json!({
+        "verdict": code(
+            Verdict::try_from(assessment.verdict)
+                .unwrap_or(Verdict::Unspecified)
+                .as_str_name(),
+            "VERDICT_",
+        ),
+        "reasons": assessment.reasons.iter().map(|reason| code(
+            Reason::try_from(*reason)
+                .unwrap_or(Reason::Unspecified)
+                .as_str_name(),
+            "REASON_",
+        )).collect::<Vec<_>>(),
+        "binding": binding.map(|b| json!({
+            "branch": b.branch,
+            "baseline_snapshot_id": b.baseline_snapshot_id,
+            "landed_snapshot_id": b.landed_snapshot_id,
+            "entries": b.entries.iter().map(|pin| json!({
+                "ref": ref_string(pin.r#ref.as_ref()),
+                "baseline_etag": pin.baseline_etag,
+            })).collect::<Vec<_>>(),
+            "scope": b.scope,
+            "catalogue_revision": b.catalogue_revision,
+        })),
+    })
+}
+
+/// JSON shape for [`pb::ConsequenceDelta`], for CLI/MCP structured output.
+#[must_use]
+pub fn consequence_delta_to_json(delta: &pb::ConsequenceDelta) -> Value {
+    let finding = |issue: Option<&pb::ValidationIssue>| {
+        issue.map(|issue| {
+            let mut body = issue_to_json(issue);
+            if let Some(fields) = body.as_object_mut() {
+                fields.insert("subject_field".into(), issue.subject_field.clone().into());
+            }
+            body
+        })
+    };
+    json!({
+        "complete": delta.complete,
+        "unchanged_count": delta.unchanged_count,
+        "before_snapshot_id": delta.before_snapshot_id,
+        "after_snapshot_id": delta.after_snapshot_id,
+        "before_coverage": delta.before_coverage.as_ref().map(coverage_to_json),
+        "after_coverage": delta.after_coverage.as_ref().map(coverage_to_json),
+        "changes": delta.changes.iter().map(|c| json!({
+            "kind": pb::finding_change::Kind::try_from(c.kind)
+                .map_or("KIND_UNSPECIFIED", |k| k.as_str_name()),
+            "check_id": c.check_id,
+            "origin": ref_string(c.origin.as_ref()),
+            "before": finding(c.before.as_ref()),
+            "after": finding(c.after.as_ref()),
+            "occurrences": c.occurrences,
+            "occurrences_before": c.occurrences_before,
+            "occurrences_after": c.occurrences_after,
+            "reason": c.reason,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// Adds server-reported coverage to a JSON object. Absent coverage stays
+/// absent so a reader never mistakes an omitted report for a full-model pass.
+pub fn insert_coverage(body: &mut Value, coverage: Option<&pb::ValidationCoverage>) {
+    if let (Some(fields), Some(coverage)) = (body.as_object_mut(), coverage) {
+        fields.insert("coverage".into(), coverage_to_json(coverage));
+    }
+}
+
+/// JSON shape for [`pb::ValidationCoverage`], for CLI/MCP structured output.
+/// Callers must pass through the server value; do not invent fields.
+#[must_use]
+pub fn coverage_to_json(coverage: &pb::ValidationCoverage) -> Value {
+    json!({
+        "snapshot_truncated": coverage.snapshot_truncated,
+        "effective_scope": coverage.effective_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "requested_scope": coverage.requested_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "checks": coverage.checks.iter().map(|c| json!({
+            "check_id": c.check_id,
+            "state": check_state_name(c.state),
+            "reason": c.reason,
+            "subjects_examined": c.subjects_examined,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn check_state_name(state: i32) -> &'static str {
+    match pb::validation_check_result::State::try_from(state) {
+        Ok(pb::validation_check_result::State::Completed) => "COMPLETED",
+        Ok(pb::validation_check_result::State::Skipped) => "SKIPPED",
+        Ok(pb::validation_check_result::State::Partial) => "PARTIAL",
+        Ok(pb::validation_check_result::State::Error) => "ERROR",
+        _ => "UNSPECIFIED",
+    }
+}
+
+/// Groups the findings of put and delete results by op, tagging each group
+/// with the op's position and the entity label at that position.
+fn issues_by_op(results: &[pb::BatchMutateOpResult], labels: &[String]) -> Vec<OpIssues> {
+    results
+        .iter()
+        .enumerate()
+        .filter_map(|(op_index, result)| {
+            let findings = match &result.result {
+                Some(pb::batch_mutate_op_result::Result::Put(put)) => &put.validation,
+                Some(pb::batch_mutate_op_result::Result::Delete(delete)) => &delete.validation,
+                None => return None,
+            };
+            (!findings.is_empty()).then(|| OpIssues {
+                op_index,
+                op_entity: labels.get(op_index).cloned().unwrap_or_default(),
+                issues: findings.clone(),
+            })
+        })
+        .collect()
 }
 
 fn id_label(m: &LoadedManifest) -> String {
@@ -269,7 +537,10 @@ pub async fn apply(
         .collect();
 
     let mut issues = Vec::new();
+    let mut op_issues = Vec::new();
     let mut operation_receipt = None;
+    let mut coverage = None;
+    let mut consequence_delta = None;
     if !changed.is_empty() {
         let ops = changed
             .iter()
@@ -321,6 +592,7 @@ pub async fn apply(
             return Err(anyhow::Error::new(ApplyRejected {
                 failed,
                 issues: resp.failure.clone(),
+                coverage: resp.coverage.clone(),
             }));
         }
         let expected = if dry_run {
@@ -333,11 +605,14 @@ pub async fn apply(
                 "apply returned unexpected status {status:?}, expected {expected:?} (dry_run={dry_run})"
             );
         }
-        for result in &resp.results {
-            if let Some(pb::batch_mutate_op_result::Result::Put(put)) = &result.result {
-                issues.extend(put.validation.iter().cloned());
-            }
-        }
+        let labels: Vec<String> = changed.iter().map(|c| id_label(&c.manifest)).collect();
+        op_issues = issues_by_op(&resp.results, &labels);
+        issues = op_issues
+            .iter()
+            .flat_map(|o| o.issues.iter().cloned())
+            .collect();
+        coverage = resp.coverage;
+        consequence_delta = resp.consequence_delta;
     }
 
     let lines = plan
@@ -347,7 +622,10 @@ pub async fn apply(
     Ok(ApplyOutcome {
         lines,
         issues,
+        op_issues,
         operation_receipt,
+        coverage,
+        consequence_delta,
     })
 }
 
@@ -380,23 +658,60 @@ pub fn render_diff(plan: &[PlannedChange], types: &TranscodePool) -> Result<(Str
     Ok((out, changed))
 }
 
-pub fn format_issue(issue: &pb::ValidationIssue) -> String {
-    let severity = match pb::validation_issue::Severity::try_from(issue.severity) {
+fn severity_name(issue: &pb::ValidationIssue) -> &'static str {
+    match pb::validation_issue::Severity::try_from(issue.severity) {
         Ok(pb::validation_issue::Severity::Error) => "error",
         Ok(pb::validation_issue::Severity::Warning) => "warning",
         Ok(pb::validation_issue::Severity::Info) => "info",
         _ => "issue",
-    };
-    let subject = issue
-        .subject
-        .as_ref()
-        .and_then(|s| {
-            let kind = pb::EntityKind::try_from(s.kind).ok()?;
-            let id = s.id.as_ref()?;
-            Some(format!(" [{}]", pb::canonical::id_string(kind, id)))
-        })
+    }
+}
+
+pub fn format_issue(issue: &pb::ValidationIssue) -> String {
+    let severity = severity_name(issue);
+    let subject = ref_string(issue.subject.as_ref())
+        .map(|s| format!(" [{s}]"))
         .unwrap_or_default();
-    format!("  {severity} {}{subject}: {}", issue.code, issue.message)
+    let mut out = format!("  {severity} {}{subject}: {}", issue.code, issue.message);
+    for evidence in &issue.evidence {
+        out.push_str("\n    ");
+        out.push_str(&format_evidence(evidence));
+    }
+    out
+}
+
+/// One cause on one line: `<role> <entity>[.<field>] -> <target> (<storyboard> #<position>)`.
+fn format_evidence(evidence: &pb::ValidationEvidence) -> String {
+    let mut out = evidence_role_name(evidence);
+    if let Some(entity) = ref_string(evidence.entity.as_ref()) {
+        out.push(' ');
+        out.push_str(&entity);
+    }
+    if !evidence.field.is_empty() {
+        out.push('.');
+        out.push_str(&evidence.field);
+    }
+    if let Some(target) = ref_string(evidence.target.as_ref()) {
+        out.push_str(" -> ");
+        out.push_str(&target);
+    }
+    if let Some(o) = evidence.occurrence.as_ref() {
+        let storyboard = o
+            .storyboard
+            .as_ref()
+            .map(|id| pb::canonical::id_string(pb::EntityKind::Storyboard, id))
+            .unwrap_or_default();
+        out.push_str(" (");
+        out.push_str(&storyboard);
+        out.push_str(" #");
+        out.push_str(&o.position.to_string());
+        out.push(')');
+    }
+    if !evidence.detail.is_empty() {
+        out.push_str(": ");
+        out.push_str(&evidence.detail);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -422,6 +737,93 @@ mod tests {
     #[test]
     fn classify_missing_is_create() {
         assert_eq!(classify(&event("A"), None), Action::Create);
+    }
+
+    #[test]
+    fn idless_connection_manifest_is_a_noop_only_when_everything_else_matches() {
+        let desired = pb::Entity {
+            kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(pb::Id {
+                    namespace: "shop".into(),
+                    slug: "place-order".into(),
+                    version: 1,
+                }),
+                command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "place".into(),
+                            version: 1,
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            system: None,
+        };
+        let mut current = desired.clone();
+        trogon_atlas_core::connections::assign_connection_ids(&mut current).unwrap();
+        assert_eq!(classify(&desired, Some(&current)), Action::Unchanged);
+
+        let mut changed = desired;
+        let Some(pb::entity::Kind::CommandSlice(slice)) = changed.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        slice.command.as_mut().unwrap().doc = "changed connection".into();
+        assert_eq!(classify(&changed, Some(&current)), Action::Configure);
+
+        let mut changed_id = current.clone();
+        let Some(pb::entity::Kind::CommandSlice(slice)) = changed_id.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        slice.command.as_mut().unwrap().connection_id =
+            Some(trogon_atlas_core::connections::ConnectionId::new().into());
+        assert_eq!(classify(&changed_id, Some(&current)), Action::Configure);
+    }
+
+    #[test]
+    fn idless_manifest_with_an_added_annotation_adopts_stored_ids_and_configures() {
+        let mut current = pb::Entity {
+            kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(pb::Id {
+                    namespace: "acme-orders".into(),
+                    slug: "place-order-slice".into(),
+                    version: 1,
+                }),
+                command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(pb::Id {
+                            namespace: "acme-orders".into(),
+                            slug: "place-order".into(),
+                            version: 1,
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            system: None,
+        };
+        trogon_atlas_core::connections::assign_connection_ids(&mut current).unwrap();
+        let stored_id = |entity: &pb::Entity| match entity.kind.as_ref() {
+            Some(pb::entity::Kind::CommandSlice(slice)) => {
+                slice.command.as_ref().unwrap().connection_id.clone()
+            }
+            _ => panic!("expected slice"),
+        };
+        let mut planned = current.clone();
+        let Some(pb::entity::Kind::CommandSlice(slice)) = planned.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        let edge = slice.command.as_mut().unwrap();
+        edge.connection_id = None;
+        edge.doc = "open question".into();
+
+        trogon_atlas_core::connections::adopt_connection_ids(&current, &mut planned).unwrap();
+        assert_eq!(classify(&planned, Some(&current)), Action::Configure);
+        assert_eq!(stored_id(&planned), stored_id(&current));
+        assert!(stored_id(&planned).is_some());
     }
 
     #[test]
@@ -485,6 +887,7 @@ mod tests {
                 message: "missing ref".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let rendered = rejected.to_string();
         assert!(rendered.contains("apply failed at event:shop/order.placed@1"));
@@ -499,11 +902,226 @@ mod tests {
             issues: vec![pb::ValidationIssue {
                 code: "ENTITY_REFERENCED".into(),
                 message: "entity is referenced".into(),
+                severity: pb::validation_issue::Severity::Error as i32,
                 ..Default::default()
             }],
+            coverage: None,
         };
         let json = rejected.to_json();
         assert_eq!(json["failed"], "event:shop/order.placed@1");
         assert_eq!(json["issues"][0]["code"], "ENTITY_REFERENCED");
+        assert_eq!(json["issues"][0]["severity"], "error");
+    }
+
+    #[test]
+    fn apply_rejected_to_json_keeps_the_server_coverage() {
+        let rejected = ApplyRejected {
+            failed: "event:shop/order.placed@1".into(),
+            issues: Vec::new(),
+            coverage: Some(pb::ValidationCoverage {
+                checks: vec![pb::ValidationCheckResult {
+                    check_id: "scenarios".into(),
+                    state: pb::validation_check_result::State::Completed as i32,
+                    subjects_examined: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        let json = rejected.to_json();
+        assert_eq!(json["coverage"]["checks"][0]["check_id"], "scenarios");
+        assert_eq!(json["coverage"]["checks"][0]["state"], "COMPLETED");
+        assert!(ApplyRejected {
+            coverage: None,
+            ..rejected
+        }
+        .to_json()
+        .get("coverage")
+        .is_none());
+    }
+
+    fn stale_pin_finding() -> pb::ValidationIssue {
+        let id = |kind: pb::EntityKind, slug: &str, version| pb::EntityRef {
+            kind: kind as i32,
+            id: Some(pb::Id {
+                namespace: "shop".into(),
+                slug: slug.into(),
+                version,
+            }),
+        };
+        pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "SLICE_STALE_REF".into(),
+            message: "stale".into(),
+            evidence: vec![
+                pb::ValidationEvidence {
+                    role: pb::validation_evidence::Role::StalePin as i32,
+                    entity: Some(id(pb::EntityKind::CommandSlice, "place", 1)),
+                    field: "command".into(),
+                    target: Some(id(pb::EntityKind::Command, "place", 1)),
+                    ..Default::default()
+                },
+                pb::ValidationEvidence {
+                    role: pb::validation_evidence::Role::Consumer as i32,
+                    entity: Some(id(pb::EntityKind::ReadModelSlice, "view", 1)),
+                    occurrence: Some(pb::StoryboardOccurrence {
+                        storyboard: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "checkout".into(),
+                            version: 1,
+                        }),
+                        position: 3,
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_every_evidence_part_in_server_order() {
+        let json = issue_to_json(&stale_pin_finding());
+        assert_eq!(
+            json["evidence"],
+            json!([
+                {
+                    "role": "stale_pin",
+                    "entity": "command_slice:shop/place@1",
+                    "field": "command",
+                    "target": "command:shop/place@1",
+                    "occurrence": null,
+                    "detail": null,
+                },
+                {
+                    "role": "consumer",
+                    "entity": "read_model_slice:shop/view@1",
+                    "field": null,
+                    "target": null,
+                    "occurrence": {"storyboard": "storyboard:shop/checkout@1", "position": 3},
+                    "detail": null,
+                },
+            ])
+        );
+        assert_eq!(
+            issue_to_json(&finding("X"))["evidence"],
+            json!([]),
+            "a finding without evidence still names the key"
+        );
+    }
+
+    #[test]
+    fn issue_json_carries_acknowledged_state() {
+        let mut issue = finding("DECLARED");
+        issue.acknowledged = true;
+        assert_eq!(issue_to_json(&issue)["acknowledged"], json!(true));
+        issue.acknowledged = false;
+        assert_eq!(issue_to_json(&issue)["acknowledged"], json!(false));
+    }
+
+    #[test]
+    fn format_issue_renders_one_line_per_cause() {
+        let rendered = format_issue(&stale_pin_finding());
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(
+            lines[1..],
+            [
+                "    stale_pin command_slice:shop/place@1.command -> command:shop/place@1",
+                "    consumer read_model_slice:shop/view@1 (storyboard:shop/checkout@1 #3)",
+            ]
+        );
+    }
+
+    fn finding(code: &str) -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: code.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issues_by_op_tags_put_and_delete_findings_and_skips_clean_ops() {
+        use pb::batch_mutate_op_result::Result as OpResult;
+        let results = vec![
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Put(pb::PutEntityResponse {
+                    validation: vec![finding("REALIZES_MIXED_CLASSIFICATIONS")],
+                    ..Default::default()
+                })),
+            },
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Put(pb::PutEntityResponse::default())),
+            },
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Delete(pb::DeleteEntityResponse {
+                    validation: vec![finding("REALIZES_DANGLING")],
+                    ..Default::default()
+                })),
+            },
+            pb::BatchMutateOpResult { result: None },
+        ];
+        let labels = vec![
+            "bounded_context:shop/shop@1".to_string(),
+            "event:shop/order.placed@1".to_string(),
+            "subdomain:acme/ordering@1".to_string(),
+        ];
+
+        let grouped = issues_by_op(&results, &labels);
+
+        let tagged: Vec<(usize, &str, &str)> = grouped
+            .iter()
+            .flat_map(|o| {
+                o.issues
+                    .iter()
+                    .map(move |i| (o.op_index, o.op_entity.as_str(), i.code.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                (
+                    0,
+                    "bounded_context:shop/shop@1",
+                    "REALIZES_MIXED_CLASSIFICATIONS"
+                ),
+                (2, "subdomain:acme/ordering@1", "REALIZES_DANGLING"),
+            ]
+        );
+    }
+
+    #[test]
+    fn change_assessment_json_names_codes_without_enum_prefixes() {
+        use pb::change_assessment::{Reason, Verdict};
+        let assessment = pb::ChangeAssessment {
+            verdict: Verdict::NeedsReview as i32,
+            reasons: vec![Reason::FindingsIntroduced as i32],
+            binding: Some(pb::AssessmentBinding {
+                branch: "feature".into(),
+                entries: vec![pb::AssessmentPin {
+                    r#ref: Some(pb::EntityRef {
+                        kind: pb::EntityKind::Event as i32,
+                        id: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "order.placed".into(),
+                            version: 1,
+                        }),
+                    }),
+                    baseline_etag: "7".into(),
+                }],
+                scope: "*".into(),
+                ..Default::default()
+            }),
+        };
+
+        let body = change_assessment_to_json(&assessment);
+
+        assert_eq!(body["verdict"], "needs_review");
+        assert_eq!(body["reasons"], json!(["findings_introduced"]));
+        assert_eq!(body["binding"]["branch"], "feature");
+        assert_eq!(
+            body["binding"]["entries"][0],
+            json!({"ref": "event:shop/order.placed@1", "baseline_etag": "7"})
+        );
     }
 }

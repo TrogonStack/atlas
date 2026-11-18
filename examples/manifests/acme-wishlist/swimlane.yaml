@@ -1,0 +1,10 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: wishlist
+  namespace: acme-wishlist
+spec:
+  doc: One shopper's wishlist.
+  order: 1
+  streamId: wishlist-{shopper_id}
+  title: Wishlist

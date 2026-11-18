@@ -2,26 +2,28 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tonic::{
-    service::interceptor::InterceptedService,
-    transport::{Identity, Server, ServerTlsConfig},
-};
+use tonic::transport::{server::TcpIncoming, Server};
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
-    auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
+    health::StoreStatus,
+    metrics::ServerMetrics,
+    telemetry::TelemetryGuard,
 };
 use trogon_atlas_store::{
     nats::{NatsStore, NatsStoreConfig},
     refs::{entity_id, entity_kind},
-    ConflictResolution, LegacyFieldsShape, MigrationMode, Store, StoreOpenMode,
+    ConflictResolution, LegacyFieldsShape, MigrationMode, Store, StoreMetrics, StoreOpenMode,
 };
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "trogon-atlas-server")]
 struct Args {
+    #[command(flatten)]
+    artifacts: trogon_atlas_server::artifacts::config::ArtifactConfig,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
@@ -39,6 +41,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_NATS_URL",
+        hide_env_values = true,
         default_value = "nats://127.0.0.1:4222"
     )]
     nats_url: String,
@@ -98,27 +101,32 @@ struct Args {
         default_value = "trogon-atlas@local"
     )]
     git_author_email: String,
-    /// `host:port` to bind the Prometheus exporter on. Omit to disable metrics.
-    /// Binding a non-loopback address also requires --metrics-allow-external.
-    #[arg(long, env = "TROGON_ATLAS_METRICS_LISTEN")]
-    metrics_listen: Option<String>,
-    /// Explicitly allow the Prometheus /metrics endpoint to bind on a
-    /// non-loopback interface. Required when --metrics-listen resolves to
-    /// a public or private-network address. Loopback binding is always
-    /// permitted and does not require this flag. Set
-    /// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to enable.
+    /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
+    /// Off by default. Every MCP request acts as its own `Authorization:
+    /// Bearer` token, exactly as a gRPC call would.
+    #[arg(long, env = "TROGON_ATLAS_MCP", default_value_t = false)]
+    mcp: bool,
+    /// Comma-separated `Host` header values the MCP endpoint accepts, as a
+    /// guard against DNS rebinding. Entries without a port match any port;
+    /// `*` disables the check. Only guards `/mcp`; gRPC is unaffected.
     #[arg(
         long,
-        env = "TROGON_ATLAS_METRICS_ALLOW_EXTERNAL",
-        default_value_t = false
+        env = "TROGON_ATLAS_MCP_ALLOWED_HOSTS",
+        default_value = "localhost,127.0.0.1,::1"
     )]
-    metrics_allow_external: bool,
+    mcp_allowed_hosts: trogon_atlas_server::mcp::AllowedHosts,
+    /// Fix every MCP session to one tool profile: authoring, repair,
+    /// review, source-integration or read-only. Unset, a request may pick
+    /// its own with `x-trogon-atlas-profile`; set, a request naming another
+    /// profile is refused.
+    #[arg(long, env = "TROGON_ATLAS_MCP_PROFILE")]
+    mcp_profile: Option<trogon_atlas_server::mcp::ToolProfile>,
     /// Shared bearer token required on every RPC. Deprecated in favor of
     /// `--auth-tokens-file`. When set without a tokens file, the token is
     /// treated as belonging to a synthetic principal named "legacy-admin" with
     /// Admin role. Omit both this and `--auth-tokens-file` only when
     /// `--insecure-allow-anonymous` is also set.
-    #[arg(long, env = "TROGON_ATLAS_AUTH_TOKEN")]
+    #[arg(long, env = "TROGON_ATLAS_AUTH_TOKEN", hide_env_values = true)]
     auth_token: Option<String>,
     /// Path to a TOML token registry file. When set, overrides `--auth-token`.
     /// See examples/tokens.toml for the file format.
@@ -188,7 +196,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_MAX_MESSAGE_BYTES",
-        default_value_t = 4 * 1024 * 1024
+        default_value_t = 36 * 1024 * 1024
     )]
     max_message_bytes: usize,
     /// Maximum concurrent in-flight RPCs per connection.
@@ -206,7 +214,7 @@ struct Args {
     /// API key for the selected LLM provider. Prefers `TROGON_ATLAS_LLM_API_KEY`
     /// so the variable is provider-agnostic; falls back to
     /// `ANTHROPIC_API_KEY` for compatibility with existing tooling.
-    #[arg(long, env = "TROGON_ATLAS_LLM_API_KEY")]
+    #[arg(long, env = "TROGON_ATLAS_LLM_API_KEY", hide_env_values = true)]
     llm_api_key: Option<String>,
     /// Override the default model for the selected provider. The default
     /// is a cost-balanced Sonnet-class model; see llm.rs.
@@ -214,7 +222,7 @@ struct Args {
     llm_model: Option<String>,
     /// Override the provider base URL (e.g. to route through a proxy).
     /// Prefers `TROGON_ATLAS_LLM_BASE_URL`; falls back to `ANTHROPIC_BASE_URL`.
-    #[arg(long, env = "TROGON_ATLAS_LLM_BASE_URL")]
+    #[arg(long, env = "TROGON_ATLAS_LLM_BASE_URL", hide_env_values = true)]
     llm_base_url: Option<String>,
     /// Character budget for analysis prompts before doc strings are dropped.
     #[arg(long, env = "TROGON_ATLAS_LLM_PROMPT_BUDGET", default_value_t = 24_000)]
@@ -241,6 +249,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_JEV_BASE_URL",
+        hide_env_values = true,
         default_value = "https://ai-gateway.vercel.sh"
     )]
     jev_base_url: String,
@@ -262,12 +271,16 @@ struct Args {
     ///
     /// The registry stays the source of truth for whether a namespace exists
     /// and what its id is; only the permission question moves.
-    #[arg(long, env = "TROGON_ATLAS_SPICEDB_ENDPOINT")]
+    #[arg(long, env = "TROGON_ATLAS_SPICEDB_ENDPOINT", hide_env_values = true)]
     spicedb_endpoint: Option<String>,
 
     /// Preshared key SpiceDB was started with. Required whenever
     /// `--spicedb-endpoint` is set.
-    #[arg(long, env = "TROGON_ATLAS_SPICEDB_PRESHARED_KEY")]
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_SPICEDB_PRESHARED_KEY",
+        hide_env_values = true
+    )]
     spicedb_preshared_key: Option<String>,
 
     /// How fresh a permission check has to be.
@@ -313,6 +326,26 @@ struct Args {
     /// Safe to leave unset for a single-process deployment.
     #[arg(long, env = "TROGON_ATLAS_CHANGE_CURSOR_KEY", hide_env_values = true)]
     change_cursor_key: Option<String>,
+    /// PKCS#8 PEM Ed25519 private key file `ExportAttestedModel` signs
+    /// bundles with. Unset with `--attested-signing-key-env` also unset,
+    /// bundles are sealed unsigned. Read on every export; an export whose
+    /// key cannot be read is refused with `SIGNING_KEY_UNAVAILABLE`.
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_FILE",
+        hide_env_values = true,
+        conflicts_with = "attested_signing_key_env"
+    )]
+    attested_signing_key_file: Option<PathBuf>,
+    /// Name of an environment variable holding the PKCS#8 PEM Ed25519
+    /// private key, instead of `--attested-signing-key-file`. Names the
+    /// variable; never pass the key itself here.
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_ENV",
+        hide_env_values = true
+    )]
+    attested_signing_key_env: Option<trogon_atlas_server::attested_signing::EnvVarName>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -434,16 +467,20 @@ enum Cmd {
     },
 }
 
-async fn build_store(args: &Args) -> Result<Arc<dyn Store>> {
+async fn build_store(args: &Args, metrics: StoreMetrics) -> Result<Arc<dyn Store>> {
     Ok(Arc::new(
-        build_nats_store(args, StoreOpenMode::Serve).await?,
+        build_nats_store(args, StoreOpenMode::Serve, metrics).await?,
     ))
 }
 
-async fn build_nats_store(args: &Args, open_mode: StoreOpenMode) -> Result<NatsStore> {
+async fn build_nats_store(
+    args: &Args,
+    open_mode: StoreOpenMode,
+    metrics: StoreMetrics,
+) -> Result<NatsStore> {
     match args.store.as_str() {
         "nats" => {
-            let mut config = NatsStoreConfig::new(&args.nats_url);
+            let mut config = NatsStoreConfig::new(&args.nats_url, metrics);
             config.bucket = args.nats_bucket.clone();
             config.stream = args.nats_stream.clone();
             config.subject_root = args.nats_subject_root.clone();
@@ -554,50 +591,73 @@ async fn await_inflight_drain(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let tracing_guard = trogon_atlas_server::telemetry::init_tracing()?;
+    let telemetry = trogon_atlas_server::telemetry::init_telemetry()?;
+    let meter = telemetry.meter();
+    let store_metrics = StoreMetrics::new(&meter);
+    let server_metrics = ServerMetrics::new(&meter);
+    let result = Box::pin(run(
+        Args::parse(),
+        &telemetry,
+        store_metrics,
+        server_metrics,
+    ))
+    .await;
 
-    let args = Args::parse();
+    // Flush any spans and metrics the OTLP exporters still have queued. Must
+    // run before the process exits, on every path, or the last few seconds of
+    // telemetry are silently dropped. Both flushes block on the exporters, so
+    // they run off the async runtime the exporters themselves depend on.
+    tokio::task::spawn_blocking(move || telemetry.shutdown()).await?;
+    result
+}
 
+async fn run(
+    args: Args,
+    telemetry: &TelemetryGuard,
+    store_metrics: StoreMetrics,
+    server_metrics: ServerMetrics,
+) -> Result<()> {
     match args.cmd.clone() {
         Some(Cmd::ExportGit { path }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_export(&args, path, store).await;
         }
         Some(Cmd::ImportGit {
             path,
             restore_namespaces,
         }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_import(path, restore_namespaces, store).await;
         }
         Some(Cmd::Seed { fixture }) => {
-            let store = build_store(&args).await?;
-            return run_seed(fixture, store).await;
+            let store = build_store(&args, store_metrics).await?;
+            return run_seed(fixture, store, server_metrics).await;
         }
         Some(Cmd::Reconcile { mirror }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_reconcile(mirror, store).await;
         }
         Some(Cmd::BackfillNamespaces { parent, dry_run }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_backfill_namespaces(&parent, dry_run, store).await;
         }
         Some(Cmd::SyncSpicedb { dry_run }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_sync_spicedb(&args, dry_run, store).await;
         }
         Some(Cmd::RecoverBatches {
             report_only,
             min_age_secs,
         }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_recover_batches(report_only, min_age_secs, store.as_ref()).await;
         }
         Some(Cmd::MigrateLegacyFields {
             apply,
             keep_schema_on_conflict,
         }) => {
-            let store = build_nats_store(&args, StoreOpenMode::MigrateLegacyFields).await?;
+            let store =
+                build_nats_store(&args, StoreOpenMode::MigrateLegacyFields, store_metrics).await?;
             let mode = if apply {
                 MigrationMode::Apply
             } else {
@@ -613,9 +673,10 @@ async fn main() -> Result<()> {
         None => {}
     }
 
-    let store = build_store(&args).await?;
-    trogon_atlas_server::batch_recovery::recover_at_startup(store.as_ref()).await;
-    let _batch_recovery_sweep = trogon_atlas_server::batch_recovery::spawn_sweep(store.clone());
+    let store = build_store(&args, store_metrics).await?;
+    trogon_atlas_server::batch_recovery::recover_at_startup(store.as_ref(), &server_metrics).await;
+    let _batch_recovery_sweep =
+        trogon_atlas_server::batch_recovery::spawn_sweep(store.clone(), server_metrics.clone());
 
     let mirror = match args.git_mirror.as_ref() {
         Some(path) => Some(GitMirror::open(
@@ -641,9 +702,17 @@ async fn main() -> Result<()> {
     let mut svc = trogon_atlas_server::service::EventModelServiceImpl::try_new_with_directory(
         store.clone(),
         directory,
+        server_metrics.clone(),
     )
     .context("constructing event modeling service")?
     .with_baseline_protection(baseline_protection.clone());
+    if let Some(artifacts) = args
+        .artifacts
+        .open(&args.nats_url, args.max_message_bytes, store.clone())
+        .await?
+    {
+        svc = svc.with_artifacts(artifacts);
+    }
     match args.change_cursor_key.as_deref() {
         Some(encoded) => {
             let key = trogon_atlas_server::change_cursor::ChangeCursorKey::from_base64(encoded)
@@ -659,6 +728,29 @@ async fn main() -> Result<()> {
                  minted by one process will fail to open on another."
             );
         }
+    }
+    let signing_key = match (
+        args.attested_signing_key_file.clone(),
+        args.attested_signing_key_env.clone(),
+    ) {
+        (Some(path), _) => {
+            Some(trogon_atlas_server::attested_signing::SigningKeySource::File(path))
+        }
+        (None, Some(name)) => {
+            Some(trogon_atlas_server::attested_signing::SigningKeySource::EnvVar(name))
+        }
+        (None, None) => None,
+    };
+    if let Some(source) = signing_key {
+        match source.load() {
+            Ok(key) => tracing::info!(key_id = %key.key_id(), "attested bundles will be signed"),
+            Err(e) => tracing::error!(
+                error = %e,
+                "attested bundle signing is configured but the key cannot be loaded; \
+                 ExportAttestedModel will refuse with SIGNING_KEY_UNAVAILABLE until it can"
+            ),
+        }
+        svc = svc.with_attested_signing_key(source);
     }
     if !baseline_protection.is_off() {
         tracing::info!(
@@ -707,12 +799,15 @@ async fn main() -> Result<()> {
     });
     let llm_client = trogon_atlas_server::llm::build(
         llm_provider,
-        llm_api_key,
-        args.llm_model.clone(),
-        llm_base_url,
-        Some(args.llm_max_tokens),
-        Some(args.llm_request_timeout_secs),
-        Some(args.llm_concurrency),
+        trogon_atlas_server::llm::LlmSettings {
+            api_key: llm_api_key,
+            model: args.llm_model.clone(),
+            base_url: llm_base_url,
+            max_tokens: Some(args.llm_max_tokens),
+            request_timeout_secs: Some(args.llm_request_timeout_secs),
+            concurrency: Some(args.llm_concurrency),
+        },
+        server_metrics.clone(),
     )?;
     if let Some(client) = llm_client.as_ref() {
         tracing::info!(
@@ -731,8 +826,11 @@ async fn main() -> Result<()> {
              this server to untrusted content contributors"
         );
         let analyzer = Arc::new(
-            trogon_atlas_server::llm_analysis::LlmAnalyzer::new(client.clone())
-                .with_prompt_budget(args.llm_prompt_budget),
+            trogon_atlas_server::llm_analysis::LlmAnalyzer::new(
+                client.clone(),
+                server_metrics.clone(),
+            )
+            .with_prompt_budget(args.llm_prompt_budget),
         );
         svc = svc.with_llm_analyzer(analyzer);
     }
@@ -762,41 +860,34 @@ async fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("parsing --listen={}", args.listen))?;
 
-    if let Some(metrics_addr) = args.metrics_listen.as_deref() {
-        let parsed = metrics_addr
-            .parse()
-            .with_context(|| format!("parsing --metrics-listen={metrics_addr}"))?;
-        trogon_atlas_server::telemetry::install_prometheus_exporter(
-            parsed,
-            args.metrics_allow_external,
-        )?;
-        tracing::info!(metrics_addr = %parsed, "prometheus exporter started");
+    if telemetry.exports_metrics() {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
+            server_metrics.clone(),
         );
     }
 
-    let mut builder = Server::builder();
-    match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
+    let tls = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         (Some(cert), Some(key)) => {
             let cert_pem = std::fs::read(cert)
                 .with_context(|| format!("reading --tls-cert={}", cert.display()))?;
             let key_pem = std::fs::read(key)
                 .with_context(|| format!("reading --tls-key={}", key.display()))?;
-            builder = builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem)))
+            let acceptor = trogon_atlas_server::tls::TlsAcceptor::from_pem(&cert_pem, &key_pem)
                 .context("configuring TLS")?;
             tracing::info!("TLS enabled");
+            Some(acceptor)
         }
         (None, None) => {
             tracing::warn!(
                 "serving plaintext gRPC; set TROGON_ATLAS_TLS_CERT/TROGON_ATLAS_TLS_KEY or terminate \
                  TLS in front of this process"
             );
+            None
         }
         _ => anyhow::bail!("--tls-cert and --tls-key must be set together"),
-    }
+    };
 
     let registry = if let Some(path) = args.auth_tokens_file.as_ref() {
         // Tokens file takes precedence over legacy --auth-token.
@@ -861,11 +952,13 @@ async fn main() -> Result<()> {
                 .then_some(authorizer)
                 .flatten();
             let live = auth.live();
+            let metrics = server_metrics.clone();
             tokio::spawn(async move {
                 trogon_atlas_server::token_reload::watch(
                     path,
                     live,
                     interval,
+                    metrics,
                     move |memberships| {
                         let authorizer = authorizer.clone();
                         async move {
@@ -905,11 +998,14 @@ async fn main() -> Result<()> {
     >;
     let grpc_service = ServiceServer::new(svc)
         .max_decoding_message_size(args.max_message_bytes)
-        .max_encoding_message_size(args.max_message_bytes);
+        .max_encoding_message_size(
+            args.artifacts
+                .max_encoding_message_bytes(args.max_message_bytes)?,
+        );
 
-    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let health = trogon_atlas_server::health::Health::new().await;
 
-    // Verify store connectivity before advertising SERVING. A cheap list
+    // Verify store connectivity before advertising readiness. A cheap list
     // with limit=1 is enough to confirm the backend is reachable.
     match store
         .list(
@@ -920,27 +1016,28 @@ async fn main() -> Result<()> {
         .await
     {
         Ok(_) => {
-            health_reporter.set_serving::<ServiceServer>().await;
-            tracing::info!("store connectivity verified; health=SERVING");
+            health.set_store(StoreStatus::Reachable).await;
+            tracing::info!("store connectivity verified; readiness=ok");
         }
         Err(err) => {
+            health.set_store(StoreStatus::Unreachable).await;
             tracing::error!(
                 error = %err,
-                "store connectivity check failed; health remains NOT_SERVING"
+                "store connectivity check failed; readiness remains not ready"
             );
-            // Keep NOT_SERVING so load balancers withhold traffic until the
+            // Stay not ready so load balancers withhold traffic until the
             // store is reachable. The server still starts so it can be
-            // probed and will become SERVING once a mutation succeeds.
+            // probed, and becomes ready once the background check succeeds.
         }
     }
 
-    // Background health probe: re-checks the store every 15 seconds and
-    // toggles the gRPC health status accordingly. The task stops when the
+    // Background store check: re-checks the store every 15 seconds and
+    // records the result for the readiness probe. The task stops when the
     // shutdown channel fires.
     let (health_shutdown_tx, mut health_shutdown_rx) = tokio::sync::watch::channel(false);
     {
         let store_for_health = store.clone();
-        let health_reporter_bg = health_reporter.clone();
+        let health_bg = health.clone();
         tokio::spawn(async move {
             const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
             let mut interval = tokio::time::interval(HEALTH_INTERVAL);
@@ -959,18 +1056,16 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(_) => {
-                        health_reporter_bg.set_serving::<ServiceServer>().await;
+                        health_bg.set_store(StoreStatus::Reachable).await;
                     }
                     Err(err) => {
-                        tracing::warn!(error = %err, "health probe: store unreachable; health=NOT_SERVING");
-                        health_reporter_bg.set_not_serving::<ServiceServer>().await;
+                        tracing::warn!(error = %err, "store check: store unreachable; readiness=not ready");
+                        health_bg.set_store(StoreStatus::Unreachable).await;
                     }
                 }
             }
         });
     }
-
-    tracing::info!(%addr, "trogon-atlas-server starting");
 
     let drain_deadline = std::time::Duration::from_secs(args.shutdown_drain_secs);
 
@@ -978,10 +1073,10 @@ async fn main() -> Result<()> {
     // current count; await_inflight_drain wakes on each send.
     let (drain_tx, drain_rx) = tokio::sync::watch::channel(0i64);
     let drain_tx = std::sync::Arc::new(drain_tx);
+    let inflight =
+        trogon_atlas_server::telemetry::InflightLayer::new(inflight_counter.clone(), drain_tx);
 
-    let inflight_for_layer = inflight_counter.clone();
-    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
-    if args.rpc_timeout_secs > 0 {
+    let rpc_timeout = (args.rpc_timeout_secs > 0).then(|| {
         // An LLM-backed RPC needs headroom above the LLM's own timeout,
         // otherwise the gRPC deadline fires first and turns a slow-but-valid
         // LLM response into DEADLINE_EXCEEDED. Widen with a fixed buffer
@@ -1003,53 +1098,97 @@ async fn main() -> Result<()> {
                 "widening RPC timeout to allow analysis and fallback to complete"
             );
         }
-        builder = builder.timeout(std::time::Duration::from_secs(rpc_timeout_secs));
-    }
-    builder
-        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
-        .layer(trogon_atlas_server::telemetry::InflightLayer::new(
-            inflight_for_layer,
-            drain_tx,
-        ))
-        .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
-        // The health service is mounted OUTSIDE the auth stack so
-        // liveness/readiness probes (kube-proxy, GCP HC, etc.) can reach it
-        // without holding a bearer token. It exposes only liveness -- no
-        // entity data -- so the bypass is intentional and bounded. Anything
-        // touching the EventModelService data plane must stay inside the
-        // auth stack below.
-        //
-        // Request flow for the data-plane service:
-        //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
-        //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
-        //       -> handler
-        //
-        // Ordering is critical: InterceptedService is the OUTERMOST wrapper so
-        // BearerAuth runs first and populates extensions before AuthzLayer reads
-        // them. Inverting the nesting puts AuthzLayer before authn and denies
-        // every request.
-        .add_service(health_service)
-        .add_service(InterceptedService::new(
-            tower::ServiceBuilder::new()
-                .layer(AuthzLayer)
-                .service(grpc_service),
-            auth,
-        ))
-        .serve_with_shutdown(addr, async {
-            shutdown_signal().await;
-            // Stop the background health probe before toggling the status so
-            // the probe cannot race and flip back to SERVING after we set
-            // NOT_SERVING here.
-            let _ = health_shutdown_tx.send(true);
-            health_reporter.set_not_serving::<ServiceServer>().await;
-            await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
-        })
-        .await?;
+        std::time::Duration::from_secs(rpc_timeout_secs)
+    });
 
-    // Flush any spans the batch OTLP exporter still has queued. Must run
-    // before the process exits or the last few seconds of trace data are
-    // silently dropped.
-    tracing_guard.shutdown();
+    // Request flow for the data-plane service, for gRPC and MCP callers alike:
+    //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
+    //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
+    //       -> handler
+    let data_plane = trogon_atlas_server::mcp::data_plane(grpc_service, auth);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+    let shutdown_requested = move || {
+        let mut shutdown_rx = shutdown_rx.clone();
+        async move {
+            let _ = shutdown_rx.wait_for(|requested| *requested).await;
+        }
+    };
+
+    // Health, over gRPC and at /-/readiness and /-/liveness, is mounted
+    // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
+    // can reach it without holding a bearer token. It exposes only
+    // readiness and liveness -- no entity data -- so the bypass is
+    // intentional and bounded. Anything touching the EventModelService data
+    // plane must stay inside `data_plane`.
+    let mut routes = tonic::service::Routes::builder();
+    routes.add_service(health.grpc_service());
+    routes.add_service(data_plane.clone());
+    let mut routes = routes.routes();
+    let merged = routes.axum_router_mut().clone().merge(health.router());
+    *routes.axum_router_mut() = merged;
+    // Must run before `/mcp` is merged: a single-RPC deadline would cut off
+    // MCP tool calls that issue several RPCs, each already timed out on its own.
+    if let Some(rpc_timeout) = rpc_timeout {
+        let timed_out = trogon_atlas_server::mcp::with_grpc_timeout(
+            routes.axum_router_mut().clone(),
+            rpc_timeout,
+        );
+        *routes.axum_router_mut() = timed_out;
+    }
+    if args.mcp {
+        let mcp_router = trogon_atlas_server::mcp::mcp_router(
+            data_plane,
+            trogon_atlas_server::telemetry::RpcMetricsLayer::new(server_metrics.clone()),
+            inflight.clone(),
+            rpc_timeout,
+            args.max_message_bytes,
+            args.mcp_allowed_hosts.clone(),
+            args.mcp_profile,
+        )?;
+        let merged = routes.axum_router_mut().clone().merge(mcp_router);
+        *routes.axum_router_mut() = merged;
+        tracing::info!(
+            "serving MCP over Streamable HTTP at {} on the gRPC listener",
+            trogon_atlas_server::mcp::MCP_PATH
+        );
+    }
+
+    tracing::info!(%addr, "trogon-atlas-server starting");
+
+    let mut builder = Server::builder().concurrency_limit_per_connection(args.concurrency_limit);
+    // The kubelet's httpGet probes and MCP clients speak HTTP/1.1; the gRPC
+    // listener is HTTP/2 only by default.
+    builder = builder.accept_http1(true);
+    let tcp = TcpIncoming::bind(addr)
+        .with_context(|| format!("binding {addr}"))?
+        .with_nodelay(Some(true));
+    health.mark_live().await;
+    let router = builder
+        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new(
+            server_metrics,
+        ))
+        .layer(inflight)
+        .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
+        .add_routes(routes);
+    let shutdown = async {
+        shutdown_requested().await;
+        let _ = health_shutdown_tx.send(true);
+        health.begin_shutdown().await;
+        await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
+    };
+    match tls {
+        Some(tls) => {
+            router
+                .serve_with_incoming_shutdown(tls.incoming(tcp), shutdown)
+                .await?;
+        }
+        None => router.serve_with_incoming_shutdown(tcp, shutdown).await?,
+    }
     Ok(())
 }
 
@@ -1204,7 +1343,7 @@ async fn restore_namespace_snapshot(
                 return Err(anyhow::anyhow!(
                     "restoring namespace {}: {err}",
                     record.id.as_str()
-                ))
+                ));
             }
         }
     }
@@ -1252,31 +1391,7 @@ async fn run_import(path: PathBuf, restore_namespaces: bool, store: Arc<dyn Stor
             ),
         }
     }
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for entity in &entities {
-        let Some(kind) = entity_kind(entity) else {
-            continue;
-        };
-        let Some(_id) = entity_id(entity) else {
-            continue;
-        };
-        // Import runs outside any RPC, so there is no authenticated principal
-        // to attribute the write to and no changeset is minted. The resulting
-        // change events carry an empty author, which is the documented
-        // "unattributed write" case.
-        match store
-            .create(kind, entity, trogon_atlas_store::WriteContext::baseline())
-            .await
-        {
-            Ok(_) => imported += 1,
-            Err(trogon_atlas_store::error::StoreError::AlreadyExists) => skipped += 1,
-            Err(err) => {
-                tracing::warn!(error = %err, "skipping entity that failed to import");
-                skipped += 1;
-            }
-        }
-    }
+    let report = trogon_atlas_server::git_mirror::import_entities(store.as_ref(), &entities).await;
     let total = store
         .list(
             trogon_atlas_store::store::ListFilter::default(),
@@ -1319,11 +1434,18 @@ async fn run_import(path: PathBuf, restore_namespaces: bool, store: Arc<dyn Stor
     }
 
     tracing::info!(
-        imported,
-        skipped,
+        imported = report.imported,
+        skipped = report.skipped,
+        changesets = %report.changesets.join(", "),
         unregistered = unregistered.len(),
         store_total = total.len(),
         "import-git complete"
+    );
+    anyhow::ensure!(
+        report.unrecorded.is_empty(),
+        "import-git wrote entities whose changesets could not be recorded ({}); \
+         those writes cannot be reverted or rewound",
+        report.unrecorded.join(", ")
     );
     Ok(())
 }
@@ -1681,13 +1803,13 @@ async fn run_reconcile(mirror: PathBuf, store: Arc<dyn Store>) -> Result<()> {
     Ok(())
 }
 
-async fn run_seed(fixture: PathBuf, store: Arc<dyn Store>) -> Result<()> {
+async fn run_seed(fixture: PathBuf, store: Arc<dyn Store>, metrics: ServerMetrics) -> Result<()> {
     let bytes = std::fs::read(&fixture)
         .with_context(|| format!("reading fixture {}", fixture.display()))?;
     let request = trogon_atlas_server::fixtures::decode_batch_mutate_fixture(&fixture, &bytes)?;
     let op_count = request.ops.len();
 
-    let svc = trogon_atlas_server::service::EventModelServiceImpl::try_new(store.clone())
+    let svc = trogon_atlas_server::service::EventModelServiceImpl::try_new(store.clone(), metrics)
         .context("constructing event modeling service for seed")?;
     let response = svc
         .batch_mutate(tonic::Request::new(request))
@@ -1793,5 +1915,94 @@ mod bearer_auth_tests {
             .expect("Principal must be in extensions after successful auth");
         assert_eq!(principal.name.as_ref(), "legacy-admin");
         assert_eq!(principal.role, trogon_atlas_server::auth::Role::Admin);
+    }
+}
+
+/// Structural guard behind `tests/secret_help_output.rs`: clap prints the live
+/// value of an env-backed argument in `--help` unless the argument hides it, so
+/// every secret-looking env var must set `hide_env_values = true`.
+#[cfg(test)]
+mod secret_env_help_guard {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    /// Env var name fragments that mark an argument as secret-bearing, or as a
+    /// connection string that may embed credentials.
+    const SECRET_MARKERS: &[&str] = &[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRESHARED",
+        "DSN",
+        "URL",
+        "ENDPOINT",
+    ];
+
+    /// Matches a marker but carries no secret (a path to a key file, a count,
+    /// a file path, an interval). Adding a name here is a deliberate decision.
+    const PUBLIC_ENV: &[&str] = &[
+        "TROGON_ATLAS_TLS_KEY",
+        "TROGON_ATLAS_AUTH_TOKENS_FILE",
+        "TROGON_ATLAS_AUTH_TOKENS_RELOAD_INTERVAL",
+        "TROGON_ATLAS_LLM_MAX_TOKENS",
+    ];
+
+    fn collect(
+        cmd: &clap::Command,
+        path: &str,
+        checked: &mut Vec<String>,
+        offenders: &mut Vec<String>,
+    ) {
+        for arg in cmd.get_arguments() {
+            let Some(env) = arg.get_env().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let upper = env.to_ascii_uppercase();
+            let secretish = SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
+                && !PUBLIC_ENV.contains(&env);
+            if !secretish {
+                continue;
+            }
+            checked.push(env.to_owned());
+            if !arg.is_hide_env_values_set() {
+                offenders.push(format!("{env} on `{path}`"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            collect(
+                sub,
+                &format!("{path} {}", sub.get_name()),
+                checked,
+                offenders,
+            );
+        }
+    }
+
+    #[test]
+    fn secret_env_arguments_hide_their_values_in_help() {
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        let cmd = Args::command();
+        collect(&cmd, cmd.get_name(), &mut checked, &mut offenders);
+        for expected in [
+            "TROGON_ATLAS_AUTH_TOKEN",
+            "TROGON_ATLAS_LLM_API_KEY",
+            "TROGON_ATLAS_JEV_API_KEY",
+            "TROGON_ATLAS_SPICEDB_PRESHARED_KEY",
+            "TROGON_ATLAS_CHANGE_CURSOR_KEY",
+        ] {
+            assert!(
+                checked.iter().any(|name| name == expected),
+                "guard must see {expected}, saw {checked:?}"
+            );
+        }
+        assert!(
+            offenders.is_empty(),
+            "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
+        );
     }
 }

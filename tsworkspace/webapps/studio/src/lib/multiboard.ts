@@ -6,7 +6,7 @@
 // Never one gigantic merged board.
 import type { Edge, Node } from '@xyflow/react';
 import { layoutBoard, NODE_H, NODE_W } from './layout';
-import { contextSeams, type Entity, type Model, partitionByNamespace, slugKey } from './model';
+import { contextSeams, type Entity, type Model, partitionByNamespace, SEAM_EDGE_PREFIX, slugKey } from './model';
 import { buildScreens } from './screens';
 import { buildSequence } from './sequence';
 import { buildSitemap } from './sitemap';
@@ -18,6 +18,14 @@ import { buildSitemap } from './sitemap';
 // Different visual elements; the name collision is incidental.
 const MULTIBOARD_GROUP_HEADER_H = 44;
 const GROUP_GAP = 140;
+
+/** Joins a context namespace to a node id when several contexts share one Board. */
+export const NS_SEP = '::';
+
+export function namespaceOf(id: string): string {
+  const cut = id.indexOf(NS_SEP);
+  return cut < 0 ? '' : id.slice(0, cut);
+}
 
 function nodeBottom(n: Node): number {
   const style = (n.style ?? {}) as { height?: number | string };
@@ -145,10 +153,19 @@ function composeGroups(
     });
     const shift = yOff + MULTIBOARD_GROUP_HEADER_H + 28 - minY;
     for (const n of l.nodes) {
-      nodes.push({ ...n, id: `${ns}::${n.id}`, position: { x: n.position.x + xShift, y: n.position.y + shift } });
+      nodes.push({
+        ...n,
+        id: `${ns}${NS_SEP}${n.id}`,
+        position: { x: n.position.x + xShift, y: n.position.y + shift },
+      });
     }
     for (const e of l.edges) {
-      edges.push({ ...e, id: `${ns}::${e.id}`, source: `${ns}::${e.source}`, target: `${ns}::${e.target}` });
+      edges.push({
+        ...e,
+        id: `${ns}${NS_SEP}${e.id}`,
+        source: `${ns}${NS_SEP}${e.source}`,
+        target: `${ns}${NS_SEP}${e.target}`,
+      });
     }
     yOff += MULTIBOARD_GROUP_HEADER_H + 28 + (maxY - minY) + GROUP_GAP;
   }
@@ -180,7 +197,7 @@ function composeGroups(
     if (!upNode || !viewNode) continue;
     drawnSeams.add(seamKey(upKey, viewKey));
     edges.push({
-      id: `seam:${upKey}->${viewKey}`,
+      id: `${SEAM_EDGE_PREFIX}${upKey}->${viewKey}`,
       source: upNode.id,
       target: viewNode.id,
       sourceHandle: 'ts',

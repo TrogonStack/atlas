@@ -1,11 +1,16 @@
 # trogon-atlas-proto
 
 Generated gRPC bindings + reflection metadata for the `trogonatlas.api.eventmodel.v1alpha1.EventModelService`
-service and the `trogonatlas.{type,annotation,eventmodel,catalog}.v1alpha1` packages it
-builds on, all re-exported at the crate root. Every other crate in this stack depends on it. The wire schema
-itself lives at `proto`, shared with the TypeScript workspace.
-`mise run proto:generate` regenerates `src/gen/` from it with buf; the
-output is committed, and CI fails when it is out of date.
+service and the `trogonatlas.{type,annotation,eventmodel,catalog}.v1alpha1`
+packages it builds on, all re-exported at the crate root. Every other crate in
+this stack depends on it. The wire schema itself lives at `proto`, shared with
+the TypeScript workspace.
+`mise run proto:generate` regenerates the Rust bindings in `src/gen/` with
+Buf; those bindings are committed, and CI fails when they are out of date.
+Cargo generates the reflection descriptor in `OUT_DIR` from `proto/`, including
+the dependencies pinned by `buf.lock`. Run Cargo through
+`mise exec -- cargo <command>` so the pinned Buf version is available. The
+descriptor is embedded in the compiled artifact and is not tracked in Git.
 
 ## Contents
 

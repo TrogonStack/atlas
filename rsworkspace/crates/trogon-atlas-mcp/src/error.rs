@@ -387,6 +387,7 @@ mod tests {
                 message: "entity is referenced".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let chained = anyhow::Error::new(rejected).context("BatchMutate failed");
         let mcp: McpError = chained.into();

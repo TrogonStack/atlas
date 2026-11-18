@@ -50,6 +50,7 @@ impl OutboundRef {
 /// warning rather than emitting an `Unspecified` ref.
 pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
     let mut out = Vec::new();
+    crate::message_claims::outbound(entity, &mut out);
     let Some(kind) = entity.kind.as_ref() else {
         return out;
     };
@@ -83,6 +84,16 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::AlertPolicy(x) => x.supersedes.as_ref(),
         EntityOneof::AlertNotificationTarget(x) => x.supersedes.as_ref(),
         EntityOneof::TypeLibrary(x) => x.supersedes.as_ref(),
+        EntityOneof::Channel(x) => x.supersedes.as_ref(),
+        EntityOneof::DataStore(x) => x.supersedes.as_ref(),
+        EntityOneof::Specification(x) => x.supersedes.as_ref(),
+        EntityOneof::DataProduct(x) => x.supersedes.as_ref(),
+        EntityOneof::Team(x) => x.supersedes.as_ref(),
+        EntityOneof::Person(x) => x.supersedes.as_ref(),
+        EntityOneof::Decision(x) => x.supersedes.as_ref(),
+        EntityOneof::Document(x) => x.supersedes.as_ref(),
+        EntityOneof::DesignGraph(x) => x.supersedes.as_ref(),
+        EntityOneof::SystemGroup(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -173,7 +184,12 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                 });
             }
         }
-        EntityOneof::Persona(_) | EntityOneof::ExternalSystem(_) | EntityOneof::Screen(_) => {}
+        EntityOneof::Persona(_) | EntityOneof::Screen(_) => {}
+        EntityOneof::ExternalSystem(x) => {
+            crate::architectural_relationships::outbound(&x.relationships, &mut out);
+            crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
+        }
         EntityOneof::Domain(x) => {
             if let Some(id) = x.project.as_ref().and_then(|p| p.id.as_ref()) {
                 out.push(OutboundRef {
@@ -182,10 +198,25 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                     from_field: "project".into(),
                 });
             }
+            crate::system_group::outbound_domain(&x.members, &mut out);
         }
+        EntityOneof::SystemGroup(x) => crate::system_group::outbound_group(x, &mut out),
         EntityOneof::Schema(x) => {
             for (i, f) in x.fields.iter().enumerate() {
                 collect_field_refs(f, &format!("fields[{i}]"), &mut out, 0);
+            }
+            for (i, relationship) in x.property_relationships.iter().enumerate() {
+                if let Some(id) = relationship
+                    .target_entity
+                    .as_ref()
+                    .and_then(|target| target.id.clone())
+                {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::Schema),
+                        to_id: id,
+                        from_field: format!("property_relationships[{i}].target_entity"),
+                    });
+                }
             }
         }
         EntityOneof::Swimlane(x) => {
@@ -382,12 +413,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                         });
                     }
                 }
-                if let Some(id) = sc
-                    .then
-                    .as_ref()
-                    .and_then(|t| t.command.as_ref())
-                    .and_then(|r| r.id.as_ref())
-                {
+                if let Some(id) = sc.then_command().and_then(|r| r.id.as_ref()) {
                     out.push(OutboundRef {
                         to_kind: Some(EntityKind::Command),
                         to_id: id.clone(),
@@ -559,6 +585,10 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             }
         }
         EntityOneof::Component(x) => {
+            crate::ui_hosting::outbound(&x.ui_hostings, &mut out);
+            crate::architectural_relationships::outbound(&x.relationships, &mut out);
+            crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
             for (i, m) in x.members.iter().enumerate() {
                 if let Some(id) = &m.id {
                     match EntityKind::try_from(m.kind) {
@@ -636,6 +666,44 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if let Some(glossary) = &x.glossary {
+                for (i, evidence) in glossary.evidence.iter().enumerate() {
+                    if let Some(id) = evidence
+                        .document
+                        .as_ref()
+                        .and_then(|value| value.id.as_ref())
+                    {
+                        out.push(OutboundRef {
+                            to_kind: Some(EntityKind::Document),
+                            to_id: id.clone(),
+                            from_field: format!("glossary.evidence[{i}].document"),
+                        });
+                    }
+                }
+                if let Some(id) = glossary
+                    .policy
+                    .as_ref()
+                    .and_then(|value| value.preferred_term.as_ref())
+                    .and_then(|value| value.id.as_ref())
+                {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::Term),
+                        to_id: id.clone(),
+                        from_field: "glossary.policy.preferred_term".into(),
+                    });
+                }
+            }
+            if let Some(id) = x
+                .owning_domain
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+            {
+                out.push(OutboundRef {
+                    to_kind: Some(EntityKind::Domain),
+                    to_id: id.clone(),
+                    from_field: "owning_domain".into(),
+                });
+            }
             for (i, r) in x.embodied_by.iter().enumerate() {
                 if let (Ok(kind), Some(id)) = (EntityKind::try_from(r.kind), r.id.as_ref()) {
                     if kind == EntityKind::Unspecified {
@@ -756,6 +824,62 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::AlertNotificationTarget(x) => {
             let _ = x;
         }
+        EntityOneof::Channel(x) => {
+            let broker = match x.broker.as_ref() {
+                Some(trogon_atlas_proto::channel::Broker::Component(r)) => {
+                    r.id.as_ref()
+                        .map(|id| (EntityKind::Component, id, "component"))
+                }
+                Some(trogon_atlas_proto::channel::Broker::ExternalSystem(r)) => {
+                    r.id.as_ref()
+                        .map(|id| (EntityKind::ExternalSystem, id, "external_system"))
+                }
+                None => None,
+            };
+            if let Some((kind, id, field)) = broker {
+                out.push(OutboundRef {
+                    to_kind: Some(kind),
+                    to_id: id.clone(),
+                    from_field: field.into(),
+                });
+            }
+            crate::channel_links::outbound(&x.links, &mut out);
+            for (i, binding) in x.bindings.iter().enumerate() {
+                if let Some(owner) = binding.observation.as_ref().and_then(|r| r.owner.as_ref()) {
+                    if let (Ok(kind), Some(id)) =
+                        (EntityKind::try_from(owner.kind), owner.id.as_ref())
+                    {
+                        if kind != EntityKind::Unspecified {
+                            out.push(OutboundRef {
+                                to_kind: Some(kind),
+                                to_id: id.clone(),
+                                from_field: format!("bindings[{i}].observation.owner"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        EntityOneof::Specification(x) => crate::specification_refs::outbound(x, &mut out),
+        EntityOneof::DataProduct(x) => crate::data_product_refs::outbound(x, &mut out),
+        EntityOneof::Team(_) | EntityOneof::Person(_) => {
+            crate::responsibility_refs::outbound(entity, &mut out);
+        }
+        EntityOneof::Decision(_) | EntityOneof::Document(_) => {
+            crate::decision_document_refs::outbound(entity, &mut out);
+        }
+        EntityOneof::DesignGraph(_) => crate::design_topology_refs::outbound(entity, &mut out),
+        EntityOneof::DataStore(x) => {
+            for (i, attachment) in x.attachments.iter().enumerate() {
+                if let Some(id) = attachment.read_model.as_ref().and_then(|r| r.id.as_ref()) {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::ReadModel),
+                        to_id: id.clone(),
+                        from_field: format!("attachments[{i}].read_model"),
+                    });
+                }
+            }
+        }
         EntityOneof::TypeLibrary(x) => {
             for (i, r) in x.dependencies.iter().enumerate() {
                 if let Some(id) = &r.id {
@@ -768,6 +892,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             }
         }
     }
+    out.extend(crate::agent_metadata::group_refs(entity).unwrap_or_else(|e| panic!("{e}")));
     out
 }
 
@@ -921,6 +1046,7 @@ fn collect_field_refs(
                 type_ref::Ref::Ui(x) => (EntityKind::Ui, x.id.clone()),
                 type_ref::Ref::Persona(x) => (EntityKind::Persona, x.id.clone()),
                 type_ref::Ref::Swimlane(x) => (EntityKind::Swimlane, x.id.clone()),
+                type_ref::Ref::Schema(x) => (EntityKind::Schema, x.id.clone()),
             };
             if let Some(id) = id {
                 out.push(OutboundRef {
@@ -1027,6 +1153,16 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::AlertPolicy(_) => EntityKind::AlertPolicy,
         EntityOneof::AlertNotificationTarget(_) => EntityKind::AlertNotificationTarget,
         EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
+        EntityOneof::Channel(_) => EntityKind::Channel,
+        EntityOneof::DataStore(_) => EntityKind::DataStore,
+        EntityOneof::Specification(_) => EntityKind::Specification,
+        EntityOneof::DataProduct(_) => EntityKind::DataProduct,
+        EntityOneof::Team(_) => EntityKind::Team,
+        EntityOneof::Person(_) => EntityKind::Person,
+        EntityOneof::Decision(_) => EntityKind::Decision,
+        EntityOneof::Document(_) => EntityKind::Document,
+        EntityOneof::DesignGraph(_) => EntityKind::DesignGraph,
+        EntityOneof::SystemGroup(_) => EntityKind::SystemGroup,
     })
 }
 
@@ -1065,6 +1201,16 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::AlertPolicy(x) => x.id.as_ref(),
         EntityOneof::AlertNotificationTarget(x) => x.id.as_ref(),
         EntityOneof::TypeLibrary(x) => x.id.as_ref(),
+        EntityOneof::Channel(x) => x.id.as_ref(),
+        EntityOneof::DataStore(x) => x.id.as_ref(),
+        EntityOneof::Specification(x) => x.id.as_ref(),
+        EntityOneof::DataProduct(x) => x.id.as_ref(),
+        EntityOneof::Team(x) => x.id.as_ref(),
+        EntityOneof::Person(x) => x.id.as_ref(),
+        EntityOneof::Decision(x) => x.id.as_ref(),
+        EntityOneof::Document(x) => x.id.as_ref(),
+        EntityOneof::DesignGraph(x) => x.id.as_ref(),
+        EntityOneof::SystemGroup(x) => x.id.as_ref(),
     }
 }
 
@@ -1074,15 +1220,17 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
 /// Returns the list of `from_field` paths that were rewritten. An empty return
 /// means no pointers matched. The entity is mutated in place.
 ///
-/// This function is the mutable mirror of `outbound_refs`: it walks the same
-/// structural sites in the same order, so the two cannot drift.
+/// Entity references follow the replacement key. Channel observations retain
+/// their exact incarnation and occurrence selectors until explicitly rebound.
 pub fn retarget_refs(
     entity: &mut Entity,
     from_kind: EntityKind,
     from_id: &Id,
     to_id: &Id,
 ) -> Vec<String> {
-    let mut rewritten: Vec<String> = Vec::new();
+    let mut rewritten = crate::agent_metadata::retarget_groups(entity, from_kind, from_id, to_id)
+        .unwrap_or_else(|e| panic!("{e}"));
+    crate::message_claims::retarget(entity, from_kind, from_id, to_id, &mut rewritten);
     let Some(kind) = entity.kind.as_mut() else {
         return rewritten;
     };
@@ -1123,6 +1271,16 @@ pub fn retarget_refs(
             EntityOneof::AlertPolicy(x) => x.supersedes.as_mut(),
             EntityOneof::AlertNotificationTarget(x) => x.supersedes.as_mut(),
             EntityOneof::TypeLibrary(x) => x.supersedes.as_mut(),
+            EntityOneof::Channel(x) => x.supersedes.as_mut(),
+            EntityOneof::DataStore(x) => x.supersedes.as_mut(),
+            EntityOneof::Specification(x) => x.supersedes.as_mut(),
+            EntityOneof::DataProduct(x) => x.supersedes.as_mut(),
+            EntityOneof::Team(x) => x.supersedes.as_mut(),
+            EntityOneof::Person(x) => x.supersedes.as_mut(),
+            EntityOneof::Decision(x) => x.supersedes.as_mut(),
+            EntityOneof::Document(x) => x.supersedes.as_mut(),
+            EntityOneof::DesignGraph(x) => x.supersedes.as_mut(),
+            EntityOneof::SystemGroup(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -1229,7 +1387,30 @@ pub fn retarget_refs(
                 }
             }
         }
-        EntityOneof::Persona(_) | EntityOneof::ExternalSystem(_) | EntityOneof::Screen(_) => {}
+        EntityOneof::Persona(_) | EntityOneof::Screen(_) => {}
+        EntityOneof::ExternalSystem(x) => {
+            crate::architectural_relationships::retarget(
+                &mut x.relationships,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::communication_intent::retarget(
+                &mut x.communications,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
         EntityOneof::Domain(x) => {
             if from_kind == EntityKind::Project
                 && x.project.as_ref().and_then(|p| p.id.as_ref()) == Some(from_id)
@@ -1239,6 +1420,16 @@ pub fn retarget_refs(
                     rewritten.push("project".into());
                 }
             }
+            crate::system_group::retarget_domain(
+                &mut x.members,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
+        EntityOneof::SystemGroup(x) => {
+            crate::system_group::retarget_group(x, from_kind, from_id, to_id, &mut rewritten);
         }
         EntityOneof::Schema(x) => {
             for (i, f) in x.fields.iter_mut().enumerate() {
@@ -1251,6 +1442,21 @@ pub fn retarget_refs(
                     &mut rewritten,
                     0,
                 );
+            }
+            if from_kind == EntityKind::Schema {
+                for (i, relationship) in x.property_relationships.iter_mut().enumerate() {
+                    if relationship
+                        .target_entity
+                        .as_ref()
+                        .and_then(|target| target.id.as_ref())
+                        == Some(from_id)
+                    {
+                        if let Some(target) = relationship.target_entity.as_mut() {
+                            target.id = Some(to_id.clone());
+                            rewritten.push(format!("property_relationships[{i}].target_entity"));
+                        }
+                    }
+                }
             }
         }
         EntityOneof::Swimlane(x) => {
@@ -1486,18 +1692,15 @@ pub fn retarget_refs(
                         }
                     }
                 }
-                if from_kind == EntityKind::Command
-                    && sc
-                        .then
-                        .as_ref()
-                        .and_then(|t| t.command.as_ref())
-                        .and_then(|r| r.id.as_ref())
-                        == Some(from_id)
-                {
-                    if let Some(t) = sc.then.as_mut() {
+                if from_kind == EntityKind::Command {
+                    if let Some(trogon_atlas_proto::automation_scenario::Outcome::Then(t)) =
+                        sc.outcome.as_mut()
+                    {
                         if let Some(r) = t.command.as_mut() {
-                            r.id = Some(to_id.clone());
-                            rewritten.push(format!("scenarios[{si}].then.command"));
+                            if r.id.as_ref() == Some(from_id) {
+                                r.id = Some(to_id.clone());
+                                rewritten.push(format!("scenarios[{si}].then.command"));
+                            }
                         }
                     }
                 }
@@ -1693,6 +1896,34 @@ pub fn retarget_refs(
             }
         }
         EntityOneof::Component(x) => {
+            crate::ui_hosting::retarget(
+                &mut x.ui_hostings,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::communication_intent::retarget(
+                &mut x.communications,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::architectural_relationships::retarget(
+                &mut x.relationships,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
             for (i, m) in x.members.iter_mut().enumerate() {
                 if m.id.as_ref() == Some(from_id) {
                     match EntityKind::try_from(m.kind) {
@@ -1753,6 +1984,38 @@ pub fn retarget_refs(
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if let Some(glossary) = &mut x.glossary {
+                if from_kind == EntityKind::Document {
+                    for (i, evidence) in glossary.evidence.iter_mut().enumerate() {
+                        if let Some(reference) = evidence.document.as_mut() {
+                            if reference.id.as_ref() == Some(from_id) {
+                                reference.id = Some(to_id.clone());
+                                rewritten.push(format!("glossary.evidence[{i}].document"));
+                            }
+                        }
+                    }
+                }
+                if from_kind == EntityKind::Term {
+                    if let Some(reference) = glossary
+                        .policy
+                        .as_mut()
+                        .and_then(|value| value.preferred_term.as_mut())
+                    {
+                        if reference.id.as_ref() == Some(from_id) {
+                            reference.id = Some(to_id.clone());
+                            rewritten.push("glossary.policy.preferred_term".into());
+                        }
+                    }
+                }
+            }
+            if from_kind == EntityKind::Domain {
+                if let Some(reference) = x.owning_domain.as_mut() {
+                    if reference.id.as_ref() == Some(from_id) {
+                        reference.id = Some(to_id.clone());
+                        rewritten.push("owning_domain".into());
+                    }
+                }
+            }
             for (i, r) in x.embodied_by.iter_mut().enumerate() {
                 if r.id.as_ref() == Some(from_id) {
                     if let Ok(k) = EntityKind::try_from(r.kind) {
@@ -1863,6 +2126,68 @@ pub fn retarget_refs(
         }
         EntityOneof::AlertNotificationTarget(x) => {
             let _ = x;
+        }
+        EntityOneof::Channel(x) => {
+            let broker = match x.broker.as_mut() {
+                Some(trogon_atlas_proto::channel::Broker::Component(r))
+                    if from_kind == EntityKind::Component =>
+                {
+                    r.id.as_mut().map(|id| (id, "component"))
+                }
+                Some(trogon_atlas_proto::channel::Broker::ExternalSystem(r))
+                    if from_kind == EntityKind::ExternalSystem =>
+                {
+                    r.id.as_mut().map(|id| (id, "external_system"))
+                }
+                _ => None,
+            };
+            if let Some((id, field)) = broker {
+                if id == from_id {
+                    *id = to_id.clone();
+                    rewritten.push(field.into());
+                }
+            }
+            // An observation pins an incarnation and occurrence, so changing only its owner key cannot select a replacement.
+            crate::channel_links::retarget(&mut x.links, from_kind, from_id, to_id, &mut rewritten);
+        }
+        EntityOneof::Specification(x) => {
+            crate::specification_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);
+        }
+        EntityOneof::DataProduct(x) => {
+            crate::data_product_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);
+        }
+        EntityOneof::Decision(_) | EntityOneof::Document(_) => {
+            crate::decision_document_refs::retarget(
+                entity,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
+        EntityOneof::DesignGraph(_) => {
+            crate::design_topology_refs::retarget(
+                entity,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
+        EntityOneof::Team(_) | EntityOneof::Person(_) => {
+            crate::responsibility_refs::retarget(entity, from_kind, from_id, to_id, &mut rewritten);
+        }
+        EntityOneof::DataStore(x) => {
+            if from_kind == EntityKind::ReadModel {
+                for (i, attachment) in x.attachments.iter_mut().enumerate() {
+                    if let Some(id) = attachment.read_model.as_mut().and_then(|r| r.id.as_mut()) {
+                        if id == from_id {
+                            *id = to_id.clone();
+                            rewritten.push(format!("attachments[{i}].read_model"));
+                        }
+                    }
+                }
+            }
         }
         EntityOneof::TypeLibrary(x) => {
             if from_kind == EntityKind::TypeLibrary {
@@ -2047,6 +2372,16 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
                 EntityKind::AlertNotificationTarget
             )
             | (EntityOneof::TypeLibrary(_), EntityKind::TypeLibrary)
+            | (EntityOneof::Channel(_), EntityKind::Channel)
+            | (EntityOneof::DataStore(_), EntityKind::DataStore)
+            | (EntityOneof::Specification(_), EntityKind::Specification)
+            | (EntityOneof::DataProduct(_), EntityKind::DataProduct)
+            | (EntityOneof::Team(_), EntityKind::Team)
+            | (EntityOneof::Person(_), EntityKind::Person)
+            | (EntityOneof::Decision(_), EntityKind::Decision)
+            | (EntityOneof::Document(_), EntityKind::Document)
+            | (EntityOneof::DesignGraph(_), EntityKind::DesignGraph)
+            | (EntityOneof::SystemGroup(_), EntityKind::SystemGroup)
     )
 }
 
@@ -2102,6 +2437,9 @@ fn retarget_field_refs(
                     (trogon_atlas_proto::type_ref::Ref::Swimlane(x), EntityKind::Swimlane) => {
                         x.id.as_ref() == Some(from_id)
                     }
+                    (trogon_atlas_proto::type_ref::Ref::Schema(x), EntityKind::Schema) => {
+                        x.id.as_ref() == Some(from_id)
+                    }
                     _ => false,
                 };
                 if matched {
@@ -2118,6 +2456,9 @@ fn retarget_field_refs(
                         trogon_atlas_proto::type_ref::Ref::Ui(x) => x.id = Some(to_id.clone()),
                         trogon_atlas_proto::type_ref::Ref::Persona(x) => x.id = Some(to_id.clone()),
                         trogon_atlas_proto::type_ref::Ref::Swimlane(x) => {
+                            x.id = Some(to_id.clone());
+                        }
+                        trogon_atlas_proto::type_ref::Ref::Schema(x) => {
                             x.id = Some(to_id.clone());
                         }
                     }
@@ -2153,6 +2494,29 @@ fn retarget_field_refs(
             }
         }
     }
+}
+
+/// Extract references while reporting malformed native annotation payloads.
+pub fn try_outbound_refs(
+    entity: &Entity,
+) -> Result<Vec<OutboundRef>, crate::agent_metadata::MetadataError> {
+    crate::agent_metadata::group_refs(entity)?;
+    Ok(outbound_refs(entity))
+}
+
+/// Retarget atomically after validating native annotation content.
+pub fn try_retarget_refs(
+    entity: &mut Entity,
+    from_kind: EntityKind,
+    from_id: &Id,
+    to_id: &Id,
+) -> Result<Vec<String>, crate::agent_metadata::MetadataError> {
+    crate::agent_metadata::validate(entity)?;
+    let mut proposed = entity.clone();
+    let paths = retarget_refs(&mut proposed, from_kind, from_id, to_id);
+    crate::agent_metadata::validate(&proposed)?;
+    *entity = proposed;
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -3593,6 +3957,70 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn field_spec_ref_schema(name: &str, target: Id) -> FieldSpec {
+        FieldSpec {
+            name: name.into(),
+            r#type: Some(FieldType {
+                kind: Some(field_type::Kind::Ref(RefType {
+                    r#ref: Some(TypeRef {
+                        r#ref: Some(type_ref::Ref::Schema(SchemaRef { id: Some(target) })),
+                    }),
+                })),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A field whose type is a `TypeRef::Schema` (a structural ref to a
+    /// named top-level Schema entity, distinct from the Decision #33
+    /// Any-bytes nominal-typing route) must be an outbound ref, so
+    /// GetIncomingReferences / GetImpact / DANGLING_REF can see it.
+    #[test]
+    fn schema_ref_in_type_ref_must_appear_in_outbound_refs() {
+        let target = id("ns", "invoice-source");
+        let entity = make_entity(entity::Kind::ReadModel(ReadModel {
+            id: Some(id("ns", "order-summary")),
+            schema: Some(crate::schema::pack_fields(vec![field_spec_ref_schema(
+                "source",
+                target.clone(),
+            )])),
+            ..Default::default()
+        }));
+        let refs = outbound_refs(&entity);
+        assert!(
+            refs.iter().any(|r| {
+                r.to_kind == Some(EntityKind::Schema)
+                    && r.to_id == target
+                    && r.from_field == "schema.fields[0].ref"
+            }),
+            "TypeRef::Schema must be an outbound ref; got {refs:?}"
+        );
+    }
+
+    /// Mirror of the above: RetargetReferences must rewrite a
+    /// `TypeRef::Schema` the same way it already rewrites every other
+    /// TypeRef variant.
+    #[test]
+    fn schema_ref_in_type_ref_must_be_retargetable() {
+        let old = id("ns", "invoice-source");
+        let new = id("ns", "invoice-source-v2");
+        let mut entity = make_entity(entity::Kind::ReadModel(ReadModel {
+            id: Some(id("ns", "order-summary")),
+            schema: Some(crate::schema::pack_fields(vec![field_spec_ref_schema(
+                "source",
+                old.clone(),
+            )])),
+            ..Default::default()
+        }));
+        let rewritten = retarget_refs(&mut entity, EntityKind::Schema, &old, &new);
+        assert_eq!(rewritten, vec!["schema.fields[0].ref".to_string()]);
+        let refs = outbound_refs(&entity);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].to_kind, Some(EntityKind::Schema));
+        assert_eq!(refs[0].to_id, new);
+        assert_eq!(refs[0].from_field, "schema.fields[0].ref");
     }
 
     /// BUG: `Swimlane.state` is a load-bearing FieldSpec list (aggregate

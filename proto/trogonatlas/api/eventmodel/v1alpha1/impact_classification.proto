@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/catalog/v1alpha1/changesets.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/graph.proto";
+
+// ---------- Dependent impact classification ----------------------------------
+//
+// "If Event{order.placed@1} becomes Event{order.placed@2}, which dependents
+// break and which only need their pinned reference bumped?" Diffs the two
+// exact versions with the same typed diff DiffEntities returns, walks only
+// the referrers of `current` (an outgoing reference is not a dependent), and
+// intersects each reference site's consumed fields with the diff.
+//
+// Classification fails closed. Anything the server cannot prove compatible
+// is UNKNOWN, never BUMP_ONLY: a reference site without a consumption model,
+// an opaque payload or schema, a change the typed diff does not compare, a
+// dependent reached through an affected one, or a response that is
+// incomplete for any reason in `incompleteness`.
+
+enum DependentClassification {
+  DEPENDENT_CLASSIFICATION_UNSPECIFIED = 0;
+  // A consumed field changes, or the dependent must change to stay valid.
+  DEPENDENT_CLASSIFICATION_BREAKING = 1;
+  // Only the pinned reference needs rewriting to the candidate version.
+  DEPENDENT_CLASSIFICATION_BUMP_ONLY = 2;
+  // The server cannot prove BUMP_ONLY. `unknown_reasons` says why.
+  DEPENDENT_CLASSIFICATION_UNKNOWN = 3;
+}
+
+enum ClassificationUnknownReason {
+  CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED = 0;
+  // No rule maps this reference site to the fields it consumes.
+  CLASSIFICATION_UNKNOWN_REASON_NO_CONSUMPTION_MODEL = 1;
+  // A scenario example payload is not a google.protobuf.Struct, so its
+  // consumed keys cannot be read.
+  CLASSIFICATION_UNKNOWN_REASON_OPAQUE_PAYLOAD = 2;
+  // The root names a schema type instead of an inline Schema, so its fields
+  // cannot be compared.
+  CLASSIFICATION_UNKNOWN_REASON_OPAQUE_ROOT_SCHEMA = 3;
+  // The entity whose fields define this site's consumption (for example the
+  // command of a CommandSlice) is absent from the caller's view or has no
+  // inline schema.
+  CLASSIFICATION_UNKNOWN_REASON_CONSUMER_CONTEXT_MISSING = 4;
+  // The versions differ in a part the typed diff does not compare, or in
+  // field metadata whose meaning the server cannot judge.
+  CLASSIFICATION_UNKNOWN_REASON_UNCOVERED_CHANGE = 5;
+  // Field consumption is modeled only for Event, Command, ReadModel and
+  // Schema roots.
+  CLASSIFICATION_UNKNOWN_REASON_UNSUPPORTED_ROOT_KIND = 6;
+  // The dependent references another dependent that is BREAKING or UNKNOWN.
+  CLASSIFICATION_UNKNOWN_REASON_TRANSITIVE_THROUGH_AFFECTED = 7;
+  // The response is incomplete; see ClassifyImpactResponse.incompleteness.
+  CLASSIFICATION_UNKNOWN_REASON_TRAVERSAL_INCOMPLETE = 8;
+}
+
+enum ImpactIncompleteness {
+  IMPACT_INCOMPLETENESS_UNSPECIFIED = 0;
+  // The server's entity snapshot hit its cap, so referrers may be missing.
+  IMPACT_INCOMPLETENESS_SNAPSHOT_TRUNCATED = 1;
+  // Dependents exist beyond the effective max_depth.
+  IMPACT_INCOMPLETENESS_DEPTH_LIMITED = 2;
+  // Dependents, or paths to them, lie outside what the caller can see.
+  IMPACT_INCOMPLETENESS_HIDDEN_DEPENDENTS = 3;
+  // A reference into the walk names a referrer the server cannot resolve to
+  // an entity key, so that referrer and anything behind it is unaccounted.
+  IMPACT_INCOMPLETENESS_UNRESOLVED_REFERRERS = 4;
+}
+
+// One reference from a dependent to `current`. A dependent that points at
+// the root from several sites, or several times from the same repeated
+// field, yields one occurrence per site.
+message ConsumedOccurrence {
+  // `from` is the dependent, `from_field` the site (e.g.
+  // "emitted_events[1]"), and `to` the exact pinned target.
+  Reference reference = 1;
+  DependentClassification classification = 2;
+  // Root diff paths this site consumes, in DiffEntities path vocabulary
+  // (e.g. "schema.fields[amount]"). Empty for a site that consumes only the
+  // root's identity.
+  repeated string consumed_paths = 3;
+  // The diff ops that make this occurrence BREAKING or UNKNOWN.
+  repeated trogonatlas.catalog.v1alpha1.DiffOp causal_ops = 4;
+  repeated ClassificationUnknownReason unknown_reasons = 5;
+}
+
+// One reference from a dependent to another dependent.
+message TransitiveLink {
+  Reference reference = 1;
+  // The classification of the referenced dependent (`reference.to`).
+  DependentClassification through_classification = 2;
+}
+
+message DependentImpact {
+  trogonatlas.eventmodel.v1alpha1.EntityRef dependent = 1;
+  // Shortest referrer-only distance to `current`.
+  uint32 depth = 2;
+  DependentClassification classification = 3;
+  // References from this dependent straight to `current`.
+  repeated ConsumedOccurrence occurrences = 4;
+  // References from this dependent to other dependents.
+  repeated TransitiveLink through = 5;
+  // Every reason this dependent is UNKNOWN, deduplicated.
+  repeated ClassificationUnknownReason unknown_reasons = 6;
+}
+
+message ClassificationCounts {
+  uint32 breaking = 1;
+  uint32 bump_only = 2;
+  uint32 unknown = 3;
+}
+
+// Honors the `x-trogon-atlas-branch` metadata header for both reads and the
+// dependent traversal.
+message ClassifyImpactRequest {
+  // The exact version dependents pin today. Required.
+  trogonatlas.eventmodel.v1alpha1.EntityRef current = 1;
+  // The exact version that would replace it. Must be the same EntityKind as
+  // `current` (INVALID_ARGUMENT otherwise). Excluded from the dependents
+  // even when it references `current` through `supersedes`.
+  trogonatlas.eventmodel.v1alpha1.EntityRef candidate = 2;
+  // Maximum referrer hops from `current`. 0 = the server maximum.
+  uint32 max_depth = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message ClassifyImpactResponse {
+  // DiffEntities(current, candidate).
+  repeated trogonatlas.catalog.v1alpha1.DiffOp ops = 1;
+  // The worst classification over every dependent, raised to UNKNOWN when
+  // `incompleteness` is non-empty. BUMP_ONLY when the result is complete and
+  // nothing breaks, including when nothing depends on `current`.
+  DependentClassification verdict = 2;
+  repeated ImpactIncompleteness incompleteness = 3;
+  // Paths that differ between the versions but that the typed diff does not
+  // compare (e.g. "swimlane", "key"). Each one makes every field-consuming
+  // occurrence UNKNOWN.
+  repeated string uncovered_changes = 4;
+  // Counts over every dependent, not just this page.
+  ClassificationCounts counts = 5;
+  // Ordered by depth ascending, then kind and canonical Id.
+  repeated DependentImpact dependents = 6;
+  string next_page_token = 7;
+  // Content identity of the caller's view this answer was computed from,
+  // using the GetSnapshotId algorithm without a namespace filter. Each page
+  // is computed independently, so pages with different snapshot_id values
+  // come from different states and must not be combined.
+  string snapshot_id = 8;
+}

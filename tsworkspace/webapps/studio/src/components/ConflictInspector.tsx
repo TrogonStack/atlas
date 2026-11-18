@@ -43,7 +43,7 @@ function entryKey(entry: BranchDiffEntry, i: number): string {
   return id?.namespace && id?.slug ? `${entry.ref?.kind}:${id.namespace}/${id.slug}@${id.version ?? ''}` : String(i);
 }
 
-function JsonPane({ title, value }: { title: string; value: unknown }) {
+export function JsonPane({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0 flex-1">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
@@ -83,7 +83,7 @@ export function ConflictInspector({
   const selectedStatus = selected ? branchEntryStatus(selected.status) : undefined;
 
   return (
-    <aside className="flex h-full w-[28rem] flex-col border-l border-border bg-card">
+    <aside className="flex h-full w-[30rem] max-w-[calc(100vw-3rem)] shrink-0 flex-col border-l border-border bg-card">
       <div className="flex items-start gap-2 p-4">
         <div>
           <div className="flex items-center gap-2">

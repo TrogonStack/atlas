@@ -1,17 +1,16 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, compileTypeLibrary: vi.fn(), typeMessages: vi.fn() } };
+  return { ...actual, api: { ...actual.api, compileTypeLibrary: vi.fn() } };
 });
 
 import { api } from '@/lib/api';
 import type { Entity } from '@/lib/model';
-import { diagnosticLocation, PayloadTypePicker, TypeLibrarySources } from './TypeLibraryPanels';
+import { diagnosticLocation, TypeLibrarySources } from './TypeLibraryPanels';
 
 const compile = vi.mocked(api.compileTypeLibrary);
-const typeMessages = vi.mocked(api.typeMessages);
 
 function entity(kind: Entity['kind'], raw: Record<string, unknown>): Entity {
   const id = { namespace: 'acme', slug: kind === 'typeLibrary' ? 'acme.v1' : 'order.placed', version: '1' };
@@ -37,7 +36,6 @@ const library = entity('typeLibrary', {
 
 beforeEach(() => {
   compile.mockReset();
-  typeMessages.mockReset();
 });
 
 afterEach(cleanup);
@@ -94,36 +92,5 @@ describe('TypeLibrarySources', () => {
     compile.mockRejectedValueOnce(new Error('dependency acme.common@2 not found'));
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     expect(await screen.findByText('dependency acme.common@2 not found')).toBeTruthy();
-  });
-});
-
-describe('PayloadTypePicker', () => {
-  it('lists the namespace messages and shows the type url of the current payload', async () => {
-    typeMessages.mockResolvedValue({ messages: [{ fullName: 'acme.v1.Money' }, { fullName: 'acme.v1.OrderPlaced' }] });
-    render(
-      <PayloadTypePicker
-        entity={entity('event', { schema: { '@type': 'type.googleapis.com/acme.v1.OrderPlaced' } })}
-      />,
-    );
-    const select = (await screen.findByLabelText('Payload type')) as HTMLSelectElement;
-    expect(select.value).toBe('acme.v1.OrderPlaced');
-    expect(typeMessages).toHaveBeenCalledWith('acme', expect.anything());
-
-    fireEvent.change(select, { target: { value: 'acme.v1.Money' } });
-    expect(screen.getByText('type.googleapis.com/acme.v1.Money')).toBeTruthy();
-  });
-
-  it('reads an undecoded tenant payload by its typeUrl', async () => {
-    typeMessages.mockResolvedValue({ messages: [] });
-    render(<PayloadTypePicker entity={entity('event', { schema: { typeUrl: 'type.googleapis.com/acme.v1.Gone' } })} />);
-    const select = (await screen.findByLabelText('Payload type')) as HTMLSelectElement;
-    expect(select.value).toBe('acme.v1.Gone');
-  });
-
-  it('stays out of the way when the namespace declares no types', async () => {
-    typeMessages.mockRejectedValue(new Error('unimplemented'));
-    render(<PayloadTypePicker entity={entity('event', {})} />);
-    await waitFor(() => expect(typeMessages).toHaveBeenCalled());
-    expect(screen.queryByLabelText('Payload type')).toBeNull();
   });
 });

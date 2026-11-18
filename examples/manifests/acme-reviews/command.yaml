@@ -50,6 +50,13 @@ spec:
     - name: comment
       type:
         string: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the review is recorded
+        kind: KIND_TIMESTAMP
+      name: submitted_at
+      type:
+        timestamp: {}
   swimlane:
     id:
       namespace: acme-reviews
