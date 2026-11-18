@@ -209,7 +209,7 @@ one without a system still reports each field.
 
 ## Automation inputs reported as dangling or ambiguous
 
-### Rule finding and evidence
+### Completeness finding and evidence
 
 `CheckInformationCompleteness` matches each field of the command that an
 automation slice emits to the fields of the automation's source read models,
@@ -253,7 +253,7 @@ confidence values do not change.
   model's `key`. If the read models can have different values for it,
   rename one field so the source is explicit.
 
-### Remaining limits
+### Completeness rule limits
 
 - A `given` payload that is a generated message, not a `Struct`, is not
   compared, so its fields stay dangling.
