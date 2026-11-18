@@ -34,7 +34,7 @@ use async_nats::jetstream::{kv::Store as KvStore, response::Response, Context};
 use bytes::Bytes;
 use prost::Message as _;
 use tokio::sync::Notify;
-use trogon_atlas_core::{Epoch, WriterRole};
+use trogon_atlas_core::{timestamp::parse_rfc3339, Epoch, WriterRole};
 
 use super::{kv_entry_timeout, live_entry, KV_OP_TIMEOUT};
 use crate::{
@@ -273,9 +273,9 @@ async fn server_now_micros(context: &Context, stream: &str) -> StoreResult<i64> 
         .get("ts")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(clock_unavailable)?;
-    let now = chrono::DateTime::parse_from_rfc3339(timestamp)
-        .map_err(|_| clock_unavailable())?
-        .timestamp_micros();
+    let now = parse_rfc3339(timestamp)
+        .ok_or_else(clock_unavailable)?
+        .unix_micros();
     if now <= 0 {
         return Err(clock_unavailable());
     }

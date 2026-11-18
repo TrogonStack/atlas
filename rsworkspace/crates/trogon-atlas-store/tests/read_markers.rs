@@ -1,6 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use trogon_atlas_core::{NamespaceName, OwnerId, WriterRole};
+use time::OffsetDateTime;
+use trogon_atlas_core::{
+    timestamp::{format_utc, TimestampPrecision},
+    NamespaceName, OwnerId, WriterRole,
+};
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     store::MutationOp, ChangesetRecord, ChangesetRef, ChangesetValidation, NatsStore, Store,
@@ -123,7 +127,7 @@ async fn read_markers_refuse_published_branch_journal_until_changeset_append_rel
         .append_changeset(&ChangesetRecord {
             id,
             author: "marker-test".into(),
-            at: chrono::Utc::now().to_rfc3339(),
+            at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds),
             message: "branch mutation".into(),
             rpc: "BatchMutate".into(),
             branch: Some("pending".into()),

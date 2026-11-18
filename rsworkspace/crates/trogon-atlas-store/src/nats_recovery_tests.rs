@@ -2,7 +2,7 @@
 
 use trogon_atlas_proto::{Entity, EntityKind, Id};
 
-use super::{entity_key, NatsStore, NatsStoreConfig};
+use super::{entity_key, now_rfc3339, NatsStore, NatsStoreConfig};
 use crate::{
     error::StoreError,
     metrics::StoreMetrics,
@@ -153,7 +153,7 @@ impl Scenario {
             .append_changeset(&ChangesetRecord {
                 id: self.changeset_id.clone(),
                 author: AUTHOR.into(),
-                at: chrono::Utc::now().to_rfc3339(),
+                at: now_rfc3339(),
                 message: "batch_mutate: 4 op(s)".into(),
                 rpc: RPC.into(),
                 branch: None,

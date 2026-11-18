@@ -49,6 +49,7 @@ mod specification_refs;
 pub mod storage_claims;
 pub mod system_group;
 pub mod system_meta;
+pub mod timestamp;
 pub mod transcode;
 pub mod writer_lease;
 

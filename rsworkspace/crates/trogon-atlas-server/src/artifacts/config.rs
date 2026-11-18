@@ -185,16 +185,19 @@ impl ArtifactConfig {
                 )
                 .await?,
             ),
-            ArtifactBackend::S3 => Arc::new(S3BlobStorage::new(S3StorageConfig {
-                bucket: self
-                    .artifact_s3_bucket
-                    .clone()
-                    .context("artifact-s3-bucket is required for S3")?,
-                region: self.artifact_s3_region.clone(),
-                endpoint: self.artifact_s3_endpoint.clone(),
-                force_path_style: self.artifact_s3_force_path_style,
-                allow_http: self.artifact_s3_allow_http,
-            })?),
+            ArtifactBackend::S3 => Arc::new(
+                S3BlobStorage::new(S3StorageConfig {
+                    bucket: self
+                        .artifact_s3_bucket
+                        .clone()
+                        .context("artifact-s3-bucket is required for S3")?,
+                    region: self.artifact_s3_region.clone(),
+                    endpoint: self.artifact_s3_endpoint.clone(),
+                    force_path_style: self.artifact_s3_force_path_style,
+                    allow_http: self.artifact_s3_allow_http,
+                })
+                .await?,
+            ),
             ArtifactBackend::Disabled => return Ok(None),
         };
         Ok(Some(Arc::new(ArtifactService::new(

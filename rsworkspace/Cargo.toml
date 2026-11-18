@@ -62,10 +62,11 @@ base64 = "0.23"
 chacha20poly1305 = "0.11"
 ed25519-dalek = { version = "3.0", features = ["pem", "pkcs8"] }
 jsonschema = { version = "0.61", default-features = false }
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"
 uuid = { version = "1", features = ["v7"] }
 tempfile = "3"
+time = "0.3.49"
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "9043cdfa8694d83bf506c2f3eb0313ec173edd7e", default-features = false, features = ["base64", "macros", "server"] }
 
 [workspace.lints.rust]
 unused_must_use = "deny"

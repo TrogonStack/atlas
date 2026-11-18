@@ -202,7 +202,7 @@ fn validate_review(review: &pb::GlossaryReview) -> Result<()> {
     text(&review.reason, 16_384, "review.reason")?;
     require(
         review.reviewed_at.len() <= 64
-            && chrono::DateTime::parse_from_rfc3339(&review.reviewed_at).is_ok(),
+            && crate::timestamp::parse_rfc3339(&review.reviewed_at).is_some(),
         "review.reviewed_at",
     )?;
     digest(review.content_digest.as_ref(), "review.content_digest")

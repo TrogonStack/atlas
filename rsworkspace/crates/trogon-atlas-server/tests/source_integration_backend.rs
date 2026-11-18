@@ -2709,9 +2709,14 @@ fn expiring_seed(
         value
     })
 }
+fn now_unix_millis() -> i64 {
+    let now = time::OffsetDateTime::now_utc();
+    now.unix_timestamp() * 1_000 + i64::from(now.millisecond())
+}
+
 async fn wait_backend_expiry(deadline: i64) {
     let delay = deadline
-        .saturating_sub(chrono::Utc::now().timestamp_millis())
+        .saturating_sub(now_unix_millis())
         .saturating_add(50);
     tokio::time::sleep(std::time::Duration::from_millis(
         u64::try_from(delay).unwrap_or(0),
@@ -2917,7 +2922,7 @@ impl trogon_atlas_store::source::SourcePublicationObserver for CommitPastBaseExp
             let delay = self
                 .0
                 .load(std::sync::atomic::Ordering::Acquire)
-                .saturating_sub(chrono::Utc::now().timestamp_millis())
+                .saturating_sub(now_unix_millis())
                 .saturating_add(50);
             std::thread::sleep(std::time::Duration::from_millis(
                 u64::try_from(delay).unwrap_or(0),
@@ -3326,7 +3331,7 @@ impl trogon_atlas_store::source::SourcePublicationObserver for PreparePastBaseEx
             let delay = self
                 .0
                 .load(std::sync::atomic::Ordering::Acquire)
-                .saturating_sub(chrono::Utc::now().timestamp_millis())
+                .saturating_sub(now_unix_millis())
                 .saturating_add(50);
             std::thread::sleep(std::time::Duration::from_millis(
                 u64::try_from(delay).unwrap_or(0),

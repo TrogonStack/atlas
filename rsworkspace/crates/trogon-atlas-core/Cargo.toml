@@ -10,7 +10,7 @@ description = "Schema-derived helpers over trogon-atlas-proto types: reference e
 [dependencies]
 trogon-atlas-proto = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
-chrono = { workspace = true }
+time = { workspace = true, features = ["macros", "parsing"] }
 tracing = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }

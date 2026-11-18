@@ -2,8 +2,12 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use time::OffsetDateTime;
 use tonic::transport::{server::TcpIncoming, Server};
-use trogon_atlas_core::WriterRole;
+use trogon_atlas_core::{
+    timestamp::{format_utc, TimestampPrecision},
+    WriterRole,
+};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
@@ -1283,7 +1287,7 @@ async fn run_export(args: &Args, root: PathBuf, store: Arc<dyn Store>) -> Result
         .list_namespaces()
         .await
         .map_err(|e| anyhow::anyhow!("listing the namespace registry: {e}"))?;
-    let exported_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let exported_at = format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds);
     let (snapshot, provisional) = NamespaceSnapshot::build(&registered, exported_at);
     if provisional > 0 {
         tracing::info!(

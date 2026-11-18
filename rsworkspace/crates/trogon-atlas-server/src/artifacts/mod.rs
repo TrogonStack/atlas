@@ -6,8 +6,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_nats::jetstream::kv::{Operation, Store};
 use bytes::Bytes;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use tonic::Status;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
@@ -127,8 +127,8 @@ impl ArtifactService {
         let (upload_url, headers) = signed
             .map(|signed| (signed.url, signed.headers))
             .unwrap_or_default();
-        let expires =
-            Utc::now().timestamp() + i64::try_from(self.upload_ttl.as_secs()).unwrap_or(3600);
+        let expires = OffsetDateTime::now_utc().unix_timestamp()
+            + i64::try_from(self.upload_ttl.as_secs()).unwrap_or(3600);
         let upload = Upload {
             namespace: request.namespace,
             id: id.clone(),
@@ -186,7 +186,9 @@ impl ArtifactService {
         if upload.principal != principal {
             return Err(Status::not_found("upload not found"));
         }
-        if upload.phase != Phase::Ready && upload.expires <= Utc::now().timestamp() {
+        if upload.phase != Phase::Ready
+            && upload.expires <= OffsetDateTime::now_utc().unix_timestamp()
+        {
             return Err(Status::failed_precondition(
                 "upload expired; begin a new upload",
             ));
@@ -421,7 +423,7 @@ impl ArtifactService {
                     "this backend does not issue presigned downloads; use GetArtifactContent RPC",
                 )
             })?;
-        let expires = Utc::now().timestamp()
+        let expires = OffsetDateTime::now_utc().unix_timestamp()
             + i64::try_from(self.upload_ttl.as_secs()).map_err(|_| {
                 Status::failed_precondition("artifact expiry exceeds platform capacity")
             })?;

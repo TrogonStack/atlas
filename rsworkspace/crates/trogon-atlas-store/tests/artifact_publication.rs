@@ -18,12 +18,16 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
     net::{TcpListener, TcpStream},
     sync::Notify,
 };
-use trogon_atlas_core::WriterRole;
+use trogon_atlas_core::{
+    timestamp::{format_utc, TimestampPrecision},
+    WriterRole,
+};
 use trogon_atlas_store::{
     artifact_publication::{
         ArtifactPublicationCandidate, ArtifactPublicationState, ArtifactReceiptId,
@@ -478,12 +482,11 @@ fn shift_timestamp(value: &mut serde_json::Value, offset_seconds: i64) -> bool {
     let Some(timestamp) = value.as_str() else {
         return false;
     };
-    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp)
+    let timestamp = OffsetDateTime::parse(timestamp, &Rfc3339)
         .unwrap()
-        .checked_add_signed(chrono::Duration::seconds(offset_seconds))
+        .checked_add(time::Duration::seconds(offset_seconds))
         .unwrap();
-    *value =
-        serde_json::Value::String(timestamp.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    *value = serde_json::Value::String(format_utc(timestamp, TimestampPrecision::Nanoseconds));
     true
 }
 
@@ -629,8 +632,13 @@ async fn server_timestamp_rejects_a_stored_receipt_after_expiry_without_takeover
     tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
         .await
         .unwrap();
-    let sleep_micros =
-        u64::try_from((row.expires - chrono::Utc::now().timestamp_micros()).max(0)).unwrap();
+    let now_micros = i64::try_from(
+        OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .div_euclid(1_000),
+    )
+    .unwrap();
+    let sleep_micros = u64::try_from((row.expires - now_micros).max(0)).unwrap();
     tokio::time::sleep(Duration::from_micros(sleep_micros) + Duration::from_millis(50)).await;
     gate.release.notify_one();
     assert!(publishing.await.unwrap().is_err());
