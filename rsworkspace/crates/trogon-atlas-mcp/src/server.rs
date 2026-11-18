@@ -5607,7 +5607,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Walk example cases through the event model: play each Specification's given values and ordered command steps against the model and report, in the validation finding shape (severity, code, message, subject, subjectField, rule context, plus case and 1-based step), where the model fails to carry the data. Checks per step: lifecycle legality against Swimlane.transitions, command fields supplied by the read models the issuing UI or automation observes or by the step's answer (conflicts flagged), event fields sourced from the command, earlier stream events, swimlane state or a DerivedFieldAnnotation, read-model projections against slice scenarios and the case's expected rows, and rejects (a command after a terminal event must be refused by a reject scenario). Also reports storyboards and scenarios no case walked. Returns {cases, findings, coverage}; it never writes.",
+        description = "Walk example cases through the event model: play each Specification's given values and ordered command steps against the model and report, in the validation finding shape (severity, code, message, subject, subjectField, rule context, plus case and 1-based step), where the model fails to carry the data. Checks per step: lifecycle legality against Swimlane.transitions, command fields supplied by the read models the issuing UI or automation observes or by the step's answer (conflicts flagged), event fields sourced from the command, earlier stream events, swimlane state or a DerivedFieldAnnotation, read-model projections against slice scenarios and the case's expected rows, and rejects (a command after a terminal event must be refused by a reject scenario). Also reports storyboards and scenarios no case walked. Returns {cases, findings, coverage, skipped}; skipped lists the entities that could not be rendered and so were not walked, so a passing case covers only the rest. It never writes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -5621,6 +5621,12 @@ impl McpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let cases = trogon_atlas_client::walk::parse_cases(&p.cases_yaml, "walk_scenarios")
             .map_err(mcp_error_data)?;
+        if cases.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "cases_yaml holds no Specification document",
+                None,
+            ));
+        }
         let mut client = self.client();
         let (model, skipped) = if let Some(manifests) = &p.manifests_yaml {
             let documents = trogon_atlas_client::manifest::read_str(manifests, "walk_scenarios")

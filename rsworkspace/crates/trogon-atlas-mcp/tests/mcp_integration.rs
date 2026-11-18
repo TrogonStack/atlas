@@ -3051,5 +3051,21 @@ spec:
     assert_eq!(body["skipped"], serde_json::json!([]));
     assert_eq!(body["cases"][0]["passed"], false);
 
+    // A request with no case is refused, not reported as a clean walk.
+    let empty = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("walk_scenarios").with_arguments(
+                serde_json::json!({ "cases_yaml": "null" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await;
+    assert!(
+        !empty.as_ref().is_ok_and(|r| !r.is_error.unwrap_or(false)),
+        "{empty:?}"
+    );
+
     mcp_service.cancel().await.unwrap();
 }

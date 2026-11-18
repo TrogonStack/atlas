@@ -367,7 +367,7 @@ fn a_null_answer_supplies_nothing() {
 #[test]
 fn an_expected_emit_that_contradicts_the_model_is_an_error() {
     let report = walk_text(&inline(
-        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 4}\n    expect: {emit: [review.rejected]}\n",
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 4}\n    expect: {emit: [review.rejected]}\n  then:\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {review_id: r-1, score: 4}\n",
     ));
     let found = codes(&report);
     assert!(
@@ -377,6 +377,11 @@ fn an_expected_emit_that_contradicts_the_model_is_an_error() {
     // The walk follows the model: the review is approved, not rejected.
     assert!(
         !found.contains(&case("inline", Some(1), "WALK_LIFECYCLE_VIOLATION")),
+        "{found:?}"
+    );
+    // Only review.approved carries the score into the row.
+    assert!(
+        !found.contains(&case("inline", None, "WALK_READ_MODEL_MISMATCH")),
         "{found:?}"
     );
 }
@@ -394,4 +399,313 @@ fn a_keyed_answer_ignores_rows_without_that_key() {
         .map(|f| f.subject_field.as_str())
         .collect();
     assert_eq!(unsupplied, vec!["schema.fields[score]"], "{report:#?}");
+}
+
+/// A ref to a walk-reviews entity at version 1, in manifest flow style.
+fn r(slug: &str) -> String {
+    format!("{{id: {{namespace: walk-reviews, slug: {slug}, version: '1'}}}}")
+}
+
+fn doc(kind: &str, name: &str, spec: &str) -> String {
+    format!(
+        "---\napiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: {kind}\nmetadata: {{name: {name}, namespace: walk-reviews}}\nspec:\n  title: {name}\n{spec}"
+    )
+}
+
+fn schema(fields: &[&str]) -> String {
+    let fields: Vec<String> = fields
+        .iter()
+        .map(|f| format!("{{name: {f}, type: {{string: {{}}}}}}"))
+        .collect();
+    format!(
+        "  schema: {{'@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema, fields: [{}]}}\n",
+        fields.join(", ")
+    )
+}
+
+fn lane(slug: Option<&str>) -> String {
+    slug.map(|s| format!("  swimlane: {}\n", r(s)))
+        .unwrap_or_default()
+}
+
+fn event(name: &str, swimlane: Option<&str>, fields: &[&str]) -> String {
+    doc(
+        "Event",
+        name,
+        &format!("{}{}", schema(fields), lane(swimlane)),
+    )
+}
+
+fn command(name: &str, swimlane: Option<&str>, fields: &[&str]) -> String {
+    doc(
+        "Command",
+        name,
+        &format!("{}{}", schema(fields), lane(swimlane)),
+    )
+}
+
+/// A command slice; each scenario is `(id, given events, emitted events)`.
+fn command_slice(
+    name: &str,
+    cmd: &str,
+    emits: &[&str],
+    scenarios: &[(&str, &[&str], &[&str])],
+) -> String {
+    let events = |list: &[&str]| -> String {
+        let refs: Vec<String> = list
+            .iter()
+            .map(|e| format!("{{event: {}}}", r(e)))
+            .collect();
+        format!("[{}]", refs.join(", "))
+    };
+    let scenarios: Vec<String> = scenarios
+        .iter()
+        .map(|(id, given, emit)| {
+            format!(
+                "  - {{id: {id}, title: {id}, when: {{command: {}}}, given: {}, emit: {{events: {}}}}}",
+                r(cmd),
+                events(given),
+                events(emit)
+            )
+        })
+        .collect();
+    doc(
+        "CommandSlice",
+        name,
+        &format!(
+            "  command: {{command: {}}}\n  emittedEvents: {}\n  scenarios:\n{}\n",
+            r(cmd),
+            events(emits),
+            scenarios.join("\n")
+        ),
+    )
+}
+
+/// The fixture model plus `extra` manifest documents.
+fn walk_with(extra: &[String], spec: &str) -> WalkReport {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("extra.yaml");
+    std::fs::write(&path, extra.concat()).unwrap();
+    let model = Model::load_paths(&[fixture("model.yaml"), path]).unwrap();
+    let cases = walk::parse_cases(&inline(spec), "inline").unwrap();
+    walk::walk(&model, &cases)
+}
+
+fn unwalked(report: &WalkReport) -> Vec<&str> {
+    report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_SCENARIO_UNWALKED")
+        .map(|f| f.message.as_str())
+        .collect()
+}
+
+#[test]
+fn an_event_on_the_commands_lane_lands_on_the_commands_stream() {
+    // reply.posted lacks thread_id, so only the command can address the
+    // thread; the second reply must see the first.
+    let report = walk_with(
+        &[
+            doc("Swimlane", "thread", "  streamId: thread-{thread_id}\n"),
+            command("post-reply", Some("thread"), &["thread_id", "body"]),
+            event("reply.posted", Some("thread"), &["body"]),
+            command_slice(
+                "post-reply-slice",
+                "post-reply",
+                &["reply.posted"],
+                &[
+                    ("first", &[], &["reply.posted"]),
+                    ("followup", &["reply.posted"], &["reply.posted"]),
+                ],
+            ),
+        ],
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: t-1, body: a}\n  - command: post-reply\n    answer: {thread_id: t-1, body: b}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+    assert!(
+        !unwalked(&report).iter().any(|m| m.contains("\"followup\"")),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn an_event_on_another_lane_reads_its_own_streams_history() {
+    // currency is only on the ledger stream, never on the payment stream
+    // the command addresses.
+    let report = walk_with(
+        &[
+            doc("Swimlane", "payment", "  streamId: payment-{payment_id}\n"),
+            doc("Swimlane", "ledger", "  streamId: ledger-{account_id}\n"),
+            command("charge", Some("payment"), &["payment_id", "account_id"]),
+            event("ledger.opened", Some("ledger"), &["account_id", "currency"]),
+            event("ledger.charged", Some("ledger"), &["account_id", "currency"]),
+            command_slice(
+                "charge-slice",
+                "charge",
+                &["ledger.charged"],
+                &[("charge", &[], &["ledger.charged"])],
+            ),
+        ],
+        "  given:\n    events:\n    - event: ledger.opened\n      payload: {account_id: a-1, currency: USD}\n  steps:\n  - command: charge\n    answer: {payment_id: p-1, account_id: a-1}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn lane_less_commands_do_not_share_a_stream() {
+    let report = walk_with(
+        &[
+            command("ping", None, &["id"]),
+            event("pinged", None, &["id"]),
+            command("pong", None, &["id"]),
+            event("ponged", None, &["id"]),
+            event("pong.failed", None, &["id"]),
+            command_slice("ping-slice", "ping", &["pinged"], &[("ping", &[], &["pinged"])]),
+            command_slice(
+                "pong-slice",
+                "pong",
+                &["ponged", "pong.failed"],
+                &[("pong", &[], &["ponged"])],
+            ),
+        ],
+        "  steps:\n  - command: ping\n    answer: {id: x}\n  - command: pong\n    answer: {id: y}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn an_empty_given_needs_an_empty_stream_not_just_no_lifecycle_event() {
+    // review.noted is outside the review lifecycle, but it is on the stream.
+    let report = walk_with(
+        &[
+            command("note-review", Some("review"), &["review_id"]),
+            event("review.noted", Some("review"), &["review_id"]),
+            command_slice(
+                "note-review-slice",
+                "note-review",
+                &["review.noted"],
+                &[("note", &[], &["review.noted"])],
+            ),
+        ],
+        "  steps:\n  - command: note-review\n    answer: {review_id: r-1}\n  - command: submit-review\n    answer: {review_id: r-1, rating: 4}\n",
+    );
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(2), "WALK_SCENARIO_MISSING")],
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn a_historical_null_does_not_source_an_event_field() {
+    // The latest comment cleared detail; the older value must not revive.
+    let report = walk_with(
+        &[
+            event("review.commented", Some("review"), &["review_id", "detail"]),
+            event("review.flagged", Some("review"), &["review_id", "detail"]),
+            command("flag-review", Some("review"), &["review_id"]),
+            command_slice(
+                "flag-review-slice",
+                "flag-review",
+                &["review.flagged"],
+                &[("flag", &["review.commented"], &["review.flagged"])],
+            ),
+        ],
+        "  given:\n    events:\n    - event: review.commented\n      payload: {review_id: r-1, detail: old}\n    - event: review.commented\n      payload: {review_id: r-1, detail: null}\n  steps:\n  - command: flag-review\n    answer: {review_id: r-1}\n",
+    );
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(1), "WALK_EVENT_FIELD_UNSOURCED")],
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn an_opaque_event_schema_is_reported() {
+    let report = walk_with(
+        &[
+            command("archive", None, &["review_id"]),
+            doc(
+                "Event",
+                "archived",
+                "  schema: {'@type': type.googleapis.com/google.protobuf.Struct, value: {}}\n",
+            ),
+            command_slice(
+                "archive-slice",
+                "archive",
+                &["archived"],
+                &[("archive", &[], &["archived"])],
+            ),
+        ],
+        "  steps:\n  - command: archive\n    answer: {review_id: r-1}\n",
+    );
+    let opaque: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_SCHEMA_OPAQUE")
+        .map(|f| f.message.as_str())
+        .collect();
+    assert!(opaque.iter().any(|m| m.contains("archived")), "{report:#?}");
+}
+
+#[test]
+fn an_unpinned_external_event_completes_a_pinned_slice_scenario() {
+    let upstream = "{id: {namespace: upstream, slug: order.placed, version: '2'}}";
+    let report = walk_with(
+        &[
+            doc(
+                "ReadModel",
+                "order-board",
+                &format!(
+                    "  key: [order_id]\n{}  sourceEvents: [{upstream}]\n",
+                    schema(&["order_id"])
+                ),
+            ),
+            doc(
+                "ReadModelSlice",
+                "order-board-placed",
+                &format!(
+                    "  projectionRole: PROJECTION_ROLE_UPSERT\n  readModel: {{readModel: {rm}}}\n  sourceEvents: [{{event: {upstream}}}]\n  scenarios:\n  - {{id: placed, title: placed, when: [{{event: {upstream}}}], then: {{readModel: {rm}, payload: {{'@type': type.googleapis.com/google.protobuf.Struct, value: {{order_id: o-1}}}}}}}}\n",
+                    rm = r("order-board")
+                ),
+            ),
+        ],
+        "  given:\n    events:\n    - event: upstream/order.placed\n      payload: {order_id: o-1}\n",
+    );
+    assert!(
+        !unwalked(&report)
+            .iter()
+            .any(|m| m.contains("order-board-placed")),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn an_unexpected_reject_still_counts_as_walked() {
+    let report = walk_text(&inline(
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n    - event: review.approved\n      payload: {review_id: r-1, score: 4}\n  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 4}\n    expect: {emit: [review.approved]}\n",
+    ));
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(1), "WALK_UNEXPECTED_REJECT")]
+    );
+    assert!(
+        !unwalked(&report)
+            .iter()
+            .any(|m| m.contains("already-approved")),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn an_expected_event_the_slice_cannot_emit_is_not_walked() {
+    // approve-review-slice never emits review.rejected, so no row appears.
+    let report = walk_text(&inline(
+        "  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 1}\n    expect: {emit: [review.rejected]}\n  then:\n    readModels:\n    - readModel: review-queue\n      rows: []\n",
+    ));
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(1), "WALK_EVENT_NOT_EMITTED_BY_SLICE")],
+        "{report:#?}"
+    );
 }

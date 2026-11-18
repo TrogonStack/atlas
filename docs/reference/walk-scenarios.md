@@ -92,7 +92,8 @@ instead of being ignored.
    emits exactly one event emits it.
 4. **Event data.** Each emitted event field gets a value from the command,
    from the step's `answer` when the field is swimlane `state`, from the
-   latest earlier event on the same stream, or as a placeholder for
+   latest earlier event on the event's stream that carries the field (a
+   `null` there supplies nothing), or as a placeholder for
    swimlane `state` or a `DerivedFieldAnnotation`. A required event field is
    reported unless the command already reported it missing.
 5. **Lifecycle.** Nothing may land on a stream after a terminal lifecycle
@@ -101,16 +102,21 @@ instead of being ignored.
 6. **Projection.** Every latest-version ReadModelSlice that sources the event
    writes the row addressed by the read model's `key` (UPSERT copies the
    event's fields that the read model declares; DELETE removes the row).
-   Numeric keys are normalized, so `4` and `4.0` address one row. For each
+   Numeric keys are normalized, so `4` and `4.0` address one row, and a
+   string key never shares a row with a number. For each
    slice scenario whose `when` events have now occurred for this row (events
-   carrying the row's key values; every event for a keyless read model),
+   that carry every key value of the row; every event for a keyless read
+   model),
    every field its `then` payload names must be set on the row.
 
 A `given` event outside the walked model and named without a version
 matches whichever version a slice or scenario pins.
 
-Stream instances come from the swimlane's `stream_id` template, filled from
-the payload. After all cases, storyboards and command, read-model and
+Stream instances come from the swimlane's `stream_id` template. A
+command's stream is filled from the command's values. An event on the
+command's swimlane lands on that stream. An event on another swimlane lands
+on the stream its own template names, filled from the command's values. An
+entity without a swimlane is on no stream and shares no history. After all cases, storyboards and command, read-model and
 automation slice scenarios in the cases' namespaces that no case reached
 are reported as coverage findings. A storyboard counts as walked when a
 case exercised any of its slices.
@@ -151,7 +157,7 @@ The MCP tool adds `skipped`, the entities the export path could not render.
 | `WALK_COMMAND_FIELD_CONFLICT` | Error | Command field sources disagree | Two sources (observed read-model rows or the external answer) offer different values for one command field. The model does not say which one wins. |
 | `WALK_COMMAND_FIELD_AMBIGUOUS` | Warning | Observed rows disagree on a command field | Several rows of an observed read model match the step and hold different values for the field. Put the read model's key fields in the step's answer to pick the row. Reported as an error when the field is required and nothing else supplies it. |
 | `WALK_EVENT_FIELD_UNSOURCED` | Error | Event field gets no value | At this step an emitted event field gets no value from the command, from an earlier event on the same stream, from the swimlane's `state`, or from a DerivedFieldAnnotation. |
-| `WALK_EVENT_NOT_EMITTED_BY_SLICE` | Error | Expected event is not one the slice emits | The case expects an event the command's CommandSlice does not list in `emitted_events`. |
+| `WALK_EVENT_NOT_EMITTED_BY_SLICE` | Error | Expected event is not one the slice emits | The case expects an event the command's CommandSlice does not list in `emitted_events`. Unless a scenario decides the step, the walk emits nothing, so later steps do not see the event. |
 | `WALK_LIFECYCLE_VIOLATION` | Error | Event is not a legal successor | The emitted event is not a `next` of the stream's previous lifecycle event in `Swimlane.transitions`. The step may be legal on its own but not after the steps before it. |
 | `WALK_ACCEPTED_AFTER_TERMINAL` | Error | Command accepted after a terminal event | The stream's previous lifecycle event has no successor, yet the command emitted an event because no reject scenario refuses it. Add a reject scenario for this history. |
 | `WALK_LIFECYCLE_START` | Warning | Stream starts mid-lifecycle | The first lifecycle event on the stream is only ever reached as a successor of another event. Give the earlier event in the case's `given`, or model the event as a lifecycle start. |
@@ -175,6 +181,7 @@ The MCP tool adds `skipped`, the entities the export path could not render.
 - A schema held as a type library message is opaque: its fields are not
   checked, and the command's values pass through unchanged.
 - The walk does not fire automations on its own. Each command is a step.
+- An expected `rows` list holds at most 256 rows per read model.
 - Slice scenario payloads are example data with their own identifiers, so
   the projection check compares which fields are set, not their values.
   Put the values to check in the case's expected rows.

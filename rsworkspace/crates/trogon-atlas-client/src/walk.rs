@@ -835,7 +835,8 @@ pub fn read_case_paths(paths: &[PathBuf]) -> Result<Vec<Case>> {
 struct Recorded {
     event: Key,
     payload: Map<String, Value>,
-    stream: String,
+    /// `None` for an event without a swimlane: it is on no stream.
+    stream: Option<String>,
 }
 
 type Rows = BTreeMap<String, Map<String, Value>>;
@@ -972,18 +973,17 @@ impl CaseRun<'_> {
     // --- streams ---
 
     /// Stream instance of a payload on `lane`: `lane:stream_id` with the
-    /// template's placeholders filled from the payload.
-    fn stream_of(&mut self, lane: Option<&Key>, payload: &Map<String, Value>) -> String {
-        let Some(lane) = lane else {
-            return "<no swimlane>".to_string();
-        };
+    /// template's placeholders filled from the payload. Without a lane there
+    /// is no stream, so lane-less commands never share history.
+    fn stream_of(&mut self, lane: Option<&Key>, payload: &Map<String, Value>) -> Option<String> {
+        let lane = lane?;
         let template = self
             .model
             .get(K::Swimlane, lane)
             .map(|s| str_at(s, "streamId").to_string())
             .unwrap_or_default();
         if template.is_empty() {
-            return lane.to_string();
+            return Some(lane.to_string());
         }
         let mut resolved = String::new();
         let mut rest = template.as_str();
@@ -1019,7 +1019,7 @@ impl CaseRun<'_> {
                 .field("stream_id"),
             );
         }
-        format!("{lane}:{resolved}")
+        Some(format!("{lane}:{resolved}"))
     }
 
     fn lane_of(&self, kind: K, key: &Key) -> Option<Key> {
@@ -1043,19 +1043,25 @@ impl CaseRun<'_> {
             .collect()
     }
 
-    fn history(&self, stream: &str) -> Vec<&Recorded> {
-        self.log.iter().filter(|r| r.stream == stream).collect()
+    fn history(&self, stream: Option<&str>) -> Vec<&Recorded> {
+        let Some(stream) = stream else {
+            return Vec::new();
+        };
+        self.log
+            .iter()
+            .filter(|r| r.stream.as_deref() == Some(stream))
+            .collect()
     }
 
     // --- projection ---
 
     /// Stream instance an event with this payload lands on.
-    fn event_stream(&mut self, event: &Key, payload: &Map<String, Value>) -> String {
+    fn event_stream(&mut self, event: &Key, payload: &Map<String, Value>) -> Option<String> {
         let lane = self.lane_of(K::Event, event);
         self.stream_of(lane.as_ref(), payload)
     }
 
-    fn record(&mut self, event: &Key, payload: &Map<String, Value>, stream: String) {
+    fn record(&mut self, event: &Key, payload: &Map<String, Value>, stream: Option<String>) {
         self.log.push(Recorded {
             event: event.clone(),
             payload: payload.clone(),
@@ -1144,12 +1150,13 @@ impl CaseRun<'_> {
         let row_history: Vec<Key> = self
             .log
             .iter()
-            .filter(|r| row_key.is_empty() || correlates(&r.payload, row_key))
+            .filter(|r| carries_key(&r.payload, row_key))
             .map(|r| r.event.clone())
             .collect();
         for scenario in arr(slice, "scenarios") {
             let when: Vec<Key> = edge_keys(scenario, "when", "event");
-            if when.last() != Some(&last) || !is_subsequence(&when, &row_history) {
+            let completes = when.last().is_some_and(|w| same_event(w, &last));
+            if !completes || !is_subsequence(&when, &row_history) {
                 continue;
             }
             let scenario_id = str_at(scenario, "id").to_string();
@@ -1249,20 +1256,35 @@ impl CaseRun<'_> {
 
         let lane = self.lane_of(K::Command, &command);
         let stream = self.stream_of(lane.as_ref(), &values);
-        let Some(emitted) = self.decide(step, &command, &slice_key, slice, &values, &stream) else {
+        let Some(emitted) = self.decide(
+            step,
+            &command,
+            &slice_key,
+            slice,
+            &values,
+            stream.as_deref(),
+        ) else {
             return;
         };
         for event in emitted {
+            // The stream is fixed before the payload is built, so field
+            // sourcing, lifecycle and recording all use one timeline. An event
+            // on the command's lane lands on the stream the command addressed.
+            let event_lane = self.lane_of(K::Event, &event);
+            let event_stream = if event_lane == lane {
+                stream.clone()
+            } else {
+                self.stream_of(event_lane.as_ref(), &values)
+            };
             let payload = self.event_payload(
                 &event,
                 &command,
                 &values,
                 &unsupplied,
                 &step.answer,
-                &stream,
+                event_stream.as_deref(),
             );
-            let event_stream = self.event_stream(&event, &payload);
-            self.check_lifecycle(&event, &event_stream, &command, &slice_key);
+            self.check_lifecycle(&event, event_stream.as_deref(), &command, &slice_key);
             self.record(&event, &payload, event_stream);
         }
     }
@@ -1554,7 +1576,7 @@ impl CaseRun<'_> {
         slice_key: &Key,
         slice: &Value,
         values: &Map<String, Value>,
-        stream: &str,
+        stream: Option<&str>,
     ) -> Option<Vec<Key>> {
         let history: Vec<Key> = self
             .history(stream)
@@ -1578,7 +1600,10 @@ impl CaseRun<'_> {
         let related: Vec<&Key> = self
             .log
             .iter()
-            .filter(|r| r.stream == stream || correlates(&r.payload, values))
+            .filter(|r| {
+                (stream.is_some() && r.stream.as_deref() == stream)
+                    || correlates(&r.payload, values)
+            })
             .map(|r| &r.event)
             .collect();
         let mut rejects: Vec<(String, String)> = Vec::new();
@@ -1589,7 +1614,11 @@ impl CaseRun<'_> {
                 continue;
             }
             let given: Vec<Key> = edge_keys(scenario, "given", "event");
-            let tail_ok = state.is_none_or(|last| given.iter().any(|g| same_event(g, last)));
+            let tail_ok = if given.is_empty() {
+                history.is_empty()
+            } else {
+                state.is_none_or(|last| given.iter().any(|g| same_event(g, last)))
+            };
             if !tail_ok || !is_subsequence(&given, related.iter().copied()) {
                 continue;
             }
@@ -1650,6 +1679,7 @@ impl CaseRun<'_> {
 
         if let Some(expected) = &step.expect.emit {
             if let Some((id, code)) = rejects.first() {
+                self.mark(K::CommandSlice, slice_key, id);
                 self.push(
                     WalkFinding::new(
                         UNEXPECTED_REJECT,
@@ -1663,6 +1693,7 @@ impl CaseRun<'_> {
                 return None;
             }
             let mut keys = Vec::new();
+            let mut undeclared = false;
             for reference in expected {
                 let mut key = self.model.event_key(reference, self.ns());
                 // An unpinned ref to an event outside the model takes the
@@ -1671,6 +1702,7 @@ impl CaseRun<'_> {
                     key = d.clone();
                 }
                 if !declared.contains(&key) {
+                    undeclared = true;
                     self.push(
                         WalkFinding::new(
                             EVENT_NOT_EMITTED_BY_SLICE,
@@ -1710,6 +1742,11 @@ impl CaseRun<'_> {
                     .field(format!("scenarios[{id}].emit")),
                 );
                 return Some(events);
+            }
+            // The model cannot produce an event the slice does not emit, so
+            // later steps must not see it.
+            if undeclared {
+                return None;
             }
             self.push(
                 WalkFinding::new(
@@ -1775,10 +1812,21 @@ impl CaseRun<'_> {
         values: &Map<String, Value>,
         unsupplied: &BTreeSet<String>,
         answer: &Map<String, Value>,
-        stream: &str,
+        stream: Option<&str>,
     ) -> Map<String, Value> {
         let model = self.model;
-        let Some(fields) = model.get(K::Event, event).and_then(schema_fields) else {
+        let spec = model.get(K::Event, event);
+        let Some(fields) = spec.and_then(schema_fields) else {
+            if spec.is_some() {
+                self.push(
+                    WalkFinding::new(
+                        SCHEMA_OPAQUE,
+                        format!("{event}'s schema is a type-library message; its fields are not checked"),
+                    )
+                    .subject(K::Event, event)
+                    .field("schema"),
+                );
+            }
             return values.clone();
         };
         let lane = self.lane_of(K::Event, event);
@@ -1799,7 +1847,14 @@ impl CaseRun<'_> {
                 // Aggregate state is set by the runtime; the step's answer
                 // is where a case states what the runtime decided.
                 payload.insert(name.clone(), v.clone());
-            } else if let Some(v) = earlier.iter().rev().find_map(|r| r.payload.get(name)) {
+            } else if let Some(v) = earlier
+                .iter()
+                .rev()
+                .find_map(|r| r.payload.get(name))
+                .filter(|v| !v.is_null())
+            {
+                // The latest event carrying the field wins: a null there
+                // cleared it, so an older value does not come back.
                 payload.insert(name.clone(), v.clone());
             } else if is_state {
                 payload.insert(name.clone(), Value::String(format!("<state:{name}>")));
@@ -1827,8 +1882,14 @@ impl CaseRun<'_> {
 
     /// Checks 1 and 5: the event must be a legal successor of the stream's
     /// previous lifecycle event.
-    fn check_lifecycle(&mut self, event: &Key, stream: &str, command: &Key, slice_key: &Key) {
-        let Some(lane) = self.lane_of(K::Event, event) else {
+    fn check_lifecycle(
+        &mut self,
+        event: &Key,
+        stream: Option<&str>,
+        command: &Key,
+        slice_key: &Key,
+    ) {
+        let (Some(lane), Some(stream)) = (self.lane_of(K::Event, event), stream) else {
             return;
         };
         let transitions = self.transitions(&lane);
@@ -1836,7 +1897,7 @@ impl CaseRun<'_> {
             return;
         }
         let previous = self
-            .history(stream)
+            .history(Some(stream))
             .into_iter()
             .rev()
             .map(|r| r.event.clone())
@@ -1934,13 +1995,21 @@ fn row_id(key_fields: &[String], payload: &Map<String, Value>) -> Option<String>
     let mut parts = Vec::new();
     for k in key_fields {
         let v = payload.get(k).filter(|v| !v.is_null())?;
+        // Tagged so `4` and `4.0` share a row but the string "4" does not.
         parts.push(match v {
-            // `4` and `4.0` address the same row.
-            Value::Number(n) => Value::String(format!("#{}", number_key(n))),
-            other => other.clone(),
+            Value::Number(n) => serde_json::json!(["n", number_key(n)]),
+            other => serde_json::json!(["v", other]),
         });
     }
     Some(Value::Array(parts).to_string())
+}
+
+/// Whether an event is about the row addressed by `row_key`: it carries
+/// every key part. A keyless read model has one row, so every event is.
+fn carries_key(payload: &Map<String, Value>, row_key: &Map<String, Value>) -> bool {
+    row_key
+        .iter()
+        .all(|(k, v)| payload.get(k).is_some_and(|p| values_equal(p, v)))
 }
 
 /// An earlier event belongs to the same timeline as the command when they
@@ -2012,6 +2081,10 @@ fn row_matches(expected: &Map<String, Value>, actual: &Map<String, Value>) -> bo
         .all(|(k, v)| actual.get(k).map_or(v.is_null(), |a| values_equal(v, a)))
 }
 
+/// Bipartite matching costs up to rows³ steps, and the MCP tool runs it
+/// inline, so expected row lists are capped well above any hand-written case.
+const MAX_MATCHED_ROWS: usize = 256;
+
 fn rows_mismatch(
     expected: &[Map<String, Value>],
     actual: &[&Map<String, Value>],
@@ -2026,6 +2099,12 @@ fn rows_mismatch(
             expected.len(),
             actual.len(),
             render(actual)
+        ));
+    }
+    if expected.len() > MAX_MATCHED_ROWS {
+        return Some(format!(
+            "the case lists {} rows; the walk compares at most {MAX_MATCHED_ROWS} per read model",
+            expected.len()
         ));
     }
     // Expectations may be partial, so pair them with rows as a bipartite
@@ -2177,6 +2256,43 @@ mod tests {
             map(json!({"review_id": "r-1"})),
         ];
         assert!(rows_mismatch(&impossible, &actual).is_some());
+    }
+
+    #[test]
+    fn numeric_and_string_row_keys_stay_distinct() {
+        let keys = vec!["n".to_string()];
+        assert_ne!(
+            row_id(&keys, &map(json!({"n": 4}))),
+            row_id(&keys, &map(json!({"n": "#4"})))
+        );
+    }
+
+    #[test]
+    fn row_history_needs_every_key_part() {
+        let key = map(json!({"tenant_id": "t-1", "review_id": "r-2"}));
+        assert!(!carries_key(&map(json!({"tenant_id": "t-1"})), &key));
+        assert!(carries_key(
+            &map(json!({"tenant_id": "t-1", "review_id": "r-2", "x": 1})),
+            &key
+        ));
+        assert!(!carries_key(
+            &map(json!({"tenant_id": "t-1", "review_id": "r-1"})),
+            &key
+        ));
+    }
+
+    #[test]
+    fn row_matching_is_bounded() {
+        let row = map(json!({"status": "submitted"}));
+        let actual = vec![&row; MAX_MATCHED_ROWS + 1];
+        let expected = vec![row.clone(); MAX_MATCHED_ROWS + 1];
+        let problem = rows_mismatch(&expected, &actual);
+        assert!(
+            problem.as_deref().is_some_and(|p| p.contains("at most")),
+            "{problem:?}"
+        );
+        let fits = vec![row.clone(); MAX_MATCHED_ROWS];
+        assert_eq!(rows_mismatch(&fits, &actual[..MAX_MATCHED_ROWS]), None);
     }
 
     #[test]
