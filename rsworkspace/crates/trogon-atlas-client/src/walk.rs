@@ -1311,10 +1311,14 @@ impl CaseRun<'_> {
             );
             return;
         }
-        let Some((slice_key, slice)) = model
+        // Several slices may handle one command, each describing other
+        // timelines of it, so the step weighs all of their scenarios.
+        let slices: Vec<(Key, &Value)> = model
             .live(K::CommandSlice)
-            .find(|(_, s)| edge_at(s, "command", "command").as_ref() == Some(&command))
-        else {
+            .filter(|(_, s)| edge_at(s, "command", "command").as_ref() == Some(&command))
+            .map(|(key, s)| (key.clone(), s))
+            .collect();
+        let Some((slice_key, _)) = slices.first() else {
             self.push(
                 WalkFinding::new(
                     COMMAND_UNHANDLED,
@@ -1325,9 +1329,11 @@ impl CaseRun<'_> {
             return;
         };
         let slice_key = slice_key.clone();
-        self.touched.slices.insert(slice_key.clone());
+        for (key, _) in &slices {
+            self.touched.slices.insert(key.clone());
+        }
 
-        let (values, unsupplied) = self.command_values(step, &command, slice);
+        let (values, unsupplied) = self.command_values(step, &command, &slices);
 
         let lane = self.lane_of(K::Command, &command);
         let stream = self.stream_of(lane.as_ref(), &values);
@@ -1335,7 +1341,7 @@ impl CaseRun<'_> {
             step,
             &command,
             &slice_key,
-            slice,
+            &slices,
             &values,
             stream.as_deref(),
         ) else {
@@ -1414,7 +1420,7 @@ impl CaseRun<'_> {
         &mut self,
         step: &Step,
         command: &Key,
-        slice: &Value,
+        slices: &[(Key, &Value)],
     ) -> (Map<String, Value>, BTreeSet<String>) {
         let model = self.model;
         // An explicit null in the answer supplies nothing.
@@ -1432,9 +1438,15 @@ impl CaseRun<'_> {
                 issuers.push((K::AutomationSlice, key.clone(), source_rms(auto)));
             }
         }
-        if let Some(ui) = edge_at(slice, "ui", "ui") {
+        let mut uis: Vec<Key> = Vec::new();
+        for ui in slices.iter().filter_map(|(_, s)| edge_at(s, "ui", "ui")) {
+            if !uis.contains(&ui) {
+                uis.push(ui);
+            }
+        }
+        for ui in &uis {
             for (key, ui_slice) in model.live(K::UiSlice) {
-                if edge_at(ui_slice, "ui", "ui").as_ref() == Some(&ui) {
+                if edge_at(ui_slice, "ui", "ui").as_ref() == Some(ui) {
                     issuers.push((K::UiSlice, key.clone(), source_rms(ui_slice)));
                 }
             }
@@ -1698,7 +1710,7 @@ impl CaseRun<'_> {
         step: &Step,
         command: &Key,
         slice_key: &Key,
-        slice: &Value,
+        slices: &[(Key, &Value)],
         values: &Map<String, Value>,
         stream: Option<&str>,
     ) -> Option<Vec<Key>> {
@@ -1732,9 +1744,12 @@ impl CaseRun<'_> {
             })
             .collect();
         let at = state.and_then(|s| related.iter().position(|r| std::ptr::eq(*r, s)));
-        let mut rejects: Vec<(String, String)> = Vec::new();
-        let mut emits: Vec<(String, Vec<Key>)> = Vec::new();
-        for scenario in arr(slice, "scenarios") {
+        let mut rejects: Vec<(Key, String, String)> = Vec::new();
+        let mut emits: Vec<(Key, String, Vec<Key>)> = Vec::new();
+        for (owner, scenario) in slices
+            .iter()
+            .flat_map(|(key, slice)| arr(slice, "scenarios").iter().map(move |s| (key, s)))
+        {
             let when = edge_at(scenario, "when", "command");
             if when.as_ref() != Some(command) {
                 continue;
@@ -1760,13 +1775,25 @@ impl CaseRun<'_> {
             }
             let id = str_at(scenario, "id").to_string();
             if let Some(reject) = scenario.get("reject") {
-                rejects.push((id, str_at(reject, "reasonCode").to_string()));
+                rejects.push((owner.clone(), id, str_at(reject, "reasonCode").to_string()));
             } else if let Some(emit) = scenario.get("emit") {
                 let events = edge_keys(emit, "events", "event");
-                emits.push((id, events));
+                emits.push((owner.clone(), id, events));
             }
         }
-        let declared: Vec<Key> = edge_keys(slice, "emittedEvents", "event");
+        let mut declared: Vec<Key> = Vec::new();
+        for (_, slice) in slices {
+            for event in edge_keys(slice, "emittedEvents", "event") {
+                if !declared.contains(&event) {
+                    declared.push(event);
+                }
+            }
+        }
+        let slice_label = if slices.len() == 1 {
+            slice_key.to_string()
+        } else {
+            format!("the {} slices of {command}", slices.len())
+        };
         let history_label = if history.is_empty() {
             "an empty stream".to_string()
         } else {
@@ -1782,7 +1809,7 @@ impl CaseRun<'_> {
                     WalkFinding::new(
                         REJECT_UNMODELED,
                         format!(
-                            "the case expects {command} to be refused{} after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it",
+                            "the case expects {command} to be refused{} after {history_label}, but no reject scenario on {slice_label} matches, so the model accepts it",
                             if reason.is_empty() { String::new() } else { format!(" ({reason})") }
                         ),
                     )
@@ -1792,20 +1819,20 @@ impl CaseRun<'_> {
             } else {
                 let matching = rejects
                     .iter()
-                    .find(|(_, code)| reason.is_empty() || code == reason);
-                if let Some((id, _)) = matching {
-                    self.mark(K::CommandSlice, slice_key, id);
+                    .find(|(_, _, code)| reason.is_empty() || code == reason);
+                if let Some((owner, id, _)) = matching {
+                    self.mark(K::CommandSlice, owner, id);
                 } else {
-                    let (id, code) = &rejects[0];
-                    self.mark(K::CommandSlice, slice_key, id);
+                    let (owner, id, code) = &rejects[0];
+                    self.mark(K::CommandSlice, owner, id);
                     self.push(
                         WalkFinding::new(
                             REJECT_REASON_MISMATCH,
                             format!(
-                                "scenario {id:?} of {slice_key} refuses {command} with {code:?}, the case expects {reason:?}"
+                                "scenario {id:?} of {owner} refuses {command} with {code:?}, the case expects {reason:?}"
                             ),
                         )
-                        .subject(K::CommandSlice, slice_key)
+                        .subject(K::CommandSlice, owner)
                         .field(format!("scenarios[{id}].reject")),
                     );
                 }
@@ -1814,16 +1841,16 @@ impl CaseRun<'_> {
         }
 
         if let Some(expected) = &step.expect.emit {
-            if let Some((id, code)) = rejects.first() {
-                self.mark(K::CommandSlice, slice_key, id);
+            if let Some((owner, id, code)) = rejects.first() {
+                self.mark(K::CommandSlice, owner, id);
                 self.push(
                     WalkFinding::new(
                         UNEXPECTED_REJECT,
                         format!(
-                            "the case expects {command} to emit events after {history_label}, but scenario {id:?} of {slice_key} refuses it ({code})"
+                            "the case expects {command} to emit events after {history_label}, but scenario {id:?} of {owner} refuses it ({code})"
                         ),
                     )
-                    .subject(K::CommandSlice, slice_key)
+                    .subject(K::CommandSlice, owner)
                     .field(format!("scenarios[{id}].reject")),
                 );
                 return None;
@@ -1840,7 +1867,7 @@ impl CaseRun<'_> {
                     self.push(
                         WalkFinding::new(
                             EVENT_NOT_EMITTED_BY_SLICE,
-                            format!("the case expects {key}, which {slice_key} does not emit"),
+                            format!("the case expects {key}, which is not among the events {slice_label} emits"),
                         )
                         .subject(K::CommandSlice, slice_key)
                         .field("emitted_events"),
@@ -1855,24 +1882,24 @@ impl CaseRun<'_> {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            if let Some((id, _)) = emits.iter().find(|(_, events)| *events == keys) {
-                self.mark(K::CommandSlice, slice_key, id);
+            if let Some((owner, id, _)) = emits.iter().find(|(_, _, events)| *events == keys) {
+                self.mark(K::CommandSlice, owner, id);
                 return Some(keys);
             }
-            if let Some((id, events)) = emits.into_iter().next() {
+            if let Some((owner, id, events)) = emits.into_iter().next() {
                 // A scenario decides this step and it says something else:
                 // the model wins, and the contradiction is an error.
-                self.mark(K::CommandSlice, slice_key, &id);
+                self.mark(K::CommandSlice, &owner, &id);
                 self.push(
                     WalkFinding::new(
                         EMIT_MISMATCH,
                         format!(
-                            "the case expects {command} to emit [{}] after {history_label}, but scenario {id:?} of {slice_key} emits [{}]",
+                            "the case expects {command} to emit [{}] after {history_label}, but scenario {id:?} of {owner} emits [{}]",
                             label(&keys),
                             label(&events)
                         ),
                     )
-                    .subject(K::CommandSlice, slice_key)
+                    .subject(K::CommandSlice, &owner)
                     .field(format!("scenarios[{id}].emit")),
                 );
                 return Some(events);
@@ -1886,7 +1913,7 @@ impl CaseRun<'_> {
                 WalkFinding::new(
                     SCENARIO_MISSING,
                     format!(
-                        "no scenario on {slice_key} has {command} emit [{}] after {history_label}",
+                        "no scenario on {slice_label} has {command} emit [{}] after {history_label}",
                         label(&keys)
                     ),
                 )
@@ -1897,12 +1924,12 @@ impl CaseRun<'_> {
         }
 
         // No stated outcome: the model decides.
-        if let Some((id, _)) = rejects.first() {
-            self.mark(K::CommandSlice, slice_key, id);
+        if let Some((owner, id, _)) = rejects.first() {
+            self.mark(K::CommandSlice, owner, id);
             return None;
         }
-        if let Some((id, events)) = emits.into_iter().next() {
-            self.mark(K::CommandSlice, slice_key, &id);
+        if let Some((owner, id, events)) = emits.into_iter().next() {
+            self.mark(K::CommandSlice, &owner, &id);
             return Some(events);
         }
         if let [only] = declared.as_slice() {
@@ -1910,7 +1937,7 @@ impl CaseRun<'_> {
                 WalkFinding::new(
                     SCENARIO_MISSING,
                     format!(
-                        "no scenario on {slice_key} covers {command} after {history_label}; walking its only emitted event {only}"
+                        "no scenario on {slice_label} covers {command} after {history_label}; walking its only emitted event {only}"
                     ),
                 )
                 .subject(K::CommandSlice, slice_key)
@@ -1922,7 +1949,7 @@ impl CaseRun<'_> {
             WalkFinding::new(
                 OUTCOME_UNDETERMINED,
                 format!(
-                    "no scenario on {slice_key} covers {command} after {history_label}, and it emits {} events; state expect.emit or expect.reject",
+                    "no scenario on {slice_label} covers {command} after {history_label}, and it emits {} events; state expect.emit or expect.reject",
                     declared.len()
                 ),
             )

@@ -79,8 +79,9 @@ instead of being ignored.
    counts as no annotation, as in validation); optional fields may stay
    empty. A conflicting answer still wins, and is reported. A required field
    whose rows disagree, with nothing else to supply it, is an error.
-3. **Outcome.** The command slice's scenarios are matched against the
-   stream's history: the scenario's `given` events must have occurred, in
+3. **Outcome.** The scenarios of every command slice that handles the
+   command are matched against the stream's history, and the command
+   emits any event one of those slices lists: the scenario's `given` events must have occurred, in
    order, among the events of the command's timeline (its own stream, plus
    events elsewhere that share a field with the command and agree on every
    shared field; derived and state placeholders are left out of the

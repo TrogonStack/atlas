@@ -905,6 +905,63 @@ fn an_answer_is_checked_against_every_ambiguous_read_model() {
     );
 }
 
+#[test]
+fn a_reject_scenario_on_another_slice_of_the_command_refuses_it() {
+    // Both slices handle flag-review; the refusal lives on the slice that
+    // sorts last.
+    let report = walk_with(
+        &[
+            entity("Event", "review.flagged", Some("review"), &["review_id"]),
+            entity("Command", "flag-review", Some("review"), &["review_id"]),
+            command_slice(
+                "a-flag-slice",
+                "flag-review",
+                &["review.flagged"],
+                &[("flag", &[], &["review.flagged"])],
+            ),
+            command_slice(
+                "b-flag-slice",
+                "flag-review",
+                &["review.flagged"],
+                &[("already-flagged", &["review.flagged"], &[])],
+            ),
+        ],
+        "  steps:\n  - command: flag-review\n    answer: {review_id: r-1}\n    expect: {emit: [review.flagged]}\n  - command: flag-review\n    answer: {review_id: r-1}\n    expect: {reject: REFUSED}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+    assert!(
+        !unwalked(&report)
+            .iter()
+            .any(|m| m.contains("already-flagged") || m.contains("\"flag\"")),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn an_event_any_slice_of_the_command_emits_is_expected() {
+    let report = walk_with(
+        &[
+            entity("Event", "review.flagged", Some("review"), &["review_id"]),
+            entity("Event", "review.escalated", Some("review"), &["review_id"]),
+            entity("Command", "flag-review", Some("review"), &["review_id"]),
+            command_slice(
+                "a-flag-slice",
+                "flag-review",
+                &["review.flagged"],
+                &[("flag", &[], &["review.flagged"])],
+            ),
+            command_slice(
+                "b-flag-slice",
+                "flag-review",
+                &["review.escalated"],
+                &[("escalate", &["review.flagged"], &["review.escalated"])],
+            ),
+        ],
+        "  steps:\n  - command: flag-review\n    answer: {review_id: r-1}\n  - command: flag-review\n    answer: {review_id: r-1}\n    expect: {emit: [review.escalated]}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
 fn stamped_event(derived_doc: &str) -> String {
     doc(
         "Event",
