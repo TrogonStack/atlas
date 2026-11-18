@@ -23,9 +23,10 @@ metadata:
 spec:
   title: Delivered order 42 becomes eligible, then its buyer reviews it
   given:
-    events:
-    - event: acme-storefront/order.fulfilled
-      payload: {order_id: o-42, buyer_id: b-7, seller_id: s-3}
+    readModels:
+    - readModel: orders.delivered-unreviewed
+      rows:
+      - {order_id: o-42, buyer_id: b-7, seller_id: s-3, status: delivered}
   steps:
   - command: grant-review-eligibility
     expect:
@@ -53,7 +54,7 @@ on a stream after its terminal event.
 
 ```sh
 trogon-atlas walk-scenarios \
-  -f examples/manifests/acme-reviews examples/manifests/acme-storefront \
+  -f examples/manifests/acme-reviews examples/manifests/acme-fulfillment \
   --cases examples/specifications
 ```
 

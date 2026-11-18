@@ -255,14 +255,12 @@ fn every_rule_is_documented_in_the_reference() {
     }
 }
 
-/// The shipped example walks end to end. It surfaces one gap that structural
-/// validation leaves to a reader: `review.submitted.submitted_at` has no
-/// source. Repairing the example model clears this assertion.
+/// The shipped example walks end to end with no error or warning findings.
 #[test]
 fn acme_reviews_example_walks() {
     let model = Model::load_paths(&[
         repo("examples/manifests/acme-reviews"),
-        repo("examples/manifests/acme-storefront"),
+        repo("examples/manifests/acme-fulfillment"),
     ])
     .unwrap();
     let cases = walk::read_case_paths(&[repo("examples/specifications")]).unwrap();
@@ -273,12 +271,6 @@ fn acme_reviews_example_walks() {
         .filter(|f| f.severity != Severity::Info)
         .map(|f| (f.code, f.subject_field.clone()))
         .collect();
-    assert_eq!(
-        found,
-        vec![(
-            "WALK_EVENT_FIELD_UNSOURCED",
-            "schema.fields[submitted_at]".to_string()
-        )],
-        "{report:#?}"
-    );
+    assert!(found.is_empty(), "{report:#?}");
+    assert!(report.cases.iter().all(|c| c.passed));
 }
