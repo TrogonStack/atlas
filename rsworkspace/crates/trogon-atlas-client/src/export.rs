@@ -45,24 +45,6 @@ pub(crate) fn entity_to_manifest(
     entity: &pb::Entity,
     types: &TranscodePool,
 ) -> Result<(pb::EntityKind, pb::Id, Value)> {
-    render_entity(entity, types, true)
-}
-
-/// `entity_to_manifest` without the reference shortening: every Id, Ref,
-/// Edge and Example keeps its full proto-JSON object form, for readers that
-/// walk the structure rather than show it to a person.
-fn entity_to_canonical_doc(
-    entity: &pb::Entity,
-    types: &TranscodePool,
-) -> Result<(pb::EntityKind, pb::Id, Value)> {
-    render_entity(entity, types, false)
-}
-
-fn render_entity(
-    entity: &pb::Entity,
-    types: &TranscodePool,
-    compact: bool,
-) -> Result<(pb::EntityKind, pb::Id, Value)> {
     let kind = entity
         .kind
         .as_ref()
@@ -97,9 +79,7 @@ fn render_entity(
         })
         .ok_or_else(|| anyhow!("Entity has no message field {body_key:?}"))?;
     let mut spec = Value::Object(body);
-    if compact {
-        compact_message(&mut spec, &body_desc, &id.namespace);
-    }
+    compact_message(&mut spec, &body_desc, &id.namespace);
 
     let mut metadata = Map::new();
     metadata.insert("namespace".into(), Value::String(id.namespace.clone()));
@@ -277,7 +257,7 @@ pub(crate) fn entity_label(entity: &pb::Entity) -> String {
     }
 }
 
-fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
+pub(crate) fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
     use pb::entity::Kind as K;
     match kind {
         K::Event(_) => pb::EntityKind::Event,
@@ -379,35 +359,6 @@ pub async fn fetch_namespace_entities(
         crate::invalid_input!("namespace {namespace:?} has no entities");
     }
     Ok(entities)
-}
-
-/// Render `entities` as manifest documents with full (unshortened)
-/// references, returning the labels of the ones that could not be rendered
-/// so callers never drop them silently.
-pub(crate) fn entities_to_docs(
-    entities: &[pb::Entity],
-    types: &TranscodePool,
-) -> (Vec<Value>, Vec<String>) {
-    let mut docs = Vec::new();
-    let mut skipped = Vec::new();
-    for entity in entities {
-        match entity_to_canonical_doc(entity, types) {
-            Ok((_, _, doc)) => docs.push(doc),
-            Err(err) => skipped.push(format!("{}: {err:#}", entity_label(entity))),
-        }
-    }
-    (docs, skipped)
-}
-
-/// Fetch every entity version in `namespace` as manifest documents with
-/// full references, plus the labels of entities that could not be rendered.
-pub async fn namespace_manifest_docs(
-    client: &mut Client,
-    namespace: &str,
-) -> Result<(Vec<Value>, Vec<String>)> {
-    let entities = fetch_namespace_entities(client, namespace).await?;
-    let types = namespace_types(client, namespace).await?;
-    Ok(entities_to_docs(&entities, &types))
 }
 
 pub(crate) fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {

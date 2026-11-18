@@ -1,7 +1,0 @@
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0542"
-reason = "humantime is unmaintained with no patched release; object_store pulls it in for duration parsing and has no alternative yet."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0543"
-reason = "chrono is unmaintained with no patched release; used for timestamps across the workspace."

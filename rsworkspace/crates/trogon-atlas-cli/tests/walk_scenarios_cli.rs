@@ -4,7 +4,10 @@
 // tests run the compiled binary against the client crate's walk fixtures
 // without a server.
 
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn walk_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -12,18 +15,22 @@ fn walk_fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn walk(extra: &[&str]) -> std::process::Output {
+fn walk_cases(cases: &Path, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_trogon-atlas"))
         .args(extra)
         .arg("walk-scenarios")
         .arg("-f")
         .arg(walk_fixture("model.yaml"))
         .arg("--cases")
-        .arg(walk_fixture("cases.yaml"))
+        .arg(cases)
         // An unreachable endpoint proves the offline walk never connects.
         .env("TROGON_ATLAS_ENDPOINT", "http://127.0.0.1:1")
         .output()
         .unwrap()
+}
+
+fn walk(extra: &[&str]) -> std::process::Output {
+    walk_cases(&walk_fixture("cases.yaml"), extra)
 }
 
 #[test]
@@ -59,13 +66,6 @@ fn a_malformed_case_file_is_a_validation_failure() {
         "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: Specification\nmetadata: {namespace: n, name: c}\nspec: {stepz: []}\n",
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_trogon-atlas"))
-        .arg("walk-scenarios")
-        .arg("-f")
-        .arg(walk_fixture("model.yaml"))
-        .arg("--cases")
-        .arg(&bad)
-        .output()
-        .unwrap();
+    let out = walk_cases(&bad, &[]);
     assert_eq!(out.status.code(), Some(5), "{out:?}");
 }

@@ -5615,30 +5615,28 @@ impl McpServer {
         Parameters(p): Parameters<WalkScenariosParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let cases = trogon_atlas_client::walk::parse_cases(&p.cases_yaml, "walk_scenarios")
-            .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+            .map_err(mcp_error_data)?;
         let mut client = self.client();
         let (model, skipped) = if let Some(manifests) = &p.manifests_yaml {
             let documents = trogon_atlas_client::manifest::read_str(manifests, "walk_scenarios")
-                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+                .map_err(mcp_error_data)?;
             let resolved =
                 trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
                     .await
-                    .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+                    .map_err(mcp_error_data)?;
             let entities: Vec<pb::Entity> =
                 resolved.manifests.into_iter().map(|m| m.entity).collect();
             trogon_atlas_client::walk::Model::from_entities(&entities, &resolved.types)
         } else {
             trogon_atlas_client::walk::Model::fetch(&mut client, &p.namespaces, &cases)
                 .await
-                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?
+                .map_err(mcp_error_data)?
         };
         let report = trogon_atlas_client::walk::walk(&model, &cases);
         let mut body = serde_json::to_value(&report)
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         body["skipped"] = serde_json::json!(skipped);
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            body.to_string(),
-        )]))
+        Ok(json_result(&body))
     }
 
     #[tool(

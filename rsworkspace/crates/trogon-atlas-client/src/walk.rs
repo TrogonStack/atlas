@@ -30,23 +30,28 @@
 //!
 //! Findings use the validation finding shape (severity, code, message,
 //! subject, subject field, rule context) plus the case and step that
-//! produced them. The walker reads manifest JSON (what `export` writes and
-//! `apply` reads), so it runs offline against manifest files or against a
-//! namespace fetched from the live store.
+//! produced them. The walker reads each entity's proto JSON, so it runs
+//! offline against manifest files or against a namespace fetched from the
+//! live store.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
     path::PathBuf,
 };
 
 use anyhow::{anyhow, Context as _, Result};
+use pb::EntityKind as K;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 
-use crate::{client::Client, export, manifest};
+use crate::{
+    client::Client,
+    export, manifest,
+    tenant_types::{self, TypeScope},
+};
 
 /// Manifest `kind` of a case document.
 pub const SPECIFICATION_KIND: &str = "Specification";
@@ -63,7 +68,7 @@ const DERIVED_TYPE_SUFFIX: &str = "trogonatlas.eventmodel.v1alpha1.DerivedFieldA
 
 /// Severity, rendered the way `ValidationIssue.Severity` renders in proto
 /// JSON.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Severity {
     #[serde(rename = "SEVERITY_INFO")]
     Info,
@@ -95,10 +100,10 @@ pub struct WalkRule {
 
 macro_rules! rules {
     ($($ident:ident = $code:literal, $sev:ident, $title:literal, $doc:literal;)*) => {
-        $(const $ident: &str = $code;)*
+        $(const $ident: &WalkRule = &WalkRule { code: $code, default_severity: Severity::$sev, title: $title, doc: $doc };)*
         /// Every code the walker can emit.
         pub const RULES: &[WalkRule] = &[
-            $(WalkRule { code: $code, default_severity: Severity::$sev, title: $title, doc: $doc },)*
+            $(*$ident,)*
         ];
     };
 }
@@ -150,10 +155,6 @@ rules! {
         "No case step matched this slice scenario.";
 }
 
-fn rule(code: &str) -> &'static WalkRule {
-    RULES.iter().find(|r| r.code == code).unwrap_or(&RULES[0])
-}
-
 // ---------------------------------------------------------------------------
 // Findings and report
 // ---------------------------------------------------------------------------
@@ -172,14 +173,14 @@ impl fmt::Display for Key {
 }
 
 /// `ValidationIssue.subject`: an `EntityRef` in proto JSON form.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Subject {
     pub kind: String,
     pub id: Key,
 }
 
 /// One finding, in the `ValidationIssue` shape plus the case location.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WalkFinding {
     pub severity: Severity,
@@ -201,8 +202,7 @@ pub struct WalkFinding {
 }
 
 impl WalkFinding {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        let r = rule(code);
+    fn new(r: &'static WalkRule, message: impl Into<String>) -> Self {
         Self {
             severity: r.default_severity,
             code: r.code,
@@ -217,15 +217,15 @@ impl WalkFinding {
         }
     }
 
-    fn subject(mut self, kind: &str, key: &Key) -> Self {
+    fn subject(mut self, kind: K, key: &Key) -> Self {
         self.subject = Some(Subject {
-            kind: entity_kind_enum(kind),
+            kind: kind.as_str_name().to_string(),
             id: key.clone(),
         });
         self
     }
 
-    fn schema_field(self, kind: &str, key: &Key, name: &str) -> Self {
+    fn schema_field(self, kind: K, key: &Key, name: &str) -> Self {
         self.subject(kind, key)
             .field(format!("schema.fields[{name}]"))
     }
@@ -291,37 +291,29 @@ impl WalkReport {
 // Model
 // ---------------------------------------------------------------------------
 
-/// Manifest specs keyed by manifest kind, then exact id. Refs resolve to
+/// Entity bodies (proto JSON) keyed by kind, then exact id. Refs resolve to
 /// the exact version they pin; iteration over "live" entities sees only the
 /// latest version of each slug, so a superseded slice never projects.
 #[derive(Debug, Default, Clone)]
 pub struct Model {
-    docs: BTreeMap<String, BTreeMap<Key, Value>>,
+    docs: BTreeMap<K, BTreeMap<Key, Value>>,
     /// Per kind, the latest version of every slug; built once.
-    live: BTreeMap<String, Vec<Key>>,
+    live: BTreeMap<K, Vec<Key>>,
 }
 
 impl Model {
-    /// Build from manifest documents (`{kind, metadata, spec}` JSON).
-    pub fn from_manifest_docs(docs: impl IntoIterator<Item = Value>) -> Result<Self> {
+    /// Build from stored or parsed entities. Entities that cannot be
+    /// rendered are returned by label, never dropped silently.
+    pub fn from_entities(entities: &[pb::Entity], types: &TranscodePool) -> (Self, Vec<String>) {
         let mut model = Model::default();
-        for mut doc in docs {
-            let kind = doc
-                .get("kind")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("manifest document has no kind"))?
-                .to_string();
-            let meta = doc.get("metadata").unwrap_or(&Value::Null);
-            let key = Key {
-                namespace: str_at(meta, "namespace").to_string(),
-                slug: str_at(meta, "name").to_string(),
-                version: meta.get("version").and_then(as_u64).unwrap_or(1),
-            };
-            let spec = doc
-                .as_object_mut()
-                .and_then(|d| d.remove("spec"))
-                .unwrap_or(Value::Null);
-            model.docs.entry(kind).or_default().insert(key, spec);
+        let mut skipped = Vec::new();
+        for entity in entities {
+            match entity_body(entity, types) {
+                Ok((kind, key, body)) => {
+                    model.docs.entry(kind).or_default().insert(key, body);
+                }
+                Err(err) => skipped.push(format!("{}: {err:#}", export::entity_label(entity))),
+            }
         }
         for (kind, entities) in &model.docs {
             // Keys sort by (namespace, slug, version): the last of each
@@ -335,18 +327,8 @@ impl Model {
                     _ => latest.push(key.clone()),
                 }
             }
-            model.live.insert(kind.clone(), latest);
+            model.live.insert(*kind, latest);
         }
-        Ok(model)
-    }
-
-    /// Build from stored or parsed entities, rendered the way `export`
-    /// renders them. Entities that cannot be rendered are returned by
-    /// label, never dropped silently.
-    pub fn from_entities(entities: &[pb::Entity], types: &TranscodePool) -> (Self, Vec<String>) {
-        let (docs, skipped) = export::entities_to_docs(entities, types);
-        // Every doc came out of entity_to_manifest, so each has a kind.
-        let model = Self::from_manifest_docs(docs).unwrap_or_default();
         (model, skipped)
     }
 
@@ -374,39 +356,39 @@ impl Model {
         } else {
             namespaces.iter().map(String::as_str).collect()
         };
-        let mut docs = Vec::new();
-        let mut skipped = Vec::new();
+        let mut scope = TypeScope::default();
+        let mut entities = Vec::new();
         for namespace in namespaces {
             trogon_atlas_core::validate_id_component(namespace).map_err(|e| {
                 crate::failure::invalid_input(format!("namespace {namespace:?}: {e}"))
             })?;
-            let (ns_docs, ns_skipped) = export::namespace_manifest_docs(client, namespace).await?;
-            docs.extend(ns_docs);
-            skipped.extend(ns_skipped);
+            scope.add_namespace(namespace);
+            entities.extend(export::fetch_namespace_entities(client, namespace).await?);
         }
-        Ok((Self::from_manifest_docs(docs)?, skipped))
+        let types = tenant_types::transcode_pool(client, &scope).await?;
+        Ok(Self::from_entities(&entities, &types))
     }
 
-    fn get(&self, kind: &str, key: &Key) -> Option<&Value> {
-        self.docs.get(kind)?.get(key)
+    fn get(&self, kind: K, key: &Key) -> Option<&Value> {
+        self.docs.get(&kind)?.get(key)
     }
 
-    fn latest_version(&self, kind: &str, namespace: &str, slug: &str) -> Option<u64> {
+    fn latest_version(&self, kind: K, namespace: &str, slug: &str) -> Option<u64> {
         let bound = |version| Key {
             namespace: namespace.to_string(),
             slug: slug.to_string(),
             version,
         };
         self.docs
-            .get(kind)?
+            .get(&kind)?
             .range(bound(0)..=bound(u64::MAX))
             .next_back()
             .map(|(key, _)| key.version)
     }
 
     /// Latest version of every entity of `kind`.
-    fn live(&self, kind: &str) -> Vec<(&Key, &Value)> {
-        let (Some(keys), Some(docs)) = (self.live.get(kind), self.docs.get(kind)) else {
+    fn live(&self, kind: K) -> Vec<(&Key, &Value)> {
+        let (Some(keys), Some(docs)) = (self.live.get(&kind), self.docs.get(&kind)) else {
             return Vec::new();
         };
         keys.iter()
@@ -415,12 +397,12 @@ impl Model {
     }
 
     /// Resolve a case ref (`slug`, `ns/slug`, `ns/slug@v`) against `kinds`.
-    fn resolve(&self, kinds: &[&str], reference: &str, default_ns: &str) -> Option<(String, Key)> {
+    fn resolve(&self, kinds: &[K], reference: &str, default_ns: &str) -> Option<(K, Key)> {
         let (namespace, slug, version) = split_ref(reference, default_ns);
         for kind in kinds {
             let version = match version {
                 Some(v) => v,
-                None => match self.latest_version(kind, &namespace, &slug) {
+                None => match self.latest_version(*kind, &namespace, &slug) {
                     Some(v) => v,
                     None => continue,
                 },
@@ -430,8 +412,8 @@ impl Model {
                 slug: slug.clone(),
                 version,
             };
-            if self.get(kind, &key).is_some() {
-                return Some(((*kind).to_string(), key));
+            if self.get(*kind, &key).is_some() {
+                return Some((*kind, key));
             }
         }
         None
@@ -441,7 +423,7 @@ impl Model {
     /// namespace that is not loaded) still yields a key, so `given` can
     /// carry upstream events that read-model slices project.
     fn event_key(&self, reference: &str, default_ns: &str) -> Key {
-        if let Some((_, key)) = self.resolve(&["Event"], reference, default_ns) {
+        if let Some((_, key)) = self.resolve(&[K::Event], reference, default_ns) {
             return key;
         }
         let (namespace, slug, version) = split_ref(reference, default_ns);
@@ -451,6 +433,27 @@ impl Model {
             version: version.unwrap_or(1),
         }
     }
+}
+
+/// An entity's kind, exact id and proto-JSON body (references unshortened).
+fn entity_body(entity: &pb::Entity, types: &TranscodePool) -> Result<(K, Key, Value)> {
+    let kind = entity
+        .kind
+        .as_ref()
+        .map(export::entity_kind_of)
+        .ok_or_else(|| anyhow!("entity has no kind"))?;
+    let Value::Object(envelope) = types.entity_json_value(entity)? else {
+        return Err(anyhow!("entity rendered as non-object JSON"));
+    };
+    let body = envelope
+        .into_iter()
+        .find_map(|(field, body)| (field != "system").then_some(body))
+        .ok_or_else(|| anyhow!("entity JSON has no body"))?;
+    let key = body
+        .get("id")
+        .and_then(id_key)
+        .ok_or_else(|| anyhow!("entity body has no id"))?;
+    Ok((kind, key, body))
 }
 
 fn split_ref(reference: &str, default_ns: &str) -> (String, String, Option<u64>) {
@@ -463,12 +466,6 @@ fn split_ref(reference: &str, default_ns: &str) -> (String, String, Option<u64>)
         None => (default_ns.to_string(), path.to_string()),
     };
     (namespace, slug, version)
-}
-
-fn entity_kind_enum(manifest_kind: &str) -> String {
-    pb::canonical::parse_kind(manifest_kind)
-        .map_or("ENTITY_KIND_UNSPECIFIED", |k| k.as_str_name())
-        .to_string()
 }
 
 // --- JSON accessors over manifest specs ---
@@ -809,15 +806,8 @@ fn count(findings: &[WalkFinding], severity: Severity) -> usize {
 }
 
 fn dedup(findings: &mut Vec<WalkFinding>) {
-    let mut seen = Vec::new();
-    findings.retain(|f| {
-        if seen.contains(f) {
-            false
-        } else {
-            seen.push(f.clone());
-            true
-        }
-    });
+    let mut seen = HashSet::new();
+    findings.retain(|f| seen.insert(f.clone()));
 }
 
 struct CaseRun<'a> {
@@ -853,7 +843,7 @@ impl CaseRun<'_> {
             let Some(rm) = self.read_model(&rows.read_model, "given.readModels") else {
                 continue;
             };
-            let key_fields = rm_key_fields(self.model.get("ReadModel", &rm));
+            let key_fields = rm_key_fields(self.model.get(K::ReadModel, &rm));
             let table = self.rows.entry(rm).or_default();
             for (i, row) in rows.rows.iter().enumerate() {
                 let id = row_id(&key_fields, row).unwrap_or_else(|| format!("given#{i}"));
@@ -862,7 +852,8 @@ impl CaseRun<'_> {
         }
         for event in &case.spec.given.events {
             let key = self.model.event_key(&event.event, self.ns());
-            self.record(&key, &event.payload);
+            let stream = self.event_stream(&key, &event.payload);
+            self.record(&key, &event.payload, stream);
         }
         for (i, step) in case.spec.steps.iter().enumerate() {
             self.step = Some(i + 1);
@@ -878,7 +869,7 @@ impl CaseRun<'_> {
     }
 
     fn read_model(&mut self, reference: &str, field: &str) -> Option<Key> {
-        if let Some((_, key)) = self.model.resolve(&["ReadModel"], reference, self.ns()) {
+        if let Some((_, key)) = self.model.resolve(&[K::ReadModel], reference, self.ns()) {
             return Some(key);
         }
         self.push(
@@ -901,7 +892,7 @@ impl CaseRun<'_> {
         };
         let template = self
             .model
-            .get("Swimlane", lane)
+            .get(K::Swimlane, lane)
             .map(|s| str_at(s, "streamId").to_string())
             .unwrap_or_default();
         if template.is_empty() {
@@ -937,14 +928,14 @@ impl CaseRun<'_> {
                         missing.join(", ")
                     ),
                 )
-                .subject("Swimlane", &lane)
+                .subject(K::Swimlane, &lane)
                 .field("stream_id"),
             );
         }
         format!("{lane}:{resolved}")
     }
 
-    fn lane_of(&self, kind: &str, key: &Key) -> Option<Key> {
+    fn lane_of(&self, kind: K, key: &Key) -> Option<Key> {
         self.model
             .get(kind, key)
             .and_then(|spec| spec.get("swimlane"))
@@ -957,9 +948,13 @@ impl CaseRun<'_> {
 
     // --- projection ---
 
-    fn record(&mut self, event: &Key, payload: &Map<String, Value>) {
-        let lane = self.lane_of("Event", event);
-        let stream = self.stream_of(lane.as_ref(), payload);
+    /// Stream instance an event with this payload lands on.
+    fn event_stream(&mut self, event: &Key, payload: &Map<String, Value>) -> String {
+        let lane = self.lane_of(K::Event, event);
+        self.stream_of(lane.as_ref(), payload)
+    }
+
+    fn record(&mut self, event: &Key, payload: &Map<String, Value>, stream: String) {
         self.log.push(Recorded {
             event: event.clone(),
             payload: payload.clone(),
@@ -970,7 +965,7 @@ impl CaseRun<'_> {
 
     fn project(&mut self, event: &Key, payload: &Map<String, Value>) {
         let model = self.model;
-        for (slice_key, slice) in model.live("ReadModelSlice") {
+        for (slice_key, slice) in model.live(K::ReadModelSlice) {
             let projects = arr(slice, "sourceEvents")
                 .iter()
                 .any(|e| edge_key(e, "event").as_ref() == Some(event));
@@ -981,7 +976,7 @@ impl CaseRun<'_> {
                 continue;
             };
             self.touched.slices.insert(slice_key.clone());
-            let rm_spec = model.get("ReadModel", &rm);
+            let rm_spec = model.get(K::ReadModel, &rm);
             let key_fields = rm_key_fields(rm_spec);
             let Some(id) = row_id(&key_fields, payload) else {
                 let missing: Vec<&str> = key_fields
@@ -997,7 +992,7 @@ impl CaseRun<'_> {
                             missing.join(", ")
                         ),
                     )
-                    .subject("ReadModelSlice", slice_key)
+                    .subject(K::ReadModelSlice, slice_key)
                     .field("read_model"),
                 );
                 continue;
@@ -1071,7 +1066,7 @@ impl CaseRun<'_> {
                             missing.join(", ")
                         ),
                     )
-                    .subject("ReadModelSlice", slice_key)
+                    .subject(K::ReadModelSlice, slice_key)
                     .field(format!("scenarios[{scenario_id}].then")),
                 );
             }
@@ -1090,7 +1085,7 @@ impl CaseRun<'_> {
         if let Some(problem) = rows_mismatch(&expected.rows, &actual) {
             self.push(
                 WalkFinding::new(READ_MODEL_MISMATCH, format!("{rm}: {problem}"))
-                    .subject("ReadModel", &rm)
+                    .subject(K::ReadModel, &rm)
                     .field(field),
             );
         }
@@ -1100,7 +1095,7 @@ impl CaseRun<'_> {
 
     fn run_step(&mut self, step: &Step) {
         let model = self.model;
-        let Some((_, command)) = model.resolve(&["Command"], &step.command, self.ns()) else {
+        let Some((_, command)) = model.resolve(&[K::Command], &step.command, self.ns()) else {
             self.push(
                 WalkFinding::new(
                     REF_UNRESOLVED,
@@ -1120,7 +1115,7 @@ impl CaseRun<'_> {
             );
             return;
         }
-        let Some((slice_key, slice)) = model.live("CommandSlice").into_iter().find(|(_, s)| {
+        let Some((slice_key, slice)) = model.live(K::CommandSlice).into_iter().find(|(_, s)| {
             s.get("command")
                 .and_then(|e| edge_key(e, "command"))
                 .as_ref()
@@ -1131,7 +1126,7 @@ impl CaseRun<'_> {
                     COMMAND_UNHANDLED,
                     format!("no command slice handles {command}"),
                 )
-                .subject("Command", &command),
+                .subject(K::Command, &command),
             );
             return;
         };
@@ -1140,15 +1135,16 @@ impl CaseRun<'_> {
 
         let values = self.command_values(step, &command, slice);
 
-        let lane = self.lane_of("Command", &command);
+        let lane = self.lane_of(K::Command, &command);
         let stream = self.stream_of(lane.as_ref(), &values);
         let Some(emitted) = self.decide(step, &command, &slice_key, slice, &values, &stream) else {
             return;
         };
         for event in emitted {
             let payload = self.event_payload(&event, &command, &values, &step.answer, &stream);
-            self.check_lifecycle(&event, &payload, &command, &slice_key);
-            self.record(&event, &payload);
+            let event_stream = self.event_stream(&event, &payload);
+            self.check_lifecycle(&event, &event_stream, &command, &slice_key);
+            self.record(&event, &payload, event_stream);
         }
     }
 
@@ -1156,22 +1152,22 @@ impl CaseRun<'_> {
     fn command_values(&mut self, step: &Step, command: &Key, slice: &Value) -> Map<String, Value> {
         let model = self.model;
         // Who issues the command, and which read models they observe.
-        let mut issuers: Vec<(&str, Key, Vec<Key>)> = Vec::new();
-        for (key, auto) in model.live("AutomationSlice") {
+        let mut issuers: Vec<(K, Key, Vec<Key>)> = Vec::new();
+        for (key, auto) in model.live(K::AutomationSlice) {
             if edge_at(auto, "emittedCommand", "command").as_ref() == Some(command) {
-                issuers.push(("AutomationSlice", key.clone(), source_rms(auto)));
+                issuers.push((K::AutomationSlice, key.clone(), source_rms(auto)));
             }
         }
         if let Some(ui) = edge_at(slice, "ui", "ui") {
-            for (key, ui_slice) in model.live("UiSlice") {
+            for (key, ui_slice) in model.live(K::UiSlice) {
                 if edge_at(ui_slice, "ui", "ui").as_ref() == Some(&ui) {
-                    issuers.push(("UiSlice", key.clone(), source_rms(ui_slice)));
+                    issuers.push((K::UiSlice, key.clone(), source_rms(ui_slice)));
                 }
             }
         }
         if let Some(via) = &step.via {
             if let Some((_, via_key)) =
-                model.resolve(&["AutomationSlice", "UiSlice"], via, self.ns())
+                model.resolve(&[K::AutomationSlice, K::UiSlice], via, self.ns())
             {
                 issuers.retain(|(_, key, _)| *key == via_key);
             } else {
@@ -1196,7 +1192,7 @@ impl CaseRun<'_> {
                 if !observed.contains(rm) {
                     observed.push(rm.clone());
                 }
-                let key_fields = rm_key_fields(model.get("ReadModel", rm));
+                let key_fields = rm_key_fields(model.get(K::ReadModel, rm));
                 let rows: Vec<&Map<String, Value>> = self
                     .rows
                     .get(rm)
@@ -1241,12 +1237,12 @@ impl CaseRun<'_> {
                     }
                 }
             }
-            if *issuer_kind == "AutomationSlice" {
+            if *issuer_kind == K::AutomationSlice {
                 self.mark_automation_scenarios(issuer, command);
             }
         }
 
-        let Some(fields) = model.get("Command", command).and_then(schema_fields) else {
+        let Some(fields) = model.get(K::Command, command).and_then(schema_fields) else {
             return answer.clone();
         };
         let mut values = Map::new();
@@ -1275,7 +1271,7 @@ impl CaseRun<'_> {
                             COMMAND_FIELD_CONFLICT,
                             format!("{command} field {name:?} gets {}", all.join(" but ")),
                         )
-                        .schema_field("Command", command, name),
+                        .schema_field(K::Command, command, name),
                     );
                 }
                 // The answer is the last word: it is what the issuer sent.
@@ -1291,7 +1287,7 @@ impl CaseRun<'_> {
                             "{command} field {name:?}: several rows of {rm} match and disagree; put {rm}'s key in the step's answer to pick one"
                         ),
                     )
-                    .schema_field("Command", command, name),
+                    .schema_field(K::Command, command, name),
                 );
                 continue;
             }
@@ -1309,7 +1305,7 @@ impl CaseRun<'_> {
                     .iter()
                     .filter(|rm| {
                         model
-                            .get("ReadModel", rm)
+                            .get(K::ReadModel, rm)
                             .and_then(schema_fields)
                             .is_some_and(|fs| fs.iter().any(|f| f.name == *name))
                     })
@@ -1335,14 +1331,14 @@ impl CaseRun<'_> {
                         "{command} needs {name:?}, but {why}, and the step's answer does not supply it"
                     ),
                 )
-                .schema_field("Command", command, name),
+                .schema_field(K::Command, command, name),
             );
         }
         values
     }
 
     fn mark_automation_scenarios(&mut self, auto_key: &Key, command: &Key) {
-        let Some(auto) = self.model.get("AutomationSlice", auto_key) else {
+        let Some(auto) = self.model.get(K::AutomationSlice, auto_key) else {
             return;
         };
         for scenario in arr(auto, "scenarios") {
@@ -1417,7 +1413,7 @@ impl CaseRun<'_> {
                             "the case expects {command} to be refused after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it"
                         ),
                     )
-                    .subject("CommandSlice", slice_key)
+                    .subject(K::CommandSlice, slice_key)
                     .field("scenarios"),
                 );
                 return None;
@@ -1437,7 +1433,7 @@ impl CaseRun<'_> {
                             "scenario {id:?} of {slice_key} refuses {command} with {code:?}, the case expects {reason:?}"
                         ),
                     )
-                    .subject("CommandSlice", slice_key)
+                    .subject(K::CommandSlice, slice_key)
                     .field(format!("scenarios[{id}].reject")),
                 );
             }
@@ -1453,7 +1449,7 @@ impl CaseRun<'_> {
                             "the case expects {command} to emit events after {history_label}, but scenario {id:?} of {slice_key} refuses it ({code})"
                         ),
                     )
-                    .subject("CommandSlice", slice_key)
+                    .subject(K::CommandSlice, slice_key)
                     .field(format!("scenarios[{id}].reject")),
                 );
                 return None;
@@ -1467,7 +1463,7 @@ impl CaseRun<'_> {
                             EVENT_NOT_EMITTED_BY_SLICE,
                             format!("the case expects {key}, which {slice_key} does not emit"),
                         )
-                        .subject("CommandSlice", slice_key)
+                        .subject(K::CommandSlice, slice_key)
                         .field("emitted_events"),
                     );
                 }
@@ -1486,7 +1482,7 @@ impl CaseRun<'_> {
                             keys.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                         ),
                     )
-                    .subject("CommandSlice", slice_key)
+                    .subject(K::CommandSlice, slice_key)
                     .field("scenarios"),
                 ),
             }
@@ -1512,7 +1508,7 @@ impl CaseRun<'_> {
                         "no scenario on {slice_key} covers {command} after {history_label}; walking its only emitted event {only}"
                     ),
                 )
-                .subject("CommandSlice", slice_key)
+                .subject(K::CommandSlice, slice_key)
                 .field("scenarios"),
             );
             return Some(vec![only.clone()]);
@@ -1525,7 +1521,7 @@ impl CaseRun<'_> {
                     declared.len()
                 ),
             )
-            .subject("CommandSlice", slice_key)
+            .subject(K::CommandSlice, slice_key)
             .field("scenarios"),
         );
         None
@@ -1547,28 +1543,25 @@ impl CaseRun<'_> {
         stream: &str,
     ) -> Map<String, Value> {
         let model = self.model;
-        let Some(fields) = model.get("Event", event).and_then(schema_fields) else {
+        let Some(fields) = model.get(K::Event, event).and_then(schema_fields) else {
             return values.clone();
         };
         // A command field the walk could not supply was already reported
         // against the command; do not report it again on the event.
         let command_fields: Vec<String> = model
-            .get("Command", command)
+            .get(K::Command, command)
             .and_then(schema_fields)
             .map(|fs| fs.into_iter().map(|f| f.name).collect())
             .unwrap_or_default();
-        let lane = self.lane_of("Event", event);
+        let lane = self.lane_of(K::Event, event);
         let state: Vec<Field> = lane
             .as_ref()
-            .and_then(|l| model.get("Swimlane", l))
+            .and_then(|l| model.get(K::Swimlane, l))
             .map(|s| field_specs(arr(s, "state")))
             .unwrap_or_default();
-        let earlier: Vec<Map<String, Value>> = self
-            .history(stream)
-            .into_iter()
-            .map(|r| r.payload.clone())
-            .collect();
+        let earlier = self.history(stream);
         let mut payload = Map::new();
+        let mut unsourced = Vec::new();
         for field in fields {
             let name = &field.name;
             let is_state = state.iter().any(|s| s.name == *name);
@@ -1578,41 +1571,38 @@ impl CaseRun<'_> {
                 // Aggregate state is set by the runtime; the step's answer
                 // is where a case states what the runtime decided.
                 payload.insert(name.clone(), v.clone());
-            } else if let Some(v) = earlier.iter().rev().find_map(|p| p.get(name)) {
+            } else if let Some(v) = earlier.iter().rev().find_map(|r| r.payload.get(name)) {
                 payload.insert(name.clone(), v.clone());
             } else if is_state {
                 payload.insert(name.clone(), Value::String(format!("<state:{name}>")));
             } else if let Some(kind) = &field.derived {
                 payload.insert(name.clone(), derived_placeholder(kind));
             } else if !field.optional && !command_fields.contains(name) {
-                self.push(
-                    WalkFinding::new(
-                        EVENT_FIELD_UNSOURCED,
-                        format!(
-                            "{event} needs {name:?}, but {command} does not carry it, no earlier event on the stream recorded it, and the swimlane state does not declare it"
-                        ),
-                    )
-                    .schema_field("Event", event, name),
-                );
+                unsourced.push(field.name);
             }
+        }
+        for name in unsourced {
+            self.push(
+                WalkFinding::new(
+                    EVENT_FIELD_UNSOURCED,
+                    format!(
+                        "{event} needs {name:?}, but {command} does not carry it, no earlier event on the stream recorded it, and the swimlane state does not declare it"
+                    ),
+                )
+                .schema_field(K::Event, event, &name),
+            );
         }
         payload
     }
 
     /// Checks 1 and 5: the event must be a legal successor of the stream's
     /// previous lifecycle event.
-    fn check_lifecycle(
-        &mut self,
-        event: &Key,
-        payload: &Map<String, Value>,
-        command: &Key,
-        slice_key: &Key,
-    ) {
+    fn check_lifecycle(&mut self, event: &Key, stream: &str, command: &Key, slice_key: &Key) {
         let model = self.model;
-        let Some(lane) = self.lane_of("Event", event) else {
+        let Some(lane) = self.lane_of(K::Event, event) else {
             return;
         };
-        let Some(lane_spec) = model.get("Swimlane", &lane) else {
+        let Some(lane_spec) = model.get(K::Swimlane, &lane) else {
             return;
         };
         let transitions: Vec<(Key, Vec<Key>)> = arr(lane_spec, "transitions")
@@ -1633,9 +1623,8 @@ impl CaseRun<'_> {
         if !in_lifecycle(event) {
             return;
         }
-        let stream = self.stream_of(Some(&lane), payload);
         let previous = self
-            .history(&stream)
+            .history(stream)
             .into_iter()
             .rev()
             .map(|r| r.event.clone())
@@ -1650,7 +1639,7 @@ impl CaseRun<'_> {
                             LIFECYCLE_START,
                             format!("{event} opens stream {stream}, but the lifecycle only reaches it as a successor"),
                         )
-                        .subject("Swimlane", &lane)
+                        .subject(K::Swimlane, &lane)
                         .field("transitions"),
                     );
                 }
@@ -1663,7 +1652,7 @@ impl CaseRun<'_> {
                             "{command} emitted {event} after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
                         ),
                     )
-                    .subject("CommandSlice", slice_key)
+                    .subject(K::CommandSlice, slice_key)
                     .field("scenarios"),
                 ),
                 Some((_, next)) if !next.contains(event) => {
@@ -1676,7 +1665,7 @@ impl CaseRun<'_> {
                                 legal.join(", ")
                             ),
                         )
-                        .subject("Swimlane", &lane)
+                        .subject(K::Swimlane, &lane)
                         .field("transitions"),
                     );
                 }
@@ -1798,7 +1787,7 @@ fn coverage(
     let mut cov = Coverage::default();
     let in_scope = |key: &Key| namespaces.contains(key.namespace.as_str());
 
-    for (key, board) in model.live("Storyboard") {
+    for (key, board) in model.live(K::Storyboard) {
         if !in_scope(key) {
             continue;
         }
@@ -1815,12 +1804,12 @@ fn coverage(
                     STORYBOARD_UNWALKED,
                     format!("no case walked storyboard {key}"),
                 )
-                .subject("Storyboard", key),
+                .subject(K::Storyboard, key),
             );
         }
     }
 
-    for kind in ["CommandSlice", "ReadModelSlice", "AutomationSlice"] {
+    for kind in [K::CommandSlice, K::ReadModelSlice, K::AutomationSlice] {
         for (key, slice) in model.live(kind) {
             if !in_scope(key) {
                 continue;

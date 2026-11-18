@@ -1,3 +1,0 @@
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0543"
-reason = "chrono is unmaintained with no patched release; used for timestamps across the workspace."
