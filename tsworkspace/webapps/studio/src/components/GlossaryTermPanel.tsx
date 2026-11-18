@@ -179,6 +179,8 @@ export function GlossaryTermPanel({
   branch?: string;
 }) {
   const term = glossaryRecord(detail.entity?.term);
+  const definition = glossaryText(term.doc);
+  const summary = glossaryText(term.summary);
   const id = exactGlossaryId(term.id);
   const glossary = glossaryRecord(term.glossary);
   const review = glossaryRecord(glossary.review);
@@ -227,9 +229,12 @@ export function GlossaryTermPanel({
           <output className="text-xs">Entry inspection is incomplete. Some dependencies may be unavailable.</output>
         ) : null}
       </div>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed">
-        {glossaryText(term.doc) || 'No definition recorded.'}
-      </p>
+      <div className="flex flex-col gap-2">
+        {summary && summary !== definition ? (
+          <p className="wrap-anywhere whitespace-pre-wrap text-sm font-medium">{summary}</p>
+        ) : null}
+        <p className="whitespace-pre-wrap text-sm leading-relaxed">{definition || 'No definition recorded.'}</p>
+      </div>
       {glossary.usagePeriod ? (
         <section aria-label="Permitted term use" className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">Permitted term use</h3>

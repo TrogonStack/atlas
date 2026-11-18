@@ -2249,6 +2249,8 @@ pub struct GlossaryIndexEntry {
     pub reason: ::prost::alloc::string::String,
     #[prost(message, optional, tag="9")]
     pub next_review_on: ::core::option::Option<super::super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(string, optional, tag="10")]
+    pub summary: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListGlossaryEntriesRequest {

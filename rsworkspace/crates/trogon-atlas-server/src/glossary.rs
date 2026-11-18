@@ -449,6 +449,7 @@ impl EventModelServiceImpl {
             owner_uid: uid(&stored.entity).into(),
             etag: stored.etag.clone(),
             title: value.title.clone(),
+            summary: value.summary.clone(),
             audience: value
                 .glossary
                 .as_ref()

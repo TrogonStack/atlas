@@ -106,6 +106,7 @@ message Term {
   trogonatlas.type.v1alpha1.Id supersedes = 6;
   DomainRef owning_domain = 7;
   GlossaryEntry glossary = 8;
+  optional string summary = 9;
 }
 
 message Ambiguity {

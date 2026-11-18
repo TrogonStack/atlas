@@ -200,6 +200,13 @@ fn selection(unreviewed: bool) -> pb::GlossarySelection {
 async fn reviewed_version_remains_published_while_a_newer_candidate_is_draft() {
     let mut client = client().await;
     let draft = candidate(&mut client, 1).await;
+    let mut entity = draft.entity.unwrap();
+    let Some(pb::entity::Kind::Term(term)) = &mut entity.kind else {
+        panic!("fixture term");
+    };
+    let summary = "An accepted customer request.";
+    term.summary = Some(summary.into());
+    let draft = put(&mut client, entity, &draft.etag).await;
     let review = client
         .review_glossary_term(request(
             pb::ReviewGlossaryTermRequest {
@@ -246,6 +253,29 @@ async fn reviewed_version_remains_published_while_a_newer_candidate_is_draft() {
     assert_eq!(
         listed.entries[0].state,
         pb::GlossaryEntryState::Reviewed as i32
+    );
+    assert_eq!(listed.entries[0].summary.as_deref(), Some(summary));
+    let mut entity = review.entity.unwrap();
+    let Some(pb::entity::Kind::Term(term)) = &mut entity.kind else {
+        panic!("reviewed term");
+    };
+    assert_eq!(term.summary.as_deref(), Some(summary));
+    term.summary = Some("A customer request awaiting acceptance.".into());
+    let edit = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(entity),
+                if_match: review.etag,
+                ..Default::default()
+            },
+            "glossary-fixture-expert",
+        ))
+        .await;
+    let error = edit.unwrap_err();
+    assert_eq!(error.code(), Code::FailedPrecondition);
+    assert_eq!(
+        error.message(),
+        "published glossary meaning is immutable; create a new version"
     );
     let drafts = client
         .list_glossary_entries(request(

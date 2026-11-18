@@ -4245,6 +4245,8 @@ pub struct Term {
     pub owning_domain: ::core::option::Option<DomainRef>,
     #[prost(message, optional, tag="8")]
     pub glossary: ::core::option::Option<GlossaryEntry>,
+    #[prost(string, optional, tag="9")]
+    pub summary: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ambiguity {

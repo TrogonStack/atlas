@@ -216,6 +216,9 @@ pub fn validate_values(entity: &pb::Entity) -> Result<()> {
 }
 
 pub fn validate_term(term: &pb::Term) -> Result<()> {
+    if let Some(summary) = &term.summary {
+        text(summary, 512, "term.summary")?;
+    }
     let Some(glossary) = &term.glossary else {
         return Ok(());
     };
