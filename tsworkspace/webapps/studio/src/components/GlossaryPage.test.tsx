@@ -143,13 +143,19 @@ describe('glossary review page', () => {
   it('previews the authored summary and opens the full definition', async () => {
     const summarizedEntry = { ...entry, summary: 'A request to fulfill a purchase.' };
     vi.mocked(listGlossaryEntries).mockResolvedValueOnce({ entries: [summarizedEntry] });
+    vi.mocked(getGlossaryTerm).mockResolvedValueOnce({
+      ...detail,
+      entity: { term: { ...detail.entity.term, summary: summarizedEntry.summary } },
+    });
     render(<GlossaryPage />);
     await chooseSales();
 
     const termButton = await screen.findByRole('button', { name: /^Order/ });
     expect(within(termButton).getByText(summarizedEntry.summary)).toBeTruthy();
     fireEvent.click(termButton);
-    expect(await screen.findByText(detail.entity.term.doc)).toBeTruthy();
+    const term = await screen.findByRole('region', { name: 'Selected glossary entry' });
+    expect(within(term).getByText(summarizedEntry.summary)).toBeTruthy();
+    expect(within(term).getByText(detail.entity.term.doc)).toBeTruthy();
   });
 
   it('inspects exact vocabulary, authoritative review/freshness, evidence and correction context without mutations', async () => {
