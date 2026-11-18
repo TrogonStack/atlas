@@ -75,14 +75,14 @@ instead of being ignored.
    read models those issuers observe, or from the step's `answer` (a `null`
    answer supplies nothing). When the answer names a read model's `key`
    fields, only rows with those key values count. Fields with a
-   `DerivedFieldAnnotation` with a stated `doc` get a placeholder (a blank `doc`
-   counts as no annotation, as in validation); optional fields may stay
-   empty. A conflicting answer still wins, and is reported. A required field
+   `DerivedFieldAnnotation` with a stated `doc` get a placeholder (a
+   blank `doc` counts as no annotation, as in validation); optional fields
+   may stay empty. A conflicting answer still wins, and is reported. A required field
    whose rows disagree, with nothing else to supply it, is an error.
 3. **Outcome.** The scenarios of every command slice that handles the
    command are matched against the stream's history, and the command
-   emits any event one of those slices lists: the scenario's `given` events must have occurred, in
-   order, among the events of the command's timeline (its own stream, plus
+   emits any event one of those slices lists: the scenario's `given`
+   events must have occurred, in order, among the events of the command's timeline (its own stream, plus
    events elsewhere that share a field with the command and agree on every
    shared field; derived and state placeholders are left out of the
    comparison), and the stream's current state (its last lifecycle event,
@@ -124,12 +124,14 @@ command's stream is filled from the command's values. An event on the
 command's swimlane lands on that stream. An event on another swimlane lands
 on the stream its own template names, filled from the command's values and
 the step's answer. Numeric placeholders are normalized, so `4` and `4.0`
-fill the same stream id. An
-entity without a swimlane is on no stream and shares no history. After all cases, storyboards and command, read-model and
-automation slice scenarios in the cases' namespaces that no case reached
-are reported as coverage findings. An automation scenario that states
-`noCommand` is not counted, because no step can issue a command for it. A storyboard counts as walked when a
-case exercised any of its slices.
+fill the same stream id. An entity without a swimlane is on no stream
+and shares no history.
+
+After all cases, storyboards and command, read-model and automation slice
+scenarios in the cases' namespaces that no case reached are reported as
+coverage findings. An automation scenario that states `noCommand` is not
+counted, because no step can issue a command for it. A storyboard counts
+as walked when a case exercised any of its slices.
 
 ## Output
 
