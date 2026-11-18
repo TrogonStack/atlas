@@ -1,5 +1,5 @@
 //! A gRPC server that answers `GetServerInfo` (and, when scripted,
-//! `BatchGetEntities` or `ValidateProject`) with fixed responses and records every call, so tests
+//! `BatchGetEntities`, `ListEntities` or `ValidateProject`) with fixed responses and records every call, so tests
 //! can pose as a server of another version and prove a client refused before
 //! sending a mutation, or that a read still works against it.
 
@@ -16,6 +16,8 @@ const GET_SERVER_INFO_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetServerInfo";
 const BATCH_GET_ENTITIES_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities";
+const LIST_ENTITIES_PATH: &str =
+    "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntities";
 const VALIDATE_PROJECT_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ValidateProject";
 
@@ -29,6 +31,7 @@ struct DiscoveryOnlyService {
 #[derive(Clone, Default)]
 struct Scripts {
     entities: Option<pb::BatchGetEntitiesResponse>,
+    list_entities: Option<pb::ListEntitiesResponse>,
     validate_project: Option<pb::ValidateProjectResponse>,
 }
 
@@ -56,6 +59,15 @@ where
             .unwrap_or_else(PoisonError::into_inner)
             .push(path.clone());
         let scripted = &self.scripted;
+        if let (LIST_ENTITIES_PATH, Some(list)) = (path.as_str(), &scripted.list_entities) {
+            let list = list.clone();
+            return Box::pin(async move {
+                let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+                Ok(grpc
+                    .unary(Scripted::<pb::ListEntitiesRequest, _>::new(list), req)
+                    .await)
+            });
+        }
         match (
             path.as_str(),
             &scripted.entities,
@@ -152,6 +164,26 @@ impl DiscoveryOnlyServer {
             info,
             Scripts {
                 entities: Some(entities),
+                ..Scripts::default()
+            },
+        )
+        .await
+    }
+
+    /// Like [`Self::start_serving_entities`], but also answer `ListEntities`
+    /// with `list`, so a client can be shown a listing (say, a truncated
+    /// one) a real server would only produce under conditions a test cannot
+    /// cheaply arrange.
+    pub async fn start_serving_listing(
+        info: pb::GetServerInfoResponse,
+        entities: pb::BatchGetEntitiesResponse,
+        list: pb::ListEntitiesResponse,
+    ) -> Result<Self, String> {
+        Self::start_scripted(
+            info,
+            Scripts {
+                entities: Some(entities),
+                list_entities: Some(list),
                 ..Scripts::default()
             },
         )

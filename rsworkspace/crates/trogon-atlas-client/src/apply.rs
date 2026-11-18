@@ -204,6 +204,10 @@ pub async fn plan(
         .collect()
 }
 
+/// Most keys one `BatchGetEntities` call may carry (the server's advertised
+/// `max_batch_get_keys`).
+const MAX_BATCH_GET_KEYS: usize = 500;
+
 /// `LoadedManifest.source` of a pruned entity: it comes from the live store,
 /// not from any manifest file.
 pub const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
@@ -249,42 +253,47 @@ pub async fn plan_with_prune(
         return Ok(changes);
     }
 
-    // Read each one back for the revision that guards its delete.
-    let keys = undeclared
-        .iter()
-        .map(|(kind, id)| pb::EntityRef {
-            kind: *kind as i32,
-            id: Some(id.clone()),
-        })
-        .collect();
-    let resp = client
-        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-        .await
-        .context("BatchGetEntities failed")?
-        .into_inner();
-    if resp.found.len() != undeclared.len() || resp.entities.len() != undeclared.len() {
-        bail!(
-            "server returned {} entities / {} found flags for {} keys",
-            resp.entities.len(),
-            resp.found.len(),
-            undeclared.len()
-        );
-    }
-    let etags = if resp.etags.is_empty() {
-        vec![String::new(); undeclared.len()]
-    } else {
-        resp.etags
-    };
-    if etags.len() != undeclared.len() {
-        bail!(
-            "server returned {} etags for {} keys",
-            etags.len(),
-            undeclared.len()
-        );
+    // Read each one back for the revision that guards its delete, in
+    // chunks the server accepts.
+    let (mut entities, mut found, mut etags) = (Vec::new(), Vec::new(), Vec::new());
+    for chunk in undeclared.chunks(MAX_BATCH_GET_KEYS) {
+        let keys = chunk
+            .iter()
+            .map(|(kind, id)| pb::EntityRef {
+                kind: *kind as i32,
+                id: Some(id.clone()),
+            })
+            .collect();
+        let resp = client
+            .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
+            .await
+            .context("BatchGetEntities failed")?
+            .into_inner();
+        if resp.found.len() != chunk.len() || resp.entities.len() != chunk.len() {
+            bail!(
+                "server returned {} entities / {} found flags for {} keys",
+                resp.entities.len(),
+                resp.found.len(),
+                chunk.len()
+            );
+        }
+        if resp.etags.is_empty() {
+            etags.extend(std::iter::repeat_n(String::new(), chunk.len()));
+        } else if resp.etags.len() == chunk.len() {
+            etags.extend(resp.etags);
+        } else {
+            bail!(
+                "server returned {} etags for {} keys",
+                resp.etags.len(),
+                chunk.len()
+            );
+        }
+        entities.extend(resp.entities);
+        found.extend(resp.found);
     }
     for ((kind, id), ((entity, found), etag)) in undeclared
         .into_iter()
-        .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
+        .zip(entities.into_iter().zip(found).zip(etags))
     {
         // Deleted between the listing and the read: nothing left to prune.
         if !found {
@@ -329,6 +338,12 @@ async fn list_namespace(client: &mut Client, namespace: &str) -> Result<Vec<pb::
             .await
             .context("ListEntities failed")?
             .into_inner();
+        // A partial listing would silently skip prunes, so refuse it.
+        if resp.snapshot_truncated {
+            crate::invalid_input!(
+                "cannot prune namespace {namespace:?}: the server snapshot exceeds its entity cap, so the namespace cannot be listed completely"
+            );
+        }
         entities.extend(resp.entities);
         if resp.next_page_token.is_empty() {
             return Ok(entities);

@@ -352,3 +352,76 @@ async fn prune_on_a_branch_leaves_baseline_untouched() {
         .await
     );
 }
+
+#[tokio::test]
+async fn prune_refuses_a_namespace_the_server_cannot_list_completely() {
+    // A real server only truncates past its entity cap; pose as one that did.
+    let server = trogon_atlas_testsupport::discovery::DiscoveryOnlyServer::start_serving_listing(
+        trogon_atlas_testsupport::discovery::pre_revision_server_info(),
+        pb::BatchGetEntitiesResponse {
+            entities: vec![pb::Entity::default()],
+            found: vec![false],
+            ..Default::default()
+        },
+        pb::ListEntitiesResponse {
+            snapshot_truncated: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut client = client::connect(&server.endpoint, None, 30).await.unwrap();
+
+    let manifests = manifest::parse_str(&event("shop", "order.placed"), "test.yaml").unwrap();
+    let err = apply::plan_with_prune(&mut client, manifests)
+        .await
+        .err()
+        .expect("a partial listing must not be planned as if it were complete");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("cannot prune namespace \"shop\""),
+        "{message}"
+    );
+    assert!(message.contains("entity cap"), "{message}");
+}
+
+#[tokio::test]
+async fn prune_reads_back_more_entities_than_one_batch_get_allows() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+
+    // More leftovers than one BatchGetEntities call may carry (500).
+    let ops = (0..520)
+        .map(|i| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    system: None,
+                    kind: Some(pb::entity::Kind::Event(pb::Event {
+                        id: Some(pb::Id {
+                            namespace: "bulk".into(),
+                            slug: format!("leftover-{i:03}"),
+                            version: 1,
+                        }),
+                        title: format!("leftover {i}"),
+                        ..Default::default()
+                    })),
+                }),
+                ..Default::default()
+            })),
+        })
+        .collect();
+    client
+        .batch_mutate(pb::BatchMutateRequest {
+            ops,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let out = apply_str(&mut client, &event("bulk", "kept"), true, false)
+        .await
+        .unwrap();
+    assert_eq!(pruned(&out).len(), 520, "{:?}", out.lines);
+    assert!(!exists(&mut client, pb::EntityKind::Event, "bulk", "leftover-519").await);
+    assert!(exists(&mut client, pb::EntityKind::Event, "bulk", "kept").await);
+}
