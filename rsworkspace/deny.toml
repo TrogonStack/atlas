@@ -5,6 +5,12 @@ targets = []
 ignore = [
   # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
   "RUSTSEC-2026-0253",
+  # unsafe-libyaml is unmaintained and has no fixed release; reached through serde_yaml, the manifest YAML parser.
+  "RUSTSEC-2024-0449",
+  # astral-tokio-tar is unmaintained and has no fixed release; dev-only, reached through testcontainers in the test support crate.
+  "RUSTSEC-2026-0440",
+  # chrono is unmaintained and has no fixed release; used for timestamps across the workspace.
+  "RUSTSEC-2026-0543",
 ]
 
 [licenses]
