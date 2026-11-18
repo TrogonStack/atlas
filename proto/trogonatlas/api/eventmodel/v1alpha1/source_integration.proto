@@ -138,6 +138,7 @@ enum SourceOwnedField {
   SOURCE_OWNED_FIELD_STEPS = 110;
   SOURCE_OWNED_FIELD_ENTRY_STEPS = 111;
   SOURCE_OWNED_FIELD_LAYOUT_DOCUMENT = 112;
+  SOURCE_OWNED_FIELD_SUMMARY = 113;
 }
 message SourceNoOwnership {}
 message SourceWholeOwnerOwnership {}
