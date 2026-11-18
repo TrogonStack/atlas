@@ -257,7 +257,7 @@ pub(crate) fn entity_label(entity: &pb::Entity) -> String {
     }
 }
 
-pub(crate) fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
+fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
     use pb::entity::Kind as K;
     match kind {
         K::Event(_) => pb::EntityKind::Event,

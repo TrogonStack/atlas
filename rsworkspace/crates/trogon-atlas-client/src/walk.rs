@@ -81,9 +81,9 @@ pub enum Severity {
 impl Severity {
     fn label(self) -> &'static str {
         match self {
-            Severity::Info => "info",
-            Severity::Warning => "warning",
-            Severity::Error => "error",
+            Severity::Info => "INFO",
+            Severity::Warning => "WARNING",
+            Severity::Error => "ERROR",
         }
     }
 }
@@ -264,7 +264,7 @@ impl WalkFinding {
 
     /// `ERROR WALK_X [case step 2] message (subject)`.
     pub fn render(&self) -> String {
-        let mut out = format!("{:<7} {}", self.severity.label().to_uppercase(), self.code);
+        let mut out = format!("{:<7} {}", self.severity.label(), self.code);
         if !self.case.is_empty() {
             out.push_str(" [");
             out.push_str(&self.case);
@@ -324,8 +324,6 @@ impl WalkReport {
 #[derive(Debug, Default, Clone)]
 pub struct Model {
     docs: BTreeMap<K, BTreeMap<Key, Value>>,
-    /// Per kind, the latest version of every slug; built once.
-    live: BTreeMap<K, Vec<Key>>,
 }
 
 impl Model {
@@ -341,20 +339,6 @@ impl Model {
                 }
                 Err(err) => skipped.push(format!("{}: {err:#}", export::entity_label(entity))),
             }
-        }
-        for (kind, entities) in &model.docs {
-            // Keys sort by (namespace, slug, version): the last of each
-            // (namespace, slug) run is its latest version.
-            let mut latest: Vec<Key> = Vec::new();
-            for key in entities.keys() {
-                match latest.last_mut() {
-                    Some(last) if last.namespace == key.namespace && last.slug == key.slug => {
-                        *last = key.clone();
-                    }
-                    _ => latest.push(key.clone()),
-                }
-            }
-            model.live.insert(*kind, latest);
         }
         (model, skipped)
     }
@@ -414,13 +398,19 @@ impl Model {
     }
 
     /// Latest version of every entity of `kind`.
-    fn live(&self, kind: K) -> Vec<(&Key, &Value)> {
-        let (Some(keys), Some(docs)) = (self.live.get(&kind), self.docs.get(&kind)) else {
-            return Vec::new();
-        };
-        keys.iter()
-            .filter_map(|key| docs.get_key_value(key))
-            .collect()
+    fn live(&self, kind: K) -> impl Iterator<Item = (&Key, &Value)> {
+        // Keys sort by (namespace, slug, version): the last of each
+        // (namespace, slug) run is its latest version.
+        let mut entries = self.docs.get(&kind).into_iter().flatten().peekable();
+        std::iter::from_fn(move || loop {
+            let entry = entries.next()?;
+            let superseded = entries.peek().is_some_and(|(next, _)| {
+                next.namespace == entry.0.namespace && next.slug == entry.0.slug
+            });
+            if !superseded {
+                return Some(entry);
+            }
+        })
     }
 
     /// Resolve a case ref (`slug`, `ns/slug`, `ns/slug@v`) against `kinds`.
@@ -466,10 +456,7 @@ impl Model {
 
 /// An entity's kind, exact id and proto-JSON body (references unshortened).
 fn entity_body(entity: &pb::Entity, types: &TranscodePool) -> Result<(K, Key, Value)> {
-    let kind = entity
-        .kind
-        .as_ref()
-        .map(export::entity_kind_of)
+    let kind = trogon_atlas_core::refs::entity_kind(entity)
         .ok_or_else(|| anyhow!("entity has no kind"))?;
     let Value::Object(envelope) = types.entity_json_value(entity)? else {
         return Err(anyhow!("entity rendered as non-object JSON"));
@@ -485,16 +472,34 @@ fn entity_body(entity: &pb::Entity, types: &TranscodePool) -> Result<(K, Key, Va
     Ok((kind, key, body))
 }
 
-fn split_ref(reference: &str, default_ns: &str) -> (String, String, Option<u64>) {
+/// Split a case ref (`slug`, `ns/slug`, `ns/slug@v`) into its parts
+/// without validating them; `check_ref` validates, `split_ref` resolves.
+fn ref_parts(reference: &str) -> (Option<&str>, &str, Option<&str>) {
     let (path, version) = match reference.rsplit_once('@') {
-        Some((path, v)) => (path, v.parse::<u64>().ok()),
+        Some((path, v)) => (path, Some(v)),
         None => (reference, None),
     };
-    let (namespace, slug) = match path.split_once('/') {
-        Some((ns, slug)) => (ns.to_string(), slug.to_string()),
-        None => (default_ns.to_string(), path.to_string()),
-    };
-    (namespace, slug, version)
+    match path.split_once('/') {
+        Some((ns, slug)) => (Some(ns), slug, version),
+        None => (None, path, version),
+    }
+}
+
+fn split_ref(reference: &str, default_ns: &str) -> (String, String, Option<u64>) {
+    let (namespace, slug, version) = ref_parts(reference);
+    (
+        namespace.unwrap_or(default_ns).to_string(),
+        slug.to_string(),
+        version.and_then(|v| v.parse::<u64>().ok()),
+    )
+}
+
+/// Whether `event` takes part in a swimlane lifecycle, as a source or a
+/// successor of some transition.
+fn in_lifecycle(transitions: &[(Key, Vec<Key>)], event: &Key) -> bool {
+    transitions
+        .iter()
+        .any(|(from, next)| from == event || next.contains(event))
 }
 
 // --- JSON accessors over manifest specs ---
@@ -797,21 +802,14 @@ fn push_rows<'a>(refs: &mut Vec<(String, &'a str)>, prefix: &str, list: &'a [Row
 /// A ref is `slug`, `ns/slug` or `ns/slug@version`: each part a valid id
 /// component and the version a positive integer.
 fn check_ref(reference: &str) -> std::result::Result<(), String> {
-    let (path, version) = match reference.rsplit_once('@') {
-        Some((path, v)) => (path, Some(v)),
-        None => (reference, None),
-    };
+    let (namespace, slug, version) = ref_parts(reference);
     if let Some(v) = version {
         match v.parse::<u64>() {
             Ok(n) if n >= 1 => {}
             _ => return Err(format!("{reference:?}: version must be a positive integer")),
         }
     }
-    let parts: Vec<&str> = match path.split_once('/') {
-        Some((ns, slug)) => vec![ns, slug],
-        None => vec![path],
-    };
-    for part in parts {
+    for part in namespace.into_iter().chain([slug]) {
         trogon_atlas_core::validate_id_component(part)
             .map_err(|e| format!("{reference:?}: {e}"))?;
     }
@@ -844,8 +842,9 @@ type Rows = BTreeMap<String, Map<String, Value>>;
 
 #[derive(Debug, Default)]
 struct Touched {
-    /// (kind, slice) of every slice a case exercised.
-    slices: BTreeSet<(K, Key)>,
+    /// Every slice a case exercised. Storyboards reference slices without
+    /// a kind, so the kind is not kept.
+    slices: BTreeSet<Key>,
     /// (slice key, scenario id) of every scenario a step matched.
     scenarios: BTreeSet<(K, Key, String)>,
 }
@@ -1078,9 +1077,7 @@ impl CaseRun<'_> {
             let Some(rm) = edge_at(slice, "readModel", "readModel") else {
                 continue;
             };
-            self.touched
-                .slices
-                .insert((K::ReadModelSlice, slice_key.clone()));
+            self.touched.slices.insert(slice_key.clone());
             let rm_spec = model.get(K::ReadModel, &rm);
             let key_fields = rm_key_fields(rm_spec);
             let Some(id) = row_id(&key_fields, payload) else {
@@ -1232,12 +1229,10 @@ impl CaseRun<'_> {
             );
             return;
         }
-        let Some((slice_key, slice)) = model.live(K::CommandSlice).into_iter().find(|(_, s)| {
-            s.get("command")
-                .and_then(|e| edge_key(e, "command"))
-                .as_ref()
-                == Some(&command)
-        }) else {
+        let Some((slice_key, slice)) = model
+            .live(K::CommandSlice)
+            .find(|(_, s)| edge_at(s, "command", "command").as_ref() == Some(&command))
+        else {
             self.push(
                 WalkFinding::new(
                     COMMAND_UNHANDLED,
@@ -1248,9 +1243,7 @@ impl CaseRun<'_> {
             return;
         };
         let slice_key = slice_key.clone();
-        self.touched
-            .slices
-            .insert((K::CommandSlice, slice_key.clone()));
+        self.touched.slices.insert(slice_key.clone());
 
         let (values, unsupplied) = self.command_values(step, &command, slice);
 
@@ -1363,7 +1356,7 @@ impl CaseRun<'_> {
         let mut ambiguous: BTreeMap<String, Key> = BTreeMap::new();
         let mut observed: Vec<Key> = Vec::new();
         for (issuer_kind, issuer, rms) in &issuers {
-            self.touched.slices.insert((*issuer_kind, issuer.clone()));
+            self.touched.slices.insert(issuer.clone());
             for rm in rms {
                 if !observed.contains(rm) {
                     observed.push(rm.clone());
@@ -1400,15 +1393,16 @@ impl CaseRun<'_> {
         }
 
         let mut unsupplied = BTreeSet::new();
-        let Some(fields) = model.get(K::Command, command).and_then(schema_fields) else {
+        let spec = model.get(K::Command, command);
+        let Some(fields) = spec.and_then(schema_fields) else {
             // Nothing to check field by field: pass every observed and
             // answered value through, and say the schema was not inspected.
             let mut values: Map<String, Value> = offers
                 .into_iter()
-                .filter_map(|(field, mut o)| Some((field, o.drain(..).next()?.value)))
+                .filter_map(|(field, o)| Some((field, o.into_iter().next()?.value)))
                 .collect();
             values.extend(answer);
-            if model.get(K::Command, command).is_some() {
+            if spec.is_some() {
                 self.push(
                     WalkFinding::new(
                         SCHEMA_OPAQUE,
@@ -1574,11 +1568,10 @@ impl CaseRun<'_> {
             .lane_of(K::Command, command)
             .map(|lane| self.transitions(&lane))
             .unwrap_or_default();
-        let in_lifecycle = |k: &Key| transitions.iter().any(|(a, n)| a == k || n.contains(k));
         let state = if transitions.is_empty() {
             history.last()
         } else {
-            history.iter().rev().find(|k| in_lifecycle(k))
+            history.iter().rev().find(|k| in_lifecycle(&transitions, k))
         };
         // Events on the command's own stream always belong to its timeline;
         // events on other streams join it by agreeing on shared fields.
@@ -1616,41 +1609,43 @@ impl CaseRun<'_> {
             format!("stream history [{}]", names.join(", "))
         };
 
-        if let Some(reason) = step.expect.reject.as_ref().filter(|_| rejects.is_empty()) {
-            // The model accepts the command: report it, then walk what the
-            // model does so later steps see the resulting state.
-            self.push(
-                WalkFinding::new(
-                    REJECT_UNMODELED,
-                    format!(
-                        "the case expects {command} to be refused{} after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it",
-                        if reason.is_empty() { String::new() } else { format!(" ({reason})") }
-                    ),
-                )
-                .subject(K::CommandSlice, slice_key)
-                .field("scenarios"),
-            );
-        } else if let Some(reason) = &step.expect.reject {
-            let matching = rejects
-                .iter()
-                .find(|(_, code)| reason.is_empty() || code == reason);
-            if let Some((id, _)) = matching {
-                self.mark(K::CommandSlice, slice_key, id);
-            } else {
-                let (id, code) = &rejects[0];
-                self.mark(K::CommandSlice, slice_key, id);
+        if let Some(reason) = &step.expect.reject {
+            if rejects.is_empty() {
+                // The model accepts the command: report it, then walk what
+                // the model does so later steps see the resulting state.
                 self.push(
                     WalkFinding::new(
-                        REJECT_REASON_MISMATCH,
+                        REJECT_UNMODELED,
                         format!(
-                            "scenario {id:?} of {slice_key} refuses {command} with {code:?}, the case expects {reason:?}"
+                            "the case expects {command} to be refused{} after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it",
+                            if reason.is_empty() { String::new() } else { format!(" ({reason})") }
                         ),
                     )
                     .subject(K::CommandSlice, slice_key)
-                    .field(format!("scenarios[{id}].reject")),
+                    .field("scenarios"),
                 );
+            } else {
+                let matching = rejects
+                    .iter()
+                    .find(|(_, code)| reason.is_empty() || code == reason);
+                if let Some((id, _)) = matching {
+                    self.mark(K::CommandSlice, slice_key, id);
+                } else {
+                    let (id, code) = &rejects[0];
+                    self.mark(K::CommandSlice, slice_key, id);
+                    self.push(
+                        WalkFinding::new(
+                            REJECT_REASON_MISMATCH,
+                            format!(
+                                "scenario {id:?} of {slice_key} refuses {command} with {code:?}, the case expects {reason:?}"
+                            ),
+                        )
+                        .subject(K::CommandSlice, slice_key)
+                        .field(format!("scenarios[{id}].reject")),
+                    );
+                }
+                return None;
             }
-            return None;
         }
 
         if let Some(expected) = &step.expect.emit {
@@ -1695,14 +1690,12 @@ impl CaseRun<'_> {
                     .join(", ")
             };
             if let Some((id, _)) = emits.iter().find(|(_, events)| *events == keys) {
-                let id = id.clone();
-                self.mark(K::CommandSlice, slice_key, &id);
+                self.mark(K::CommandSlice, slice_key, id);
                 return Some(keys);
             }
-            if let Some((id, events)) = emits.first() {
+            if let Some((id, events)) = emits.into_iter().next() {
                 // A scenario decides this step and it says something else:
                 // the model wins, and the contradiction is an error.
-                let (id, events) = (id.clone(), events.clone());
                 self.mark(K::CommandSlice, slice_key, &id);
                 self.push(
                     WalkFinding::new(
@@ -1734,12 +1727,10 @@ impl CaseRun<'_> {
 
         // No stated outcome: the model decides.
         if let Some((id, _)) = rejects.first() {
-            let id = id.clone();
-            self.mark(K::CommandSlice, slice_key, &id);
+            self.mark(K::CommandSlice, slice_key, id);
             return None;
         }
-        if let Some((id, events)) = emits.first() {
-            let (id, events) = (id.clone(), events.clone());
+        if let Some((id, events)) = emits.into_iter().next() {
             self.mark(K::CommandSlice, slice_key, &id);
             return Some(events);
         }
@@ -1844,13 +1835,12 @@ impl CaseRun<'_> {
         if transitions.is_empty() {
             return;
         }
-        let in_lifecycle = |k: &Key| transitions.iter().any(|(a, n)| a == k || n.contains(k));
         let previous = self
             .history(stream)
             .into_iter()
             .rev()
             .map(|r| r.event.clone())
-            .find(|k| in_lifecycle(k));
+            .find(|k| in_lifecycle(&transitions, k));
         // After a terminal event nothing may land on the stream, lifecycle
         // event or not.
         if let Some(prev) = &previous {
@@ -1868,7 +1858,7 @@ impl CaseRun<'_> {
                 return;
             }
         }
-        if !in_lifecycle(event) {
+        if !in_lifecycle(&transitions, event) {
             return;
         }
         match previous {
@@ -2107,16 +2097,7 @@ fn coverage(
         let walked = arr(board, "slices")
             .iter()
             .filter_map(ref_key)
-            .any(|slice| {
-                [
-                    K::CommandSlice,
-                    K::ReadModelSlice,
-                    K::AutomationSlice,
-                    K::UiSlice,
-                ]
-                .into_iter()
-                .any(|kind| touched.slices.contains(&(kind, slice.clone())))
-            });
+            .any(|slice| touched.slices.contains(&slice));
         if walked {
             cov.storyboards_walked += 1;
         } else {
