@@ -1792,3 +1792,26 @@ fn code_one_word_policy_matches_whole_segments_but_prose_keeps_ordinary_boundari
     assert_eq!(prose.len(), 1);
     assert_eq!(prose[0].range.end(), text.len());
 }
+
+#[test]
+fn authored_summary_is_part_of_reviewed_meaning() {
+    let original = term();
+    let mut authored = trogon_atlas_core::transcode::entity_json_value(&pb::Entity {
+        kind: Some(entity::Kind::Term(original.clone())),
+        system: None,
+    })
+    .unwrap();
+    authored["term"]["summary"] = serde_json::json!("A request accepted by the store.");
+    let summarized: pb::Entity = trogon_atlas_core::transcode::message_from_json_value(
+        "trogonatlas.eventmodel.v1alpha1.Entity",
+        &authored,
+    )
+    .unwrap_or_else(|error| panic!("the native Term contract should accept a summary: {error}"));
+    let Some(entity::Kind::Term(summarized)) = summarized.kind else {
+        panic!("expected a Term");
+    };
+    assert_ne!(
+        glossary::candidate_digest(&original).unwrap(),
+        glossary::candidate_digest(&summarized).unwrap(),
+    );
+}
