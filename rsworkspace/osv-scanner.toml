@@ -13,3 +13,7 @@ reason = "astral-tokio-tar is unmaintained and has no fixed release; dev-only, r
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0543"
 reason = "chrono is unmaintained and has no fixed release; used for timestamps across the workspace."
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+reason = "picomatch has no patched release; reached only through Studio dev/build tooling (vite, tinyglobby, fdir). Revisit when a fix ships."
