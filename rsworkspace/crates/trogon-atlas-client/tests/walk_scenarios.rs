@@ -73,7 +73,15 @@ fn fixture_cases_report_each_gap_where_it_happens() {
             ),
             case("approve-review-42", None, "WALK_READ_MODEL_MISMATCH"),
             // Rejecting an approved review is accepted by the model.
+            // The walk follows the model, so the accepted step 2 already
+            // lands after the terminal event.
             case("reject-after-approve", Some(2), "WALK_REJECT_UNMODELED"),
+            case("reject-after-approve", Some(2), "WALK_SCENARIO_MISSING"),
+            case(
+                "reject-after-approve",
+                Some(2),
+                "WALK_ACCEPTED_AFTER_TERMINAL"
+            ),
             case("reject-after-approve", Some(3), "WALK_SCENARIO_MISSING"),
             case(
                 "reject-after-approve",
@@ -116,6 +124,8 @@ fn findings_use_the_validation_issue_shape() {
     assert_eq!(first["code"], "WALK_COMMAND_FIELD_UNSUPPLIED");
     assert_eq!(first["subject"]["kind"], "ENTITY_KIND_COMMAND");
     assert_eq!(first["subject"]["id"]["slug"], "approve-review");
+    // uint64 renders as a decimal string, as in proto JSON.
+    assert_eq!(first["subject"]["id"]["version"], "1");
     assert_eq!(first["subjectField"], "schema.fields[score]");
     assert_eq!(first["ruleCategory"], "walk");
     assert_eq!(first["ruleDefaultSeverity"], "SEVERITY_ERROR");
@@ -272,7 +282,13 @@ fn acme_reviews_example_walks() {
         .map(|f| (f.code, f.subject_field.clone()))
         .collect();
     assert!(found.is_empty(), "{report:#?}");
-    assert!(report.cases.iter().all(|c| c.passed));
+    // The shipped case actually ran: one case, its steps walked, the
+    // storyboards and scenarios it covers reached.
+    assert_eq!(report.cases.len(), 1, "{report:#?}");
+    assert_eq!(report.cases[0].case, "acme-reviews/order-42-review");
+    assert!(report.cases[0].steps > 0 && report.cases[0].passed);
+    assert!(report.coverage.storyboards_walked > 0);
+    assert!(report.coverage.scenarios_walked > 0);
 }
 
 #[test]
@@ -320,4 +336,62 @@ fn malformed_refs_are_refused_at_parse_time() {
         "inline"
     )
     .is_ok());
+}
+
+#[test]
+fn via_must_issue_the_command() {
+    let report = walk_text(&inline(
+        "  steps:\n  - command: submit-review\n    via: auto-approve\n    answer: {review_id: r-1, rating: 4}\n",
+    ));
+    let found = codes(&report);
+    assert!(
+        found.contains(&case("inline", Some(1), "WALK_VIA_NOT_ISSUER")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_null_answer_supplies_nothing() {
+    let report = walk_text(&inline(
+        "  steps:\n  - command: submit-review\n    answer: {review_id: r-1, rating: null}\n",
+    ));
+    let unsupplied: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_COMMAND_FIELD_UNSUPPLIED")
+        .map(|f| f.subject_field.as_str())
+        .collect();
+    assert_eq!(unsupplied, vec!["schema.fields[rating]"]);
+}
+
+#[test]
+fn an_expected_emit_that_contradicts_the_model_is_an_error() {
+    let report = walk_text(&inline(
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n  steps:\n  - command: approve-review\n    answer: {review_id: r-1, score: 4}\n    expect: {emit: [review.rejected]}\n",
+    ));
+    let found = codes(&report);
+    assert!(
+        found.contains(&case("inline", Some(1), "WALK_EMIT_MISMATCH")),
+        "{found:?}"
+    );
+    // The walk follows the model: the review is approved, not rejected.
+    assert!(
+        !found.contains(&case("inline", Some(1), "WALK_LIFECYCLE_VIOLATION")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_keyed_answer_ignores_rows_without_that_key() {
+    // The second row has no review_id; it must not supply r-9's score.
+    let report = walk_text(&inline(
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-9, rating: 4}\n    readModels:\n    - readModel: review-queue\n      rows:\n      - {score: 99}\n  steps:\n  - command: approve-review\n    via: auto-approve\n    answer: {review_id: r-9}\n",
+    ));
+    let unsupplied: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_COMMAND_FIELD_UNSUPPLIED")
+        .map(|f| f.subject_field.as_str())
+        .collect();
+    assert_eq!(unsupplied, vec!["schema.fields[score]"], "{report:#?}");
 }

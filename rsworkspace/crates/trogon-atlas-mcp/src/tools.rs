@@ -868,7 +868,7 @@ pub struct WalkScenariosParams {
     #[serde(default)]
     pub namespaces: Vec<String>,
     #[schemars(
-        description = "Walk these manifest documents (as accepted by apply_manifests) instead of the stored model, e.g. to check a proposed change before applying it."
+        description = "Walk these manifest documents (as accepted by apply_manifests) instead of the stored model, e.g. to check a proposed change before applying it. Nothing is written, but the server is still called to resolve the tenant type libraries the manifests' namespaces declare."
     )]
     #[serde(default)]
     pub manifests_yaml: Option<String>,

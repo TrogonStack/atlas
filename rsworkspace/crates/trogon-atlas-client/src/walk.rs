@@ -113,6 +113,10 @@ rules! {
         "A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the latest version.";
     CASE_INVALID = "WALK_CASE_INVALID", Error, "Case is malformed",
         "A step expects both an emit and a reject; state one of them, or neither to let the model decide.";
+    VIA_NOT_ISSUER = "WALK_VIA_NOT_ISSUER", Error, "`via` does not issue the command",
+        "A step's `via` names an AutomationSlice or UiSlice that does not issue the step's command (an automation must emit it; a UI slice must show the command slice's `ui`).";
+    SCHEMA_OPAQUE = "WALK_SCHEMA_OPAQUE", Info, "Schema not inspected",
+        "The entity's schema is a type-library message the walker cannot see into, so its fields are not checked; observed and answered values pass through unchecked.";
     COMMAND_UNHANDLED = "WALK_COMMAND_UNHANDLED", Error, "No command slice handles the command",
         "A step issues a command that no CommandSlice names, so the model says nothing about what the command does.";
     COMMAND_FIELD_UNSUPPLIED = "WALK_COMMAND_FIELD_UNSUPPLIED", Error, "Command field gets no value",
@@ -120,7 +124,7 @@ rules! {
     COMMAND_FIELD_CONFLICT = "WALK_COMMAND_FIELD_CONFLICT", Error, "Command field sources disagree",
         "Two sources (observed read-model rows or the external answer) offer different values for one command field. The model does not say which one wins.";
     COMMAND_FIELD_AMBIGUOUS = "WALK_COMMAND_FIELD_AMBIGUOUS", Warning, "Observed rows disagree on a command field",
-        "Several rows of an observed read model match the step and hold different values for the field. Put the read model's key fields in the step's answer to pick the row.";
+        "Several rows of an observed read model match the step and hold different values for the field. Put the read model's key fields in the step's answer to pick the row. Reported as an error when the field is required and nothing else supplies it.";
     EVENT_FIELD_UNSOURCED = "WALK_EVENT_FIELD_UNSOURCED", Error, "Event field gets no value",
         "At this step an emitted event field gets no value from the command, from an earlier event on the same stream, from the swimlane's `state`, or from a DerivedFieldAnnotation.";
     EVENT_NOT_EMITTED_BY_SLICE = "WALK_EVENT_NOT_EMITTED_BY_SLICE", Error, "Expected event is not one the slice emits",
@@ -137,6 +141,8 @@ rules! {
         "A reject scenario refuses the command, but with a different reason code than the case expects.";
     UNEXPECTED_REJECT = "WALK_UNEXPECTED_REJECT", Error, "Model refuses an expected command",
         "The case expects events, but a reject scenario on the command slice matches the stream's history and refuses the command.";
+    EMIT_MISMATCH = "WALK_EMIT_MISMATCH", Error, "Model emits something else",
+        "A scenario on the command slice matches the stream's history and decides the step's events, but they differ from the events the case expects. The walk follows the model.";
     SCENARIO_MISSING = "WALK_SCENARIO_MISSING", Warning, "No scenario covers the step",
         "No scenario on the command slice has this command with a `given` matching the stream's history and the step's outcome. The walk continued, but the model does not document this timeline.";
     OUTCOME_UNDETERMINED = "WALK_OUTCOME_UNDETERMINED", Error, "Step outcome cannot be decided",
@@ -163,11 +169,27 @@ rules! {
 pub struct Key {
     pub namespace: String,
     pub slug: String,
+    /// Proto JSON renders uint64 as a decimal string; so does this, so a
+    /// version above 2^53 survives a JSON consumer's float parse.
+    #[serde(serialize_with = "version_as_string")]
     pub version: u64,
+}
+
+// serde's `serialize_with` hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn version_as_string<S: serde::Serializer>(
+    version: &u64,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_str(&version.to_string())
 }
 
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.version == 0 {
+            // An unpinned event outside the walked model.
+            return write!(f, "{}/{}", self.namespace, self.slug);
+        }
         write!(f, "{}/{}@{}", self.namespace, self.slug, self.version)
     }
 }
@@ -222,6 +244,11 @@ impl WalkFinding {
             kind: kind.as_str_name().to_string(),
             id: key.clone(),
         });
+        self
+    }
+
+    fn severity(mut self, severity: Severity) -> Self {
+        self.severity = severity;
         self
     }
 
@@ -427,10 +454,12 @@ impl Model {
             return key;
         }
         let (namespace, slug, version) = split_ref(reference, default_ns);
+        // Version 0 marks an unpinned event the model does not hold: it
+        // matches whichever version a slice pins (see `same_event`).
         Key {
             namespace,
             slug,
-            version: version.unwrap_or(1),
+            version: version.unwrap_or(0),
         }
     }
 }
@@ -815,10 +844,10 @@ type Rows = BTreeMap<String, Map<String, Value>>;
 
 #[derive(Debug, Default)]
 struct Touched {
-    /// Every slice a case exercised.
-    slices: BTreeSet<Key>,
+    /// (kind, slice) of every slice a case exercised.
+    slices: BTreeSet<(K, Key)>,
     /// (slice key, scenario id) of every scenario a step matched.
-    scenarios: BTreeSet<(Key, String)>,
+    scenarios: BTreeSet<(K, Key, String)>,
 }
 
 /// Walk every case against `model`.
@@ -1001,6 +1030,20 @@ impl CaseRun<'_> {
             .and_then(ref_key)
     }
 
+    /// `Swimlane.transitions` of `lane` as (after, [next]) pairs.
+    fn transitions(&self, lane: &Key) -> Vec<(Key, Vec<Key>)> {
+        let Some(spec) = self.model.get(K::Swimlane, lane) else {
+            return Vec::new();
+        };
+        arr(spec, "transitions")
+            .iter()
+            .filter_map(|t| {
+                let after = t.get("after").and_then(ref_key)?;
+                Some((after, edge_keys(t, "next", "event")))
+            })
+            .collect()
+    }
+
     fn history(&self, stream: &str) -> Vec<&Recorded> {
         self.log.iter().filter(|r| r.stream == stream).collect()
     }
@@ -1027,14 +1070,17 @@ impl CaseRun<'_> {
         for (slice_key, slice) in model.live(K::ReadModelSlice) {
             let projects = arr(slice, "sourceEvents")
                 .iter()
-                .any(|e| edge_key(e, "event").as_ref() == Some(event));
+                .filter_map(|e| edge_key(e, "event"))
+                .any(|source| same_event(&source, event));
             if !projects {
                 continue;
             }
             let Some(rm) = edge_at(slice, "readModel", "readModel") else {
                 continue;
             };
-            self.touched.slices.insert(slice_key.clone());
+            self.touched
+                .slices
+                .insert((K::ReadModelSlice, slice_key.clone()));
             let rm_spec = model.get(K::ReadModel, &rm);
             let key_fields = rm_key_fields(rm_spec);
             let Some(id) = row_id(&key_fields, payload) else {
@@ -1110,7 +1156,7 @@ impl CaseRun<'_> {
                 continue;
             }
             let scenario_id = str_at(scenario, "id").to_string();
-            self.mark(slice_key, &scenario_id);
+            self.mark(K::ReadModelSlice, slice_key, &scenario_id);
             // `given` events are the case's own initial values, not model
             // output: they mark coverage but are not checked.
             if delete || self.step.is_none() {
@@ -1202,9 +1248,11 @@ impl CaseRun<'_> {
             return;
         };
         let slice_key = slice_key.clone();
-        self.touched.slices.insert(slice_key.clone());
+        self.touched
+            .slices
+            .insert((K::CommandSlice, slice_key.clone()));
 
-        let values = self.command_values(step, &command, slice);
+        let (values, unsupplied) = self.command_values(step, &command, slice);
 
         let lane = self.lane_of(K::Command, &command);
         let stream = self.stream_of(lane.as_ref(), &values);
@@ -1212,16 +1260,60 @@ impl CaseRun<'_> {
             return;
         };
         for event in emitted {
-            let payload = self.event_payload(&event, &command, &values, &step.answer, &stream);
+            let payload = self.event_payload(
+                &event,
+                &command,
+                &values,
+                &unsupplied,
+                &step.answer,
+                &stream,
+            );
             let event_stream = self.event_stream(&event, &payload);
             self.check_lifecycle(&event, &event_stream, &command, &slice_key);
             self.record(&event, &payload, event_stream);
         }
     }
 
-    /// Check 2: give every command field a value.
-    fn command_values(&mut self, step: &Step, command: &Key, slice: &Value) -> Map<String, Value> {
+    /// Rows of `rm` the step can mean: when the answer names key fields,
+    /// only rows carrying the same non-null key values.
+    fn matching_rows(&self, rm: &Key, answer: &Map<String, Value>) -> Vec<&Map<String, Value>> {
+        let key_fields = rm_key_fields(self.model.get(K::ReadModel, rm));
+        self.rows
+            .get(rm)
+            .map(|table| {
+                table
+                    .values()
+                    .filter(|row| {
+                        key_fields.iter().all(|k| match answer.get(k) {
+                            Some(a) => row
+                                .get(k)
+                                .filter(|r| !r.is_null())
+                                .is_some_and(|r| values_equal(a, r)),
+                            None => true,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Check 2: give every command field a value. Returns the values and
+    /// the required fields that got none (reported here, on the command).
+    fn command_values(
+        &mut self,
+        step: &Step,
+        command: &Key,
+        slice: &Value,
+    ) -> (Map<String, Value>, BTreeSet<String>) {
         let model = self.model;
+        // An explicit null in the answer supplies nothing.
+        let answer: Map<String, Value> = step
+            .answer
+            .iter()
+            .filter(|(_, v)| !v.is_null())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
         // Who issues the command, and which read models they observe.
         let mut issuers: Vec<(K, Key, Vec<Key>)> = Vec::new();
         for (key, auto) in model.live(K::AutomationSlice) {
@@ -1237,52 +1329,46 @@ impl CaseRun<'_> {
             }
         }
         if let Some(via) = &step.via {
-            if let Some((_, via_key)) =
-                model.resolve(&[K::AutomationSlice, K::UiSlice], via, self.ns())
-            {
-                issuers.retain(|(_, key, _)| *key == via_key);
-            } else {
-                self.push(
-                    WalkFinding::new(
-                        REF_UNRESOLVED,
-                        format!("via {via:?} is not an automation or UI slice in the walked model"),
-                    )
-                    .field("via"),
-                );
-                issuers.clear();
+            match model.resolve(&[K::AutomationSlice, K::UiSlice], via, self.ns()) {
+                Some((_, via_key)) if issuers.iter().any(|(_, key, _)| *key == via_key) => {
+                    issuers.retain(|(_, key, _)| *key == via_key);
+                }
+                Some((kind, via_key)) => {
+                    self.push(
+                        WalkFinding::new(
+                            VIA_NOT_ISSUER,
+                            format!("{via_key} does not issue {command}"),
+                        )
+                        .subject(kind, &via_key)
+                        .field("via"),
+                    );
+                    issuers.clear();
+                }
+                None => {
+                    self.push(
+                        WalkFinding::new(
+                            REF_UNRESOLVED,
+                            format!(
+                                "via {via:?} is not an automation or UI slice in the walked model"
+                            ),
+                        )
+                        .field("via"),
+                    );
+                    issuers.clear();
+                }
             }
         }
 
-        let answer = &step.answer;
         let mut offers: BTreeMap<String, Vec<Offer>> = BTreeMap::new();
         let mut ambiguous: BTreeMap<String, Key> = BTreeMap::new();
         let mut observed: Vec<Key> = Vec::new();
         for (issuer_kind, issuer, rms) in &issuers {
-            self.touched.slices.insert(issuer.clone());
+            self.touched.slices.insert((*issuer_kind, issuer.clone()));
             for rm in rms {
                 if !observed.contains(rm) {
                     observed.push(rm.clone());
                 }
-                let key_fields = rm_key_fields(model.get(K::ReadModel, rm));
-                let rows: Vec<&Map<String, Value>> = self
-                    .rows
-                    .get(rm)
-                    .map(|t| {
-                        t.values()
-                            .filter(|row| {
-                                key_fields
-                                    .iter()
-                                    .all(|k| match (answer.get(k), row.get(k)) {
-                                        (Some(a), Some(r)) => values_equal(a, r),
-                                        _ => true,
-                                    })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if rows.is_empty() {
-                    continue;
-                }
+                let rows = self.matching_rows(rm, &answer);
                 let mut fields: BTreeSet<&String> = BTreeSet::new();
                 for row in &rows {
                     fields.extend(row.keys());
@@ -1309,16 +1395,35 @@ impl CaseRun<'_> {
                 }
             }
             if *issuer_kind == K::AutomationSlice {
-                self.mark_automation_scenarios(issuer, command);
+                self.mark_automation_scenarios(issuer, command, &answer);
             }
         }
 
+        let mut unsupplied = BTreeSet::new();
         let Some(fields) = model.get(K::Command, command).and_then(schema_fields) else {
-            return answer.clone();
+            // Nothing to check field by field: pass every observed and
+            // answered value through, and say the schema was not inspected.
+            let mut values: Map<String, Value> = offers
+                .into_iter()
+                .filter_map(|(field, mut o)| Some((field, o.drain(..).next()?.value)))
+                .collect();
+            values.extend(answer);
+            if model.get(K::Command, command).is_some() {
+                self.push(
+                    WalkFinding::new(
+                        SCHEMA_OPAQUE,
+                        format!("{command}'s schema is a type-library message; its fields are not checked"),
+                    )
+                    .subject(K::Command, command)
+                    .field("schema"),
+                );
+            }
+            return (values, unsupplied);
         };
         let mut values = Map::new();
         for field in fields {
             let name = &field.name;
+            let required = !field.optional && field.derived.is_none();
             let mut sources = offers.remove(name).unwrap_or_default();
             let from_answer = answer.get(name);
             if let Some(a) = from_answer {
@@ -1327,12 +1432,32 @@ impl CaseRun<'_> {
                     value: a.clone(),
                 });
             }
+            let ambiguity = ambiguous
+                .get(name)
+                .filter(|_| from_answer.is_none())
+                .cloned();
+            if let Some(rm) = &ambiguity {
+                // Reported even when another source supplies the field: the
+                // disagreeing rows are still a gap in the model.
+                let unresolved = sources.is_empty() && required;
+                let finding = WalkFinding::new(
+                    COMMAND_FIELD_AMBIGUOUS,
+                    format!(
+                        "{command} field {name:?}: several rows of {rm} match and disagree; put {rm}'s key in the step's answer to pick one"
+                    ),
+                )
+                .schema_field(K::Command, command, name);
+                self.push(if unresolved {
+                    finding.severity(Severity::Error)
+                } else {
+                    finding
+                });
+            }
             if let Some(first) = sources.first() {
-                let conflict: Vec<&Offer> = sources
+                let conflict = sources
                     .iter()
-                    .filter(|o| !values_equal(&o.value, &first.value))
-                    .collect();
-                if !conflict.is_empty() {
+                    .any(|o| !values_equal(&o.value, &first.value));
+                if conflict {
                     let all: Vec<String> = sources
                         .iter()
                         .map(|o| format!("{} from {}", o.value, o.source))
@@ -1350,16 +1475,10 @@ impl CaseRun<'_> {
                 values.insert(name.clone(), chosen);
                 continue;
             }
-            if let Some(rm) = ambiguous.get(name) {
-                self.push(
-                    WalkFinding::new(
-                        COMMAND_FIELD_AMBIGUOUS,
-                        format!(
-                            "{command} field {name:?}: several rows of {rm} match and disagree; put {rm}'s key in the step's answer to pick one"
-                        ),
-                    )
-                    .schema_field(K::Command, command, name),
-                );
+            if ambiguity.is_some() {
+                if required {
+                    unsupplied.insert(name.clone());
+                }
                 continue;
             }
             if let Some(kind) = &field.derived {
@@ -1404,11 +1523,19 @@ impl CaseRun<'_> {
                 )
                 .schema_field(K::Command, command, name),
             );
+            unsupplied.insert(name.clone());
         }
-        values
+        (values, unsupplied)
     }
 
-    fn mark_automation_scenarios(&mut self, auto_key: &Key, command: &Key) {
+    /// Mark the automation's scenarios that issue `command` when every read
+    /// model their `given` names holds a row this step can mean.
+    fn mark_automation_scenarios(
+        &mut self,
+        auto_key: &Key,
+        command: &Key,
+        answer: &Map<String, Value>,
+    ) {
         let Some(auto) = self.model.get(K::AutomationSlice, auto_key) else {
             return;
         };
@@ -1416,11 +1543,10 @@ impl CaseRun<'_> {
             let issues = edge_at(scenario, "then", "command").is_some_and(|c| c == *command);
             let given_hold = arr(scenario, "given").iter().all(|g| {
                 edge_key(g, "readModel")
-                    .and_then(|rm| self.rows.get(&rm))
-                    .is_some_and(|t| !t.is_empty())
+                    .is_some_and(|rm| !self.matching_rows(&rm, answer).is_empty())
             });
             if issues && given_hold {
-                self.mark(auto_key, str_at(scenario, "id"));
+                self.mark(K::AutomationSlice, auto_key, str_at(scenario, "id"));
             }
         }
     }
@@ -1441,10 +1567,25 @@ impl CaseRun<'_> {
             .iter()
             .map(|r| r.event.clone())
             .collect();
+        // The stream's state is its last lifecycle event; events outside
+        // the lifecycle (comments, notes) do not change which scenarios
+        // apply. Without a lifecycle, the last event is the state.
+        let transitions = self
+            .lane_of(K::Command, command)
+            .map(|lane| self.transitions(&lane))
+            .unwrap_or_default();
+        let in_lifecycle = |k: &Key| transitions.iter().any(|(a, n)| a == k || n.contains(k));
+        let state = if transitions.is_empty() {
+            history.last()
+        } else {
+            history.iter().rev().find(|k| in_lifecycle(k))
+        };
+        // Events on the command's own stream always belong to its timeline;
+        // events on other streams join it by agreeing on shared fields.
         let related: Vec<&Key> = self
             .log
             .iter()
-            .filter(|r| correlates(&r.payload, values))
+            .filter(|r| r.stream == stream || correlates(&r.payload, values))
             .map(|r| &r.event)
             .collect();
         let mut rejects: Vec<(String, String)> = Vec::new();
@@ -1455,7 +1596,7 @@ impl CaseRun<'_> {
                 continue;
             }
             let given: Vec<Key> = edge_keys(scenario, "given", "event");
-            let tail_ok = history.last().is_none_or(|last| given.contains(last));
+            let tail_ok = state.is_none_or(|last| given.iter().any(|g| same_event(g, last)));
             if !tail_ok || !is_subsequence(&given, related.iter().copied()) {
                 continue;
             }
@@ -1475,28 +1616,29 @@ impl CaseRun<'_> {
             format!("stream history [{}]", names.join(", "))
         };
 
-        if let Some(reason) = &step.expect.reject {
-            if rejects.is_empty() {
-                self.push(
-                    WalkFinding::new(
-                        REJECT_UNMODELED,
-                        format!(
-                            "the case expects {command} to be refused after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it"
-                        ),
-                    )
-                    .subject(K::CommandSlice, slice_key)
-                    .field("scenarios"),
-                );
-                return None;
-            }
+        if let Some(reason) = step.expect.reject.as_ref().filter(|_| rejects.is_empty()) {
+            // The model accepts the command: report it, then walk what the
+            // model does so later steps see the resulting state.
+            self.push(
+                WalkFinding::new(
+                    REJECT_UNMODELED,
+                    format!(
+                        "the case expects {command} to be refused{} after {history_label}, but no reject scenario on {slice_key} matches, so the model accepts it",
+                        if reason.is_empty() { String::new() } else { format!(" ({reason})") }
+                    ),
+                )
+                .subject(K::CommandSlice, slice_key)
+                .field("scenarios"),
+            );
+        } else if let Some(reason) = &step.expect.reject {
             let matching = rejects
                 .iter()
                 .find(|(_, code)| reason.is_empty() || code == reason);
             if let Some((id, _)) = matching {
-                self.mark(slice_key, id);
+                self.mark(K::CommandSlice, slice_key, id);
             } else {
                 let (id, code) = &rejects[0];
-                self.mark(slice_key, id);
+                self.mark(K::CommandSlice, slice_key, id);
                 self.push(
                     WalkFinding::new(
                         REJECT_REASON_MISMATCH,
@@ -1527,7 +1669,12 @@ impl CaseRun<'_> {
             }
             let mut keys = Vec::new();
             for reference in expected {
-                let key = self.model.event_key(reference, self.ns());
+                let mut key = self.model.event_key(reference, self.ns());
+                // An unpinned ref to an event outside the model takes the
+                // version the slice declares.
+                if let Some(d) = declared.iter().find(|d| same_event(d, &key)) {
+                    key = d.clone();
+                }
                 if !declared.contains(&key) {
                     self.push(
                         WalkFinding::new(
@@ -1540,35 +1687,60 @@ impl CaseRun<'_> {
                 }
                 keys.push(key);
             }
-            match emits.iter().find(|(_, events)| *events == keys) {
-                Some((id, _)) => {
-                    let id = id.clone();
-                    self.mark(slice_key, &id);
-                }
-                None => self.push(
+            let label = |events: &[Key]| {
+                events
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            if let Some((id, _)) = emits.iter().find(|(_, events)| *events == keys) {
+                let id = id.clone();
+                self.mark(K::CommandSlice, slice_key, &id);
+                return Some(keys);
+            }
+            if let Some((id, events)) = emits.first() {
+                // A scenario decides this step and it says something else:
+                // the model wins, and the contradiction is an error.
+                let (id, events) = (id.clone(), events.clone());
+                self.mark(K::CommandSlice, slice_key, &id);
+                self.push(
                     WalkFinding::new(
-                        SCENARIO_MISSING,
+                        EMIT_MISMATCH,
                         format!(
-                            "no scenario on {slice_key} has {command} emit [{}] after {history_label}",
-                            keys.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                            "the case expects {command} to emit [{}] after {history_label}, but scenario {id:?} of {slice_key} emits [{}]",
+                            label(&keys),
+                            label(&events)
                         ),
                     )
                     .subject(K::CommandSlice, slice_key)
-                    .field("scenarios"),
-                ),
+                    .field(format!("scenarios[{id}].emit")),
+                );
+                return Some(events);
             }
+            self.push(
+                WalkFinding::new(
+                    SCENARIO_MISSING,
+                    format!(
+                        "no scenario on {slice_key} has {command} emit [{}] after {history_label}",
+                        label(&keys)
+                    ),
+                )
+                .subject(K::CommandSlice, slice_key)
+                .field("scenarios"),
+            );
             return Some(keys);
         }
 
         // No stated outcome: the model decides.
         if let Some((id, _)) = rejects.first() {
             let id = id.clone();
-            self.mark(slice_key, &id);
+            self.mark(K::CommandSlice, slice_key, &id);
             return None;
         }
         if let Some((id, events)) = emits.first() {
             let (id, events) = (id.clone(), events.clone());
-            self.mark(slice_key, &id);
+            self.mark(K::CommandSlice, slice_key, &id);
             return Some(events);
         }
         if let [only] = declared.as_slice() {
@@ -1598,10 +1770,10 @@ impl CaseRun<'_> {
         None
     }
 
-    fn mark(&mut self, slice: &Key, scenario: &str) {
+    fn mark(&mut self, kind: K, slice: &Key, scenario: &str) {
         self.touched
             .scenarios
-            .insert((slice.clone(), scenario.to_string()));
+            .insert((kind, slice.clone(), scenario.to_string()));
     }
 
     /// Check 3: give every field of an emitted event a value.
@@ -1610,6 +1782,7 @@ impl CaseRun<'_> {
         event: &Key,
         command: &Key,
         values: &Map<String, Value>,
+        unsupplied: &BTreeSet<String>,
         answer: &Map<String, Value>,
         stream: &str,
     ) -> Map<String, Value> {
@@ -1617,13 +1790,6 @@ impl CaseRun<'_> {
         let Some(fields) = model.get(K::Event, event).and_then(schema_fields) else {
             return values.clone();
         };
-        // A command field the walk could not supply was already reported
-        // against the command; do not report it again on the event.
-        let command_fields: Vec<String> = model
-            .get(K::Command, command)
-            .and_then(schema_fields)
-            .map(|fs| fs.into_iter().map(|f| f.name).collect())
-            .unwrap_or_default();
         let lane = self.lane_of(K::Event, event);
         let state: Vec<Field> = lane
             .as_ref()
@@ -1638,7 +1804,7 @@ impl CaseRun<'_> {
             let is_state = state.iter().any(|s| s.name == *name);
             if let Some(v) = values.get(name) {
                 payload.insert(name.clone(), v.clone());
-            } else if let Some(v) = answer.get(name).filter(|_| is_state) {
+            } else if let Some(v) = answer.get(name).filter(|v| is_state && !v.is_null()) {
                 // Aggregate state is set by the runtime; the step's answer
                 // is where a case states what the runtime decided.
                 payload.insert(name.clone(), v.clone());
@@ -1648,7 +1814,9 @@ impl CaseRun<'_> {
                 payload.insert(name.clone(), Value::String(format!("<state:{name}>")));
             } else if let Some(kind) = &field.derived {
                 payload.insert(name.clone(), derived_placeholder(kind));
-            } else if !field.optional && !command_fields.contains(name) {
+            } else if !field.optional && !unsupplied.contains(name) {
+                // A command field the walk could not supply was already
+                // reported on the command; any other gap is the event's.
                 unsourced.push(field.name);
             }
         }
@@ -1669,37 +1837,40 @@ impl CaseRun<'_> {
     /// Checks 1 and 5: the event must be a legal successor of the stream's
     /// previous lifecycle event.
     fn check_lifecycle(&mut self, event: &Key, stream: &str, command: &Key, slice_key: &Key) {
-        let model = self.model;
         let Some(lane) = self.lane_of(K::Event, event) else {
             return;
         };
-        let Some(lane_spec) = model.get(K::Swimlane, &lane) else {
-            return;
-        };
-        let transitions: Vec<(Key, Vec<Key>)> = arr(lane_spec, "transitions")
-            .iter()
-            .filter_map(|t| {
-                let after = t.get("after").and_then(ref_key)?;
-                let next = arr(t, "next")
-                    .iter()
-                    .filter_map(|n| edge_key(n, "event"))
-                    .collect();
-                Some((after, next))
-            })
-            .collect();
+        let transitions = self.transitions(&lane);
         if transitions.is_empty() {
             return;
         }
         let in_lifecycle = |k: &Key| transitions.iter().any(|(a, n)| a == k || n.contains(k));
-        if !in_lifecycle(event) {
-            return;
-        }
         let previous = self
             .history(stream)
             .into_iter()
             .rev()
             .map(|r| r.event.clone())
             .find(|k| in_lifecycle(k));
+        // After a terminal event nothing may land on the stream, lifecycle
+        // event or not.
+        if let Some(prev) = &previous {
+            if !transitions.iter().any(|(a, _)| a == prev) {
+                self.push(
+                    WalkFinding::new(
+                        ACCEPTED_AFTER_TERMINAL,
+                        format!(
+                            "{command} emitted {event} after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
+                        ),
+                    )
+                    .subject(K::CommandSlice, slice_key)
+                    .field("scenarios"),
+                );
+                return;
+            }
+        }
+        if !in_lifecycle(event) {
+            return;
+        }
         match previous {
             None => {
                 let only_successor = transitions.iter().any(|(_, n)| n.contains(event))
@@ -1715,18 +1886,14 @@ impl CaseRun<'_> {
                     );
                 }
             }
-            Some(prev) => match transitions.iter().find(|(a, _)| *a == prev) {
-                None => self.push(
-                    WalkFinding::new(
-                        ACCEPTED_AFTER_TERMINAL,
-                        format!(
-                            "{command} emitted {event} after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
-                        ),
-                    )
-                    .subject(K::CommandSlice, slice_key)
-                    .field("scenarios"),
-                ),
-                Some((_, next)) if !next.contains(event) => {
+            // A terminal predecessor was reported above; otherwise the
+            // event must be one of the predecessor's successors.
+            Some(prev) => {
+                if let Some((_, next)) = transitions
+                    .iter()
+                    .find(|(a, _)| *a == prev)
+                    .filter(|(_, next)| !next.contains(event))
+                {
                     let legal: Vec<String> = next.iter().map(ToString::to_string).collect();
                     self.push(
                         WalkFinding::new(
@@ -1740,8 +1907,7 @@ impl CaseRun<'_> {
                         .field("transitions"),
                     );
                 }
-                Some(_) => {}
-            },
+            }
         }
     }
 }
@@ -1778,7 +1944,11 @@ fn row_id(key_fields: &[String], payload: &Map<String, Value>) -> Option<String>
     let mut parts = Vec::new();
     for k in key_fields {
         let v = payload.get(k).filter(|v| !v.is_null())?;
-        parts.push(v.clone());
+        parts.push(match v {
+            // `4` and `4.0` address the same row.
+            Value::Number(n) => Value::String(format!("#{}", number_key(n))),
+            other => other.clone(),
+        });
     }
     Some(Value::Array(parts).to_string())
 }
@@ -1806,13 +1976,43 @@ fn correlates(payload: &Map<String, Value>, values: &Map<String, Value>) -> bool
 
 fn is_subsequence<'k>(needle: &[Key], haystack: impl IntoIterator<Item = &'k Key>) -> bool {
     let mut it = haystack.into_iter();
-    needle.iter().all(|n| it.any(|h| h == n))
+    needle.iter().all(|n| it.any(|h| same_event(n, h)))
+}
+
+/// Whether a model ref and a recorded event name the same event. A recorded
+/// event at version 0 is an unpinned event from outside the walked model
+/// and matches any version of the same namespace and slug.
+fn same_event(model_ref: &Key, recorded: &Key) -> bool {
+    model_ref == recorded
+        || (recorded.version == 0
+            && model_ref.namespace == recorded.namespace
+            && model_ref.slug == recorded.slug)
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Number(x), Value::Number(y)) => number_key(x) == number_key(y),
         _ => a == b,
+    }
+}
+
+/// A canonical form of a JSON number: integers compare exactly (no `f64`
+/// rounding above 2^53), and a float with an integral value equals the
+/// integer (`4.0` == `4`).
+fn number_key(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        return i.to_string();
+    }
+    if let Some(u) = n.as_u64() {
+        return u.to_string();
+    }
+    match n.as_f64() {
+        // Below 2^53 an integral f64 is exact.
+        Some(f) if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => {
+            format!("{f:.0}")
+        }
+        Some(f) => f.to_string(),
+        None => n.to_string(),
     }
 }
 
@@ -1838,24 +2038,52 @@ fn rows_mismatch(
             render(actual)
         ));
     }
-    let mut used = vec![false; actual.len()];
-    for row in expected {
-        let found = actual
-            .iter()
-            .enumerate()
-            .find(|(i, a)| !used[*i] && row_matches(row, a));
-        match found {
-            Some((i, _)) => used[i] = true,
-            None => {
-                return Some(format!(
-                    "no row matches {}; the walk left {}",
-                    Value::Object(row.clone()),
-                    render(actual)
-                ))
-            }
+    // Expectations may be partial, so pair them with rows as a bipartite
+    // matching: the result must not depend on the order they are listed in.
+    let candidates: Vec<Vec<usize>> = expected
+        .iter()
+        .map(|row| {
+            actual
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| row_matches(row, a))
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+    let mut owner: Vec<Option<usize>> = vec![None; actual.len()];
+    for (e, row) in expected.iter().enumerate() {
+        let mut seen = vec![false; actual.len()];
+        if !augment(e, &candidates, &mut owner, &mut seen) {
+            return Some(format!(
+                "no row matches {}; the walk left {}",
+                Value::Object(row.clone()),
+                render(actual)
+            ));
         }
     }
     None
+}
+
+/// Kuhn's augmenting path: give expectation `e` an actual row, moving
+/// earlier expectations to other rows they also match when needed.
+fn augment(
+    e: usize,
+    candidates: &[Vec<usize>],
+    owner: &mut [Option<usize>],
+    seen: &mut [bool],
+) -> bool {
+    for &a in &candidates[e] {
+        if seen[a] {
+            continue;
+        }
+        seen[a] = true;
+        if owner[a].is_none_or(|other| augment(other, candidates, owner, seen)) {
+            owner[a] = Some(e);
+            return true;
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1879,7 +2107,16 @@ fn coverage(
         let walked = arr(board, "slices")
             .iter()
             .filter_map(ref_key)
-            .any(|slice| touched.slices.contains(&slice));
+            .any(|slice| {
+                [
+                    K::CommandSlice,
+                    K::ReadModelSlice,
+                    K::AutomationSlice,
+                    K::UiSlice,
+                ]
+                .into_iter()
+                .any(|kind| touched.slices.contains(&(kind, slice.clone())))
+            });
         if walked {
             cov.storyboards_walked += 1;
         } else {
@@ -1901,7 +2138,7 @@ fn coverage(
             for scenario in arr(slice, "scenarios") {
                 let id = str_at(scenario, "id").to_string();
                 cov.scenarios_total += 1;
-                if touched.scenarios.contains(&(key.clone(), id.clone())) {
+                if touched.scenarios.contains(&(kind, key.clone(), id.clone())) {
                     cov.scenarios_walked += 1;
                 } else {
                     findings.push(
@@ -1928,6 +2165,37 @@ mod tests {
     fn map(v: Value) -> Map<String, Value> {
         let Value::Object(m) = v else { unreachable!() };
         m
+    }
+
+    #[test]
+    fn numbers_compare_exactly_and_ignore_float_form() {
+        assert!(values_equal(&json!(4), &json!(4.0)));
+        assert!(!values_equal(
+            &json!(9_007_199_254_740_992_u64),
+            &json!(9_007_199_254_740_993_u64)
+        ));
+        let keys = vec!["n".to_string()];
+        assert_eq!(
+            row_id(&keys, &map(json!({"n": 4}))),
+            row_id(&keys, &map(json!({"n": 4.0})))
+        );
+    }
+
+    #[test]
+    fn partial_row_expectations_pair_one_to_one_in_any_order() {
+        let r1 = map(json!({"review_id": "r-1", "status": "submitted"}));
+        let r2 = map(json!({"review_id": "r-2", "status": "submitted"}));
+        let actual = vec![&r1, &r2];
+        let expected = vec![
+            map(json!({"status": "submitted"})),
+            map(json!({"review_id": "r-1"})),
+        ];
+        assert_eq!(rows_mismatch(&expected, &actual), None);
+        let impossible = vec![
+            map(json!({"review_id": "r-1"})),
+            map(json!({"review_id": "r-1"})),
+        ];
+        assert!(rows_mismatch(&impossible, &actual).is_some());
     }
 
     #[test]

@@ -2976,6 +2976,8 @@ async fn mcp_stdio_transport_walk_scenarios() {
             "WALK_REJECT_UNMODELED",
             "WALK_SCENARIO_MISSING",
             "WALK_ACCEPTED_AFTER_TERMINAL",
+            "WALK_SCENARIO_MISSING",
+            "WALK_ACCEPTED_AFTER_TERMINAL",
         ],
         "{body:#}"
     );

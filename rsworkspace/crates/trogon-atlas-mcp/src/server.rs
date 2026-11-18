@@ -832,12 +832,17 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
-    // walk_scenarios reads the model through the export path
-    // (trogon_atlas_client::export::namespace_manifest_docs) and walks it
+    // walk_scenarios lists the namespaces' entities (or takes supplied
+    // manifests) and resolves their tenant types (GetServerInfo for the
+    // capability, then GetTypeLibraryDescriptorSet), then walks the model
     // client-side; it never writes.
     ToolPolicy {
         tool: "walk_scenarios",
-        rpcs: &["ListEntities"],
+        rpcs: &[
+            "ListEntities",
+            "GetServerInfo",
+            "GetTypeLibraryDescriptorSet",
+        ],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
