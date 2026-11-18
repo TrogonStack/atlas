@@ -1579,11 +1579,7 @@ async fn run(
             .await?;
             apply::require_external(&mut client, files.external).await?;
             let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
-            let plan = if prune {
-                apply::plan_with_prune(&mut client, resolved.manifests).await?
-            } else {
-                apply::plan(&mut client, resolved.manifests).await?
-            };
+            let plan = apply::plan_with_prune(&mut client, resolved.manifests, prune).await?;
             let outcome = apply::apply(&mut client, plan, dry_run, Some(&operation_id)).await?;
             if text {
                 for line in &outcome.lines {
@@ -1610,11 +1606,7 @@ async fn run(
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             apply::require_external(&mut client, files.external).await?;
             let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
-            let plan = if prune {
-                apply::plan_with_prune(&mut client, resolved.manifests).await?
-            } else {
-                apply::plan(&mut client, resolved.manifests).await?
-            };
+            let plan = apply::plan_with_prune(&mut client, resolved.manifests, prune).await?;
             let (diff, changed) = apply::render_diff(&plan, &resolved.types)?;
             if text {
                 print!("{diff}");

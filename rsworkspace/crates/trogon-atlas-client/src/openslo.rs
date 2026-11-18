@@ -166,33 +166,7 @@ async fn fetch_latest_namespace_entities(
     client: &mut Client,
     namespace: &str,
 ) -> Result<Vec<pb::Entity>> {
-    let mut entities: Vec<pb::Entity> = Vec::new();
-    let mut page_token = String::new();
-    loop {
-        let resp = client
-            .list_entities(pb::ListEntitiesRequest {
-                kinds: vec![],
-                namespaces: vec![namespace.to_string()],
-                latest_versions_only: true,
-                page_size: 200,
-                page_token: page_token.clone(),
-                lifecycle_status_in: vec![],
-                lifecycle_status_not_in: vec![],
-            })
-            .await
-            .context("ListEntities failed")?
-            .into_inner();
-        if resp.snapshot_truncated {
-            crate::invalid_input!(
-                "namespace {namespace:?} cannot be read completely: the server snapshot exceeds its entity cap"
-            );
-        }
-        entities.extend(resp.entities);
-        if resp.next_page_token.is_empty() {
-            break;
-        }
-        page_token = resp.next_page_token;
-    }
+    let entities = crate::export::list_namespace_entities(client, namespace, true).await?;
     if entities.is_empty() {
         crate::invalid_input!("namespace {namespace:?} has no entities");
     }

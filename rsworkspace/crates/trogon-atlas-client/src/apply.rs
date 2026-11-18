@@ -141,49 +141,14 @@ pub async fn plan(
     manifests: Vec<LoadedManifest>,
 ) -> Result<Vec<PlannedChange>> {
     let manifests = dedupe_manifests(manifests)?;
+    let keys: Vec<(pb::EntityKind, pb::Id)> =
+        manifests.iter().map(|m| (m.kind, m.id.clone())).collect();
+    let live = read_live(client, &keys).await?;
 
-    let keys = manifests
-        .iter()
-        .map(|m| pb::EntityRef {
-            kind: m.kind as i32,
-            id: Some(m.id.clone()),
-        })
-        .collect();
-    let resp = client
-        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-        .await
-        .context("BatchGetEntities failed")?
-        .into_inner();
-    if resp.found.len() != manifests.len() || resp.entities.len() != manifests.len() {
-        bail!(
-            "server returned {} entities / {} found flags for {} keys",
-            resp.entities.len(),
-            resp.found.len(),
-            manifests.len()
-        );
-    }
-    let etags = if resp.etags.is_empty() {
-        vec![String::new(); manifests.len()]
-    } else {
-        resp.etags
-    };
-    if etags.len() != manifests.len() {
-        bail!(
-            "server returned {} etags for {} keys",
-            etags.len(),
-            manifests.len()
-        );
-    }
-
-    manifests
+    Ok(manifests
         .into_iter()
-        .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
-        .map(|(mut manifest, ((entity, found), etag))| {
-            let observed = match Revision::from_wire(&etag)? {
-                Revision::Absent if found => None,
-                revision => Some(revision),
-            };
-            let current = found.then_some(entity);
+        .zip(live)
+        .map(|(mut manifest, Live { current, observed })| {
             if let Some(current) = &current {
                 // A manifest authored without connection IDs adopts the stored
                 // ones. A rejected entity is left untouched for the server to
@@ -194,27 +159,90 @@ pub async fn plan(
                 );
             }
             let action = classify(&manifest.entity, current.as_ref());
-            Ok(PlannedChange {
+            PlannedChange {
                 manifest,
                 action,
                 current,
                 observed,
-            })
+            }
         })
-        .collect()
+        .collect())
 }
 
 /// Most keys one `BatchGetEntities` call may carry (the server's advertised
 /// `max_batch_get_keys`).
 const MAX_BATCH_GET_KEYS: usize = 500;
 
+/// What the server holds for one key.
+struct Live {
+    current: Option<pb::Entity>,
+    /// `None` when the server holds the entity but reported no revision (it
+    /// predates stale-plan protection), so a write to it cannot be guarded.
+    observed: Option<Revision>,
+}
+
+/// Read `keys` back, one `BatchGetEntities` call per chunk the server
+/// accepts, in key order.
+async fn read_live(client: &mut Client, keys: &[(pb::EntityKind, pb::Id)]) -> Result<Vec<Live>> {
+    let mut live = Vec::with_capacity(keys.len());
+    for chunk in keys.chunks(MAX_BATCH_GET_KEYS) {
+        let refs = chunk
+            .iter()
+            .map(|(kind, id)| pb::EntityRef {
+                kind: *kind as i32,
+                id: Some(id.clone()),
+            })
+            .collect();
+        let resp = client
+            .batch_get_entities(pb::BatchGetEntitiesRequest {
+                keys: refs,
+                dense: true,
+            })
+            .await
+            .context("BatchGetEntities failed")?
+            .into_inner();
+        if resp.found.len() != chunk.len() || resp.entities.len() != chunk.len() {
+            bail!(
+                "server returned {} entities / {} found flags for {} keys",
+                resp.entities.len(),
+                resp.found.len(),
+                chunk.len()
+            );
+        }
+        let etags = if resp.etags.is_empty() {
+            vec![String::new(); chunk.len()]
+        } else {
+            resp.etags
+        };
+        if etags.len() != chunk.len() {
+            bail!(
+                "server returned {} etags for {} keys",
+                etags.len(),
+                chunk.len()
+            );
+        }
+        for ((entity, found), etag) in resp.entities.into_iter().zip(resp.found).zip(etags) {
+            let observed = match Revision::from_wire(&etag)? {
+                Revision::Absent if found => None,
+                revision => Some(revision),
+            };
+            live.push(Live {
+                current: found.then_some(entity),
+                observed,
+            });
+        }
+    }
+    Ok(live)
+}
+
 /// `LoadedManifest.source` of a pruned entity: it comes from the live store,
 /// not from any manifest file.
-pub const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
+const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
 
-/// [`plan`], plus one `Action::Prune` change for every live entity (any
-/// kind, any version) in a namespace the manifest set covers that the set
-/// does not declare. Prunes follow the declared changes, sorted by label.
+/// [`plan`], and with `prune` also one `Action::Prune` change for every live
+/// entity (any kind, any version) in a namespace the manifest set covers that
+/// the set does not declare. Prunes follow the declared changes, sorted by
+/// label.
 ///
 /// The scope is the set's namespaces and nothing else: a namespace no
 /// manifest names is never touched, and an empty manifest set prunes
@@ -222,8 +250,12 @@ pub const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
 pub async fn plan_with_prune(
     client: &mut Client,
     manifests: Vec<LoadedManifest>,
+    prune: bool,
 ) -> Result<Vec<PlannedChange>> {
     let mut changes = plan(client, manifests).await?;
+    if !prune {
+        return Ok(changes);
+    }
     let declared: std::collections::HashSet<pb::EntityKey> = changes
         .iter()
         .map(|c| pb::EntityKey::new(c.manifest.kind, &c.manifest.id))
@@ -235,7 +267,7 @@ pub async fn plan_with_prune(
 
     let mut undeclared: Vec<(pb::EntityKind, pb::Id)> = Vec::new();
     for namespace in &namespaces {
-        for entity in list_namespace(client, namespace).await? {
+        for entity in crate::export::list_namespace_entities(client, namespace, false).await? {
             let (Some(kind), Some(id)) = (
                 trogon_atlas_core::refs::entity_kind(&entity),
                 trogon_atlas_core::refs::entity_id(&entity),
@@ -248,63 +280,13 @@ pub async fn plan_with_prune(
         }
     }
     undeclared.sort_by_cached_key(|(kind, id)| pb::canonical::id_string(*kind, id));
-    undeclared.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    if undeclared.is_empty() {
-        return Ok(changes);
-    }
+    undeclared.dedup();
 
-    // Read each one back for the revision that guards its delete, in
-    // chunks the server accepts.
-    let (mut entities, mut found, mut etags) = (Vec::new(), Vec::new(), Vec::new());
-    for chunk in undeclared.chunks(MAX_BATCH_GET_KEYS) {
-        let keys = chunk
-            .iter()
-            .map(|(kind, id)| pb::EntityRef {
-                kind: *kind as i32,
-                id: Some(id.clone()),
-            })
-            .collect();
-        let resp = client
-            .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-            .await
-            .context("BatchGetEntities failed")?
-            .into_inner();
-        if resp.found.len() != chunk.len() || resp.entities.len() != chunk.len() {
-            bail!(
-                "server returned {} entities / {} found flags for {} keys",
-                resp.entities.len(),
-                resp.found.len(),
-                chunk.len()
-            );
-        }
-        if resp.etags.is_empty() {
-            etags.extend(std::iter::repeat_n(String::new(), chunk.len()));
-        } else if resp.etags.len() == chunk.len() {
-            etags.extend(resp.etags);
-        } else {
-            bail!(
-                "server returned {} etags for {} keys",
-                resp.etags.len(),
-                chunk.len()
-            );
-        }
-        entities.extend(resp.entities);
-        found.extend(resp.found);
-    }
-    for ((kind, id), ((entity, found), etag)) in undeclared
-        .into_iter()
-        .zip(entities.into_iter().zip(found).zip(etags))
-    {
+    // Read each one back for the revision that guards its delete.
+    let live = read_live(client, &undeclared).await?;
+    for ((kind, id), Live { current, observed }) in undeclared.into_iter().zip(live) {
         // Deleted between the listing and the read: nothing left to prune.
-        if !found {
-            continue;
-        }
-        // An empty etag on a found entity means a server too old to report
-        // revisions; `apply` refuses to write that unguarded.
-        let observed = match Revision::from_wire(&etag)? {
-            Revision::Absent => None,
-            revision @ Revision::At(_) => Some(revision),
-        };
+        let Some(entity) = current else { continue };
         changes.push(PlannedChange {
             manifest: LoadedManifest {
                 source: PRUNE_SOURCE.into(),
@@ -320,38 +302,6 @@ pub async fn plan_with_prune(
     Ok(changes)
 }
 
-/// Every version of every entity in `namespace`, on the client's branch.
-async fn list_namespace(client: &mut Client, namespace: &str) -> Result<Vec<pb::Entity>> {
-    let mut entities = Vec::new();
-    let mut page_token = String::new();
-    loop {
-        let resp = client
-            .list_entities(pb::ListEntitiesRequest {
-                kinds: vec![],
-                namespaces: vec![namespace.to_string()],
-                latest_versions_only: false,
-                page_size: 200,
-                page_token: page_token.clone(),
-                lifecycle_status_in: vec![],
-                lifecycle_status_not_in: vec![],
-            })
-            .await
-            .context("ListEntities failed")?
-            .into_inner();
-        // A partial listing would silently skip prunes, so refuse it.
-        if resp.snapshot_truncated {
-            crate::invalid_input!(
-                "cannot prune namespace {namespace:?}: the server snapshot exceeds its entity cap, so the namespace cannot be listed completely"
-            );
-        }
-        entities.extend(resp.entities);
-        if resp.next_page_token.is_empty() {
-            return Ok(entities);
-        }
-        page_token = resp.next_page_token;
-    }
-}
-
 /// Refuse a board import whose target lacks a foreign entity the board
 /// references. Another namespace owns those entities, so the import never
 /// writes them, and only their identity is checked: a bundled spec that no
@@ -360,30 +310,13 @@ pub async fn require_external(client: &mut Client, external: Vec<ManifestDocumen
     if external.is_empty() {
         return Ok(());
     }
-    let keys = external
-        .iter()
-        .map(|d| pb::EntityRef {
-            kind: d.kind as i32,
-            id: Some(d.id.clone()),
-        })
-        .collect();
-    let found = client
-        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-        .await
-        .context("BatchGetEntities failed")?
-        .into_inner()
-        .found;
-    if found.len() != external.len() {
-        bail!(
-            "server returned {} found flags for {} keys",
-            found.len(),
-            external.len()
-        );
-    }
+    let keys: Vec<(pb::EntityKind, pb::Id)> =
+        external.iter().map(|d| (d.kind, d.id.clone())).collect();
+    let live = read_live(client, &keys).await?;
     let missing: Vec<String> = external
         .iter()
-        .zip(found)
-        .filter(|(_, found)| !found)
+        .zip(live)
+        .filter(|(_, live)| live.current.is_none())
         .map(|(d, _)| pb::canonical::id_string(d.kind, &d.id))
         .collect();
     if !missing.is_empty() {

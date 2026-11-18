@@ -328,6 +328,22 @@ pub async fn fetch_namespace_entities(
     client: &mut Client,
     namespace: &str,
 ) -> Result<Vec<pb::Entity>> {
+    let entities = list_namespace_entities(client, namespace, false).await?;
+    if entities.is_empty() {
+        crate::invalid_input!("namespace {namespace:?} has no entities");
+    }
+    Ok(entities)
+}
+
+/// Every entity in `namespace` on the client's branch, every version unless
+/// `latest_versions_only`. Refuses a listing the server truncated at its
+/// entity cap: no caller can treat a partial namespace as the whole one. An
+/// empty namespace is an empty list; callers that need entities say so.
+pub(crate) async fn list_namespace_entities(
+    client: &mut Client,
+    namespace: &str,
+    latest_versions_only: bool,
+) -> Result<Vec<pb::Entity>> {
     let mut entities: Vec<pb::Entity> = Vec::new();
     let mut page_token = String::new();
     loop {
@@ -335,9 +351,9 @@ pub async fn fetch_namespace_entities(
             .list_entities(pb::ListEntitiesRequest {
                 kinds: vec![],
                 namespaces: vec![namespace.to_string()],
-                latest_versions_only: false,
+                latest_versions_only,
                 page_size: 200,
-                page_token: page_token.clone(),
+                page_token: std::mem::take(&mut page_token),
                 lifecycle_status_in: vec![],
                 lifecycle_status_not_in: vec![],
             })
@@ -351,14 +367,10 @@ pub async fn fetch_namespace_entities(
         }
         entities.extend(resp.entities);
         if resp.next_page_token.is_empty() {
-            break;
+            return Ok(entities);
         }
         page_token = resp.next_page_token;
     }
-    if entities.is_empty() {
-        crate::invalid_input!("namespace {namespace:?} has no entities");
-    }
-    Ok(entities)
 }
 
 pub(crate) fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {

@@ -58,58 +58,45 @@ where
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(path.clone());
-        let scripted = &self.scripted;
-        if let (LIST_ENTITIES_PATH, Some(list)) = (path.as_str(), &scripted.list_entities) {
-            let list = list.clone();
-            return Box::pin(async move {
-                let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                Ok(grpc
-                    .unary(Scripted::<pb::ListEntitiesRequest, _>::new(list), req)
-                    .await)
-            });
+        // Answer the call with a fixed response of the given request type.
+        macro_rules! unary {
+            ($req:ty, $response:expr) => {{
+                let response = $response.clone();
+                Box::pin(async move {
+                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+                    Ok(grpc.unary(Scripted::<$req, _>::new(response), req).await)
+                })
+            }};
         }
-        match (
-            path.as_str(),
-            &scripted.entities,
-            &scripted.validate_project,
-        ) {
-            (GET_SERVER_INFO_PATH, _, _) => {
-                let info = self.info.clone();
-                Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(Scripted::<pb::GetServerInfoRequest, _>::new(info), req)
-                        .await)
-                })
+        match (path.as_str(), &self.scripted) {
+            (GET_SERVER_INFO_PATH, _) => unary!(pb::GetServerInfoRequest, self.info),
+            (
+                BATCH_GET_ENTITIES_PATH,
+                Scripts {
+                    entities: Some(r), ..
+                },
+            ) => {
+                unary!(pb::BatchGetEntitiesRequest, r)
             }
-            (BATCH_GET_ENTITIES_PATH, Some(entities), _) => {
-                let entities = entities.clone();
-                Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(
-                            Scripted::<pb::BatchGetEntitiesRequest, _>::new(entities),
-                            req,
-                        )
-                        .await)
-                })
+            (
+                LIST_ENTITIES_PATH,
+                Scripts {
+                    list_entities: Some(r),
+                    ..
+                },
+            ) => {
+                unary!(pb::ListEntitiesRequest, r)
             }
-            (VALIDATE_PROJECT_PATH, _, Some(response)) => {
-                let response = response.clone();
-                Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(
-                            Scripted::<pb::ValidateProjectRequest, _>::new(response),
-                            req,
-                        )
-                        .await)
-                })
+            (
+                VALIDATE_PROJECT_PATH,
+                Scripts {
+                    validate_project: Some(r),
+                    ..
+                },
+            ) => {
+                unary!(pb::ValidateProjectRequest, r)
             }
-            _ => {
-                let path = path.clone();
-                Box::pin(async move { Ok(tonic::Status::unimplemented(path).into_http()) })
-            }
+            _ => Box::pin(async move { Ok(tonic::Status::unimplemented(path).into_http()) }),
         }
     }
 }

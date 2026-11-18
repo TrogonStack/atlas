@@ -35,12 +35,17 @@ async fn start_server() -> String {
 
 const HEADER: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1";
 
+/// A manifest for a `kind` whose spec is just its title.
+fn titled(kind: &str, ns: &str, slug: &str) -> String {
+    format!("{HEADER}\nkind: {kind}\nmetadata: {{ namespace: {ns}, name: {slug} }}\nspec: {{ title: {slug} }}\n")
+}
+
 fn event(ns: &str, slug: &str) -> String {
-    format!("{HEADER}\nkind: Event\nmetadata: {{ namespace: {ns}, name: {slug} }}\nspec: {{ title: {slug} }}\n")
+    titled("Event", ns, slug)
 }
 
 fn command(ns: &str, slug: &str) -> String {
-    format!("{HEADER}\nkind: Command\nmetadata: {{ namespace: {ns}, name: {slug} }}\nspec: {{ title: {slug} }}\n")
+    titled("Command", ns, slug)
 }
 
 /// A command slice in `ns` whose command and emitted event are given as
@@ -68,11 +73,9 @@ fn model(ns: &str) -> Vec<String> {
 
 async fn plan(client: &mut client::Client, yaml: &str, prune: bool) -> Vec<apply::PlannedChange> {
     let manifests = manifest::parse_str(yaml, "test.yaml").unwrap();
-    if prune {
-        apply::plan_with_prune(client, manifests).await.unwrap()
-    } else {
-        apply::plan(client, manifests).await.unwrap()
-    }
+    apply::plan_with_prune(client, manifests, prune)
+        .await
+        .unwrap()
 }
 
 async fn apply_str(
@@ -129,19 +132,14 @@ async fn prune_deletes_only_undeclared_entities_in_covered_namespaces() {
         .await
         .unwrap();
     assert!(pruned(&out).is_empty(), "{:?}", out.lines);
-    let (_, changed) = apply::render_diff(
-        &plan(&mut client, &revised, false).await,
-        &TranscodePool::builtin().unwrap(),
-    )
-    .unwrap();
+    let types = TranscodePool::builtin().unwrap();
+    let (_, changed) =
+        apply::render_diff(&plan(&mut client, &revised, false).await, &types).unwrap();
     assert!(!changed);
 
     // diff --prune shows the delete as a removed entity.
-    let (diff, changed) = apply::render_diff(
-        &plan(&mut client, &revised, true).await,
-        &TranscodePool::builtin().unwrap(),
-    )
-    .unwrap();
+    let (diff, changed) =
+        apply::render_diff(&plan(&mut client, &revised, true).await, &types).unwrap();
     assert!(changed);
     assert!(diff.contains("diff event:shop/order.archived@1"), "{diff}");
     assert!(diff.contains("-  \"event\": {"), "{diff}");
@@ -373,13 +371,12 @@ async fn prune_refuses_a_namespace_the_server_cannot_list_completely() {
     let mut client = client::connect(&server.endpoint, None, 30).await.unwrap();
 
     let manifests = manifest::parse_str(&event("shop", "order.placed"), "test.yaml").unwrap();
-    let err = apply::plan_with_prune(&mut client, manifests)
+    let err = apply::plan_with_prune(&mut client, manifests, true)
         .await
-        .err()
-        .expect("a partial listing must not be planned as if it were complete");
+        .expect_err("a partial listing must not be planned as if it were complete");
     let message = format!("{err:#}");
     assert!(
-        message.contains("cannot prune namespace \"shop\""),
+        message.contains("namespace \"shop\" cannot be read completely"),
         "{message}"
     );
     assert!(message.contains("entity cap"), "{message}");

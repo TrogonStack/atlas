@@ -798,15 +798,16 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     },
     // apply_manifests plans with BatchGetEntities (and ListEntities when
     // pruning), then writes through BatchMutate
-    // (trogon_atlas_client::apply::plan / plan_with_prune / apply).
+    // (trogon_atlas_client::apply::plan_with_prune / apply).
     ToolPolicy {
         tool: "apply_manifests",
         rpcs: &["BatchGetEntities", "ListEntities", "BatchMutate"],
         min_role: ToolRole::Writer,
         area: ToolArea::Model,
     },
-    // diff_manifests only plans (trogon_atlas_client::apply::plan); it
-    // never calls apply, so it never reaches BatchMutate.
+    // diff_manifests only plans (trogon_atlas_client::apply::plan_with_prune,
+    // listing namespaces when pruning); it never calls apply, so it never
+    // reaches BatchMutate.
     ToolPolicy {
         tool: "diff_manifests",
         rpcs: &["BatchGetEntities", "ListEntities"],
@@ -5506,12 +5507,10 @@ impl McpServer {
             trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
                 .await
                 .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        let plan = if p.prune {
-            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests).await
-        } else {
-            trogon_atlas_client::apply::plan(&mut client, resolved.manifests).await
-        }
-        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let plan =
+            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests, p.prune)
+                .await
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let outcome = trogon_atlas_client::apply::apply(
             &mut client,
             plan,
@@ -5561,12 +5560,10 @@ impl McpServer {
             trogon_atlas_client::manifest::load_with_tenant_types(&mut client, documents)
                 .await
                 .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        let plan = if p.prune {
-            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests).await
-        } else {
-            trogon_atlas_client::apply::plan(&mut client, resolved.manifests).await
-        }
-        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let plan =
+            trogon_atlas_client::apply::plan_with_prune(&mut client, resolved.manifests, p.prune)
+                .await
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let (diff, changed) = trogon_atlas_client::apply::render_diff(&plan, &resolved.types)
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let body = serde_json::json!({ "changed": changed, "diff": diff }).to_string();
