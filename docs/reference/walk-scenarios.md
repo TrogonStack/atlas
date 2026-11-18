@@ -124,8 +124,8 @@ command's stream is filled from the command's values. An event on the
 command's swimlane lands on that stream. An event on another swimlane lands
 on the stream its own template names, filled from the command's values and
 the step's answer. Numeric placeholders are normalized, so `4` and `4.0`
-fill the same stream id. An entity without a swimlane is on no stream
-and shares no history.
+fill the same stream id. A command or event without a swimlane is on no
+stream. Its timeline is only the earlier events that correlate with it.
 
 After all cases, storyboards and command, read-model and automation slice
 scenarios in the cases' namespaces that no case reached are reported as

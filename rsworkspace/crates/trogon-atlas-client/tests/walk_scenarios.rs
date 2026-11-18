@@ -1056,3 +1056,31 @@ fn a_lane_less_command_with_correlated_history_is_not_on_an_empty_timeline() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn a_pin_on_one_kind_does_not_choose_another_kinds_version() {
+    // A slice pins the command summary@1; nothing pins the read model
+    // summary, so its bare ref is the latest read model version.
+    let rm = |version: u64| {
+        format!(
+            "---\napiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: ReadModel\nmetadata: {{name: summary, namespace: walk-reviews, version: {version}}}\nspec:\n  title: summary\n  key: [id]\n{}",
+            schema(&["id"])
+        )
+    };
+    let report = walk_with(
+        &[
+            rm(1),
+            rm(2),
+            entity("Command", "summary", None, &["id"]),
+            entity("Event", "summarized", None, &["id"]),
+            command_slice(
+                "summary-slice",
+                "summary",
+                &["summarized"],
+                &[("summarize", &[], &["summarized"])],
+            ),
+        ],
+        "  given:\n    readModels:\n    - readModel: summary@2\n      rows:\n      - {id: a}\n  then:\n    readModels:\n    - readModel: summary\n      rows:\n      - {id: a}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}

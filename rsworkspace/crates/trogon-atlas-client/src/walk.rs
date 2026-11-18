@@ -324,8 +324,8 @@ impl WalkReport {
 #[derive(Debug, Default, Clone)]
 pub struct Model {
     docs: BTreeMap<K, BTreeMap<Key, Value>>,
-    /// Versions the latest entities pin, by (namespace, slug).
-    pins: BTreeMap<(String, String), BTreeSet<u64>>,
+    /// Versions the latest entities pin, by (kind, namespace, slug).
+    pins: Pins,
 }
 
 impl Model {
@@ -407,7 +407,7 @@ impl Model {
     /// rather than a newer one nothing references yet.
     fn pinned_version(&self, kind: K, namespace: &str, slug: &str) -> Option<u64> {
         self.pins
-            .get(&(namespace.to_string(), slug.to_string()))?
+            .get(&(kind, namespace.to_string(), slug.to_string()))?
             .iter()
             .rev()
             .copied()
@@ -494,28 +494,58 @@ fn fetch_scope<'a>(extra: &'a [String], cases: &'a [Case]) -> BTreeSet<&'a str> 
         .collect()
 }
 
+type Pins = BTreeMap<(K, String, String), BTreeSet<u64>>;
+
 /// Every `{namespace, slug, version}` ref in an entity body, below its top
-/// level (the top-level `id` is the entity itself).
-fn collect_refs(body: &Value, out: &mut BTreeMap<(String, String), BTreeSet<u64>>) {
-    fn walk(v: &Value, out: &mut BTreeMap<(String, String), BTreeSet<u64>>) {
+/// level (the top-level `id` is the entity itself), by the kind its field
+/// names (`command`, `readModel`, `sourceEvents`, ...). Refs whose field
+/// names no kind are left out.
+fn collect_refs(body: &Value, out: &mut Pins) {
+    fn walk(v: &Value, field: Option<&str>, out: &mut Pins) {
         match v {
             Value::Object(map) => {
-                if let Some(key) = id_key(v).filter(|_| map.contains_key("version")) {
-                    out.entry((key.namespace, key.slug))
+                if let (Some(key), Some(kind)) = (
+                    id_key(v).filter(|_| map.contains_key("version")),
+                    field.and_then(kind_named),
+                ) {
+                    out.entry((kind, key.namespace, key.slug))
                         .or_default()
                         .insert(key.version);
                 }
-                map.values().for_each(|c| walk(c, out));
+                for (k, child) in map {
+                    // An `id` wrapper keeps the field that names the ref's kind.
+                    let field = if k == "id" { field } else { Some(k.as_str()) };
+                    walk(child, field, out);
+                }
             }
-            Value::Array(items) => items.iter().for_each(|c| walk(c, out)),
+            Value::Array(items) => items.iter().for_each(|c| walk(c, field, out)),
             _ => {}
         }
     }
     if let Value::Object(map) = body {
         map.iter()
             .filter(|(k, _)| k.as_str() != "id")
-            .for_each(|(_, v)| walk(v, out));
+            .for_each(|(k, v)| walk(v, Some(k), out));
     }
+}
+
+/// The entity kind a ref field names: `readModel` is a ReadModel, and a
+/// list such as `sourceEvents` names its last word, singular.
+fn kind_named(field: &str) -> Option<K> {
+    let mut snake = String::new();
+    for c in field.chars() {
+        if c.is_ascii_uppercase() && !snake.is_empty() {
+            snake.push('_');
+        }
+        snake.push(c.to_ascii_uppercase());
+    }
+    let exact = |name: &str| {
+        K::from_str_name(&format!("ENTITY_KIND_{name}")).filter(|k| *k != K::Unspecified)
+    };
+    exact(&snake).or_else(|| {
+        let last = snake.rsplit('_').next()?;
+        exact(last.strip_suffix('S').unwrap_or(last))
+    })
 }
 
 /// An entity's kind, exact id and proto-JSON body (references unshortened).
@@ -2475,6 +2505,14 @@ mod tests {
             map(json!({"review_id": "r-1"})),
         ];
         assert!(rows_mismatch(&impossible, &actual).is_some());
+    }
+
+    #[test]
+    fn ref_fields_name_their_entity_kind() {
+        assert_eq!(kind_named("command"), Some(K::Command));
+        assert_eq!(kind_named("readModel"), Some(K::ReadModel));
+        assert_eq!(kind_named("sourceEvents"), Some(K::Event));
+        assert_eq!(kind_named("title"), None);
     }
 
     #[test]
