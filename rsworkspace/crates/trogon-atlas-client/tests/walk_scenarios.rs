@@ -1028,3 +1028,31 @@ fn a_scenario_where_the_automation_stays_idle_is_not_a_coverage_gap() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn a_lane_less_command_with_correlated_history_is_not_on_an_empty_timeline() {
+    // The second ping shares id x with the first, so "again" applies and
+    // the empty-given "first" no longer does.
+    let report = walk_with(
+        &[
+            entity("Command", "ping", None, &["id"]),
+            entity("Event", "pinged", None, &["id"]),
+            entity("Event", "ping.repeated", None, &["id"]),
+            command_slice(
+                "ping-slice",
+                "ping",
+                &["pinged", "ping.repeated"],
+                &[
+                    ("first", &[], &["pinged"]),
+                    ("again", &["pinged"], &["ping.repeated"]),
+                ],
+            ),
+        ],
+        "  steps:\n  - command: ping\n    answer: {id: x}\n  - command: ping\n    answer: {id: x}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+    assert!(
+        !unwalked(&report).iter().any(|m| m.contains("\"again\"")),
+        "{report:#?}"
+    );
+}

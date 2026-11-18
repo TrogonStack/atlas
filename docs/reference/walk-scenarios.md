@@ -90,7 +90,7 @@ instead of being ignored.
    them. The scenario's last mention of that state is the current
    occurrence: the `given` events listed before it must come before it, and
    the ones listed after it must come after it. Other instances of the
-   command's own swimlane never join its timeline. An empty `given` matches only an empty stream. The step's `expect`
+   command's own swimlane never join its timeline. An empty `given` matches only an empty stream, or for a command without a swimlane, only when no earlier event correlates with it. The step's `expect`
    is compared against the matching scenarios: an expected reject the model
    does not make is reported and the walk continues with what the model
    does; an expected emit that contradicts a matching scenario is reported

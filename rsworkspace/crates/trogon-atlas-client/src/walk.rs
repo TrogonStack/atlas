@@ -1759,6 +1759,9 @@ impl CaseRun<'_> {
             // mention of that state is the current occurrence, so what it
             // lists before or after must have happened before or after it.
             let applies = match (state, at) {
+                // Without a stream, a lane-less command's timeline is the
+                // events that correlate with it.
+                _ if given.is_empty() && stream.is_none() => related.is_empty(),
                 _ if given.is_empty() => history.is_empty(),
                 (None, _) => is_subsequence(&given, keys_of(&related)),
                 (Some(s), Some(at)) => given
