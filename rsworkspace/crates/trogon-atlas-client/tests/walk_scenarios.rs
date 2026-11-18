@@ -904,3 +904,46 @@ fn an_answer_is_checked_against_every_ambiguous_read_model() {
         "{report:#?}"
     );
 }
+
+fn stamped_event(derived_doc: &str) -> String {
+    doc(
+        "Event",
+        "review.stamped",
+        &format!(
+            "  schema: {{'@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema, fields: [{{name: review_id, type: {{string: {{}}}}}}, {{name: stamped_at, type: {{string: {{}}}}, metadata: [{{'@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation, doc: '{derived_doc}', kind: KIND_TIMESTAMP}}]}}]}}\n"
+        ),
+    )
+}
+
+fn walk_stamp(derived_doc: &str) -> WalkReport {
+    walk_with(
+        &[
+            stamped_event(derived_doc),
+            entity("Command", "stamp-review", None, &["review_id"]),
+            command_slice(
+                "stamp-slice",
+                "stamp-review",
+                &["review.stamped"],
+                &[("stamp", &[], &["review.stamped"])],
+            ),
+        ],
+        "  steps:\n  - command: stamp-review\n    answer: {review_id: r-1}\n",
+    )
+}
+
+#[test]
+fn a_derived_annotation_with_a_stated_doc_sources_the_field() {
+    let report = walk_stamp("now() when the event is recorded");
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}
+
+#[test]
+fn a_derived_annotation_with_a_blank_doc_sources_nothing() {
+    // The validator treats a blank doc as no annotation at all.
+    let report = walk_stamp("  ");
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(1), "WALK_EVENT_FIELD_UNSOURCED")],
+        "{report:#?}"
+    );
+}

@@ -75,7 +75,8 @@ instead of being ignored.
    read models those issuers observe, or from the step's `answer` (a `null`
    answer supplies nothing). When the answer names a read model's `key`
    fields, only rows with those key values count. Fields with a
-   `DerivedFieldAnnotation` get a placeholder; optional fields may stay
+   `DerivedFieldAnnotation` with a stated `doc` get a placeholder (a blank `doc`
+   counts as no annotation, as in validation); optional fields may stay
    empty. A conflicting answer still wins, and is reported. A required field
    whose rows disagree, with nothing else to supply it, is an error.
 3. **Outcome.** The command slice's scenarios are matched against the

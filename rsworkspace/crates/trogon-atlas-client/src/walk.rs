@@ -649,7 +649,7 @@ fn field_specs(list: &[Value]) -> Vec<Field> {
             let name = f.get("name")?.as_str()?.to_string();
             let derived = arr(f, "metadata").iter().find_map(|m| {
                 let t = m.get("@type")?.as_str()?;
-                if !t.ends_with(DERIVED_TYPE_SUFFIX) || str_at(m, "doc").is_empty() {
+                if !t.ends_with(DERIVED_TYPE_SUFFIX) || str_at(m, "doc").trim().is_empty() {
                     return None;
                 }
                 Some(
