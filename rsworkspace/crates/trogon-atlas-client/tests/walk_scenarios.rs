@@ -1084,3 +1084,20 @@ fn a_pin_on_one_kind_does_not_choose_another_kinds_version() {
     );
     assert_eq!(codes(&report), vec![], "{report:#?}");
 }
+
+#[test]
+fn matching_scenarios_that_decide_differently_are_flagged() {
+    let report = walk_with(
+        &thread_model(&[
+            ("first", &[], &["reply.posted"]),
+            ("reply", &["reply.posted"], &["reply.posted"]),
+            ("locked", &["reply.posted"], &[]),
+        ]),
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: t-1, body: a}\n  - command: post-reply\n    answer: {thread_id: t-1, body: b}\n",
+    );
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(2), "WALK_SCENARIOS_CONFLICT")],
+        "{report:#?}"
+    );
+}

@@ -151,7 +151,8 @@ produced them:
 
 The report also carries `cases` (per case: steps, error and warning counts,
 `passed`) and `coverage` (storyboards and scenarios walked out of the total).
-The MCP tool adds `skipped`, the entities the export path could not render.
+Both surfaces add `skipped`, the entities the export path could not render
+(always empty for an offline walk, which fails instead).
 `trogon-atlas walk-scenarios` exits `1` when any error is reported, and
 `5` for an invalid case file or case paths that hold no case
 (see [exit codes](trogon-atlas-exit-codes.md)).
@@ -177,6 +178,7 @@ The MCP tool adds `skipped`, the entities the export path could not render.
 | `WALK_REJECT_REASON_MISMATCH` | Warning | Reject reason differs | A reject scenario refuses the command, but with a different reason code than the case expects. |
 | `WALK_UNEXPECTED_REJECT` | Error | Model refuses an expected command | The case expects events, but a reject scenario on the command slice matches the stream's history and refuses the command. |
 | `WALK_EMIT_MISMATCH` | Error | Model emits something else | A scenario on the command slice matches the stream's history and decides the step's events, but they differ from the events the case expects. The walk follows the model. |
+| `WALK_SCENARIOS_CONFLICT` | Warning | Matching scenarios disagree | Several scenarios of the command's slices match the stream's history but refuse or emit differently, so the model does not say which outcome applies. The walk prefers the outcome the case expects, then a reject, then the first emit. |
 | `WALK_SCENARIO_MISSING` | Warning | No scenario covers the step | No scenario on the command slice has this command with a `given` matching the stream's history and the step's outcome. The walk continued, but the model does not document this timeline. |
 | `WALK_OUTCOME_UNDETERMINED` | Error | Step outcome cannot be decided | The step states no expected outcome, no scenario matches, and the command slice emits more than one event. State `expect.emit` or `expect.reject` on the step. |
 | `WALK_STREAM_UNRESOLVED` | Warning | Stream id has an unfilled placeholder | The swimlane's `stream_id` names a placeholder the payload does not carry, so the walk cannot tell stream instances apart. |

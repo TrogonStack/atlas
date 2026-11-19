@@ -1579,7 +1579,7 @@ async fn run(
             namespaces,
         } => {
             let cases = walk::read_case_paths(&cases)?;
-            let model = if filenames.is_empty() {
+            let (model, skipped) = if filenames.is_empty() {
                 let mut client =
                     connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
                         .await?;
@@ -1587,9 +1587,9 @@ async fn run(
                 for line in &skipped {
                     eprintln!("skipped (not walked): {line}");
                 }
-                model
+                (model, skipped)
             } else {
-                walk::Model::load_paths(&filenames)?
+                (walk::Model::load_paths(&filenames)?, Vec::new())
             };
             let report = walk::walk(&model, &cases);
             if text {
@@ -1611,7 +1611,11 @@ async fn run(
             } else {
                 ExitCode::SUCCESS
             };
-            Ok((code, Some(serde_json::to_value(&report)?)))
+            // Entities that could not be rendered were not walked, so a pass
+            // covers only the rest.
+            let mut data = serde_json::to_value(&report)?;
+            data["skipped"] = serde_json::json!(skipped);
+            Ok((code, Some(data)))
         }
         Cmd::Apply {
             filenames,

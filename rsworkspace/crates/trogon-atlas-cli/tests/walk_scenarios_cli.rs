@@ -55,6 +55,8 @@ fn json_format_prints_one_outcome_with_the_report() {
     assert_eq!(findings[0]["code"], "WALK_COMMAND_FIELD_UNSUPPLIED");
     assert_eq!(findings[0]["severity"], "SEVERITY_ERROR");
     assert_eq!(outcome["data"]["cases"].as_array().unwrap().len(), 3);
+    // An offline walk renders every manifest or fails, so nothing is skipped.
+    assert_eq!(outcome["data"]["skipped"], serde_json::json!([]));
 }
 
 #[test]

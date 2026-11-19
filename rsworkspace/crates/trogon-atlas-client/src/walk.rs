@@ -110,7 +110,7 @@ macro_rules! rules {
 
 rules! {
     REF_UNRESOLVED = "WALK_REF_UNRESOLVED", Error, "Case names an entity the model lacks",
-        "A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the latest version.";
+        "A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the highest version the model's latest entities pin, or else the latest version.";
     CASE_INVALID = "WALK_CASE_INVALID", Error, "Case is malformed",
         "A step expects both an emit and a reject; state one of them, or neither to let the model decide.";
     VIA_NOT_ISSUER = "WALK_VIA_NOT_ISSUER", Error, "`via` does not issue the command",
@@ -143,6 +143,8 @@ rules! {
         "The case expects events, but a reject scenario on the command slice matches the stream's history and refuses the command.";
     EMIT_MISMATCH = "WALK_EMIT_MISMATCH", Error, "Model emits something else",
         "A scenario on the command slice matches the stream's history and decides the step's events, but they differ from the events the case expects. The walk follows the model.";
+    SCENARIOS_CONFLICT = "WALK_SCENARIOS_CONFLICT", Warning, "Matching scenarios disagree",
+        "Several scenarios of the command's slices match the stream's history but refuse or emit differently, so the model does not say which outcome applies. The walk prefers the outcome the case expects, then a reject, then the first emit.";
     SCENARIO_MISSING = "WALK_SCENARIO_MISSING", Warning, "No scenario covers the step",
         "No scenario on the command slice has this command with a `given` matching the stream's history and the step's outcome. The walk continued, but the model does not document this timeline.";
     OUTCOME_UNDETERMINED = "WALK_OUTCOME_UNDETERMINED", Error, "Step outcome cannot be decided",
@@ -1775,6 +1777,33 @@ impl CaseRun<'_> {
             let names: Vec<String> = history.iter().map(|r| r.event.slug.clone()).collect();
             format!("stream history [{}]", names.join(", "))
         };
+        let mut outcomes: Vec<String> = Vec::new();
+        for (_, _, code) in &rejects {
+            push_unique(&mut outcomes, format!("refuse ({code})"));
+        }
+        for (_, _, events) in &emits {
+            let names: Vec<String> = events.iter().map(ToString::to_string).collect();
+            push_unique(&mut outcomes, format!("emit [{}]", names.join(", ")));
+        }
+        if outcomes.len() > 1 {
+            let ids: Vec<String> = rejects
+                .iter()
+                .map(|(_, id, _)| format!("{id:?}"))
+                .chain(emits.iter().map(|(_, id, _)| format!("{id:?}")))
+                .collect();
+            self.push(
+                WalkFinding::new(
+                    SCENARIOS_CONFLICT,
+                    format!(
+                        "scenarios {} of {slice_label} all match {command} after {history_label} but {}",
+                        ids.join(", "),
+                        outcomes.join(" or ")
+                    ),
+                )
+                .subject(K::CommandSlice, slice_key)
+                .field("scenarios"),
+            );
+        }
 
         if let Some(reason) = &step.expect.reject {
             if rejects.is_empty() {
@@ -2151,7 +2180,7 @@ impl CaseRun<'_> {
 }
 
 /// Append `key` unless `list` already holds it, keeping first-seen order.
-fn push_unique(list: &mut Vec<Key>, key: Key) {
+fn push_unique<T: PartialEq>(list: &mut Vec<T>, key: T) {
     if !list.contains(&key) {
         list.push(key);
     }
