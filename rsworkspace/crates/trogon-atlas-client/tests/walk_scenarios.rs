@@ -1168,3 +1168,20 @@ fn a_slice_projecting_into_a_missing_read_model_is_reported() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn an_expected_emit_wins_over_a_conflicting_reject() {
+    let report = walk_with(
+        &thread_model(&[
+            ("first", &[], &["reply.posted"]),
+            ("reply", &["reply.posted"], &["reply.posted"]),
+            ("locked", &["reply.posted"], &[]),
+        ]),
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: t-1, body: a}\n  - command: post-reply\n    answer: {thread_id: t-1, body: b}\n    expect: {emit: [reply.posted]}\n",
+    );
+    assert_eq!(
+        codes(&report),
+        vec![case("inline", Some(2), "WALK_SCENARIOS_CONFLICT")],
+        "{report:#?}"
+    );
+}

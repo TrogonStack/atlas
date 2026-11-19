@@ -1864,20 +1864,6 @@ impl CaseRun<'_> {
         }
 
         if let Some(expected) = &step.expect.emit {
-            if let Some((owner, id, code)) = rejects.first() {
-                self.mark(K::CommandSlice, owner, id);
-                self.push(
-                    WalkFinding::new(
-                        UNEXPECTED_REJECT,
-                        format!(
-                            "the case expects {command} to emit events after {history_label}, but scenario {id:?} of {owner} refuses it ({code})"
-                        ),
-                    )
-                    .subject(K::CommandSlice, owner)
-                    .field(format!("scenarios[{id}].reject")),
-                );
-                return None;
-            }
             let mut keys = Vec::new();
             for reference in expected {
                 let mut key = self.model.event_key(reference, self.ns());
@@ -1908,6 +1894,22 @@ impl CaseRun<'_> {
             if let Some((owner, id, _)) = emits.iter().find(|(_, _, events)| *events == keys) {
                 self.mark(K::CommandSlice, owner, id);
                 return Some(keys);
+            }
+            // No scenario emits what the case expects, so a matching reject
+            // decides the step.
+            if let Some((owner, id, code)) = rejects.first() {
+                self.mark(K::CommandSlice, owner, id);
+                self.push(
+                    WalkFinding::new(
+                        UNEXPECTED_REJECT,
+                        format!(
+                            "the case expects {command} to emit events after {history_label}, but scenario {id:?} of {owner} refuses it ({code})"
+                        ),
+                    )
+                    .subject(K::CommandSlice, owner)
+                    .field(format!("scenarios[{id}].reject")),
+                );
+                return None;
             }
             if let Some((owner, id, events)) = emits.into_iter().next() {
                 // A scenario decides this step and it says something else:
