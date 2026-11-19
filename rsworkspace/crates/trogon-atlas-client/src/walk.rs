@@ -110,7 +110,7 @@ macro_rules! rules {
 
 rules! {
     REF_UNRESOLVED = "WALK_REF_UNRESOLVED", Error, "Case names an entity the model lacks",
-        "A step's command, a `via` slice, or an expected read model does not resolve in the walked model. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the highest version the model's latest entities pin, or else the latest version.";
+        "A step's command, a `via` slice, or an expected read model does not resolve in the walked model, or a read-model slice projects into a read model the walked model lacks. Refs are `slug`, `namespace/slug` or `namespace/slug@version`; a bare slug resolves in the case's namespace and an unpinned ref resolves to the highest version the model's latest entities pin, or else the latest version.";
     CASE_INVALID = "WALK_CASE_INVALID", Error, "Case is malformed",
         "A step expects both an emit and a reject; state one of them, or neither to let the model decide.";
     VIA_NOT_ISSUER = "WALK_VIA_NOT_ISSUER", Error, "`via` does not issue the command",
@@ -1165,8 +1165,19 @@ impl CaseRun<'_> {
                 continue;
             };
             self.touched.slices.insert(slice_key.clone());
-            let rm_spec = model.get(K::ReadModel, &rm);
-            let key_fields = rm_key_fields(rm_spec);
+            // Without the target's key, every event would land on one row.
+            let Some(rm_spec) = model.get(K::ReadModel, &rm) else {
+                self.push(
+                    WalkFinding::new(
+                        REF_UNRESOLVED,
+                        format!("{slice_key} projects into {rm}, which is not in the walked model"),
+                    )
+                    .subject(K::ReadModelSlice, slice_key)
+                    .field("read_model"),
+                );
+                continue;
+            };
+            let key_fields = rm_key_fields(Some(rm_spec));
             let Some(id) = row_id(&key_fields, payload) else {
                 let missing: Vec<&str> = key_fields
                     .iter()
@@ -1192,7 +1203,7 @@ impl CaseRun<'_> {
                 table.remove(&id);
             } else {
                 let row = table.entry(id.clone()).or_default();
-                match rm_spec.and_then(schema_fields) {
+                match schema_fields(rm_spec) {
                     Some(fields) => {
                         for field in fields {
                             if let Some(v) = payload.get(&field.name) {

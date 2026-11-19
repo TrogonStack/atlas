@@ -1120,3 +1120,51 @@ fn every_scenario_a_step_matches_counts_as_walked() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn via_resolves_to_the_kind_that_issues_the_command() {
+    // An automation shares the moderation screen's id but issues another
+    // command; the UI slice is still the issuer via names.
+    let report = walk_with(
+        &[doc(
+            "AutomationSlice",
+            "moderation-screen-slice",
+            &format!(
+                "  emittedCommand: {{command: {}}}\n  processor: {{processor: {}}}\n",
+                r("submit-review"),
+                r("auto-approver")
+            ),
+        )],
+        "  given:\n    events:\n    - event: review.submitted\n      payload: {review_id: r-1, rating: 4}\n  steps:\n  - command: reject-review\n    via: moderation-screen-slice\n    answer: {review_id: r-1}\n",
+    );
+    assert!(
+        !codes(&report).iter().any(|c| c.2 == "WALK_VIA_NOT_ISSUER"),
+        "{report:#?}"
+    );
+}
+
+#[test]
+fn a_slice_projecting_into_a_missing_read_model_is_reported() {
+    let report = walk_with(
+        &[doc(
+            "ReadModelSlice",
+            "ghost-board",
+            &format!(
+                "  projectionRole: PROJECTION_ROLE_UPSERT\n  readModel: {{readModel: {}}}\n  sourceEvents: [{{event: {}}}]\n",
+                r("ghost"),
+                r("review.submitted")
+            ),
+        )],
+        "  steps:\n  - command: submit-review\n    answer: {review_id: r-1, rating: 4}\n",
+    );
+    let unresolved: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "WALK_REF_UNRESOLVED")
+        .map(|f| f.message.as_str())
+        .collect();
+    assert!(
+        unresolved.iter().any(|m| m.contains("ghost")),
+        "{report:#?}"
+    );
+}
