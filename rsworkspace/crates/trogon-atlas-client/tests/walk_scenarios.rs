@@ -1185,3 +1185,33 @@ fn an_expected_emit_wins_over_a_conflicting_reject() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn every_transition_row_for_a_predecessor_counts() {
+    let opened = r("ticket.opened");
+    let report = walk_with(
+        &[
+            doc(
+                "Swimlane",
+                "ticket",
+                &format!(
+                    "  streamId: ticket-{{ticket_id}}\n  transitions:\n  - {{after: {opened}, next: [{{event: {}}}]}}\n  - {{after: {opened}, next: [{{event: {}}}]}}\n",
+                    r("ticket.closed"),
+                    r("ticket.escalated")
+                ),
+            ),
+            entity("Event", "ticket.opened", Some("ticket"), &["ticket_id"]),
+            entity("Event", "ticket.closed", Some("ticket"), &["ticket_id"]),
+            entity("Event", "ticket.escalated", Some("ticket"), &["ticket_id"]),
+            entity("Command", "escalate-ticket", Some("ticket"), &["ticket_id"]),
+            command_slice(
+                "escalate-ticket-slice",
+                "escalate-ticket",
+                &["ticket.escalated"],
+                &[("escalate", &["ticket.opened"], &["ticket.escalated"])],
+            ),
+        ],
+        "  given:\n    events:\n    - event: ticket.opened\n      payload: {ticket_id: t-1}\n  steps:\n  - command: escalate-ticket\n    answer: {ticket_id: t-1}\n",
+    );
+    assert_eq!(codes(&report), vec![], "{report:#?}");
+}

@@ -2177,11 +2177,14 @@ impl CaseRun<'_> {
             // A terminal predecessor was reported above; otherwise the
             // event must be one of the predecessor's successors.
             Some(prev) => {
-                if let Some((_, next)) = transitions
-                    .iter()
-                    .find(|(a, _)| *a == prev)
-                    .filter(|(_, next)| !next.contains(event))
-                {
+                // A predecessor may list its successors across several rows.
+                let mut next: Vec<&Key> = Vec::new();
+                for (_, n) in transitions.iter().filter(|(a, _)| *a == prev) {
+                    for k in n {
+                        push_unique(&mut next, k);
+                    }
+                }
+                if !next.contains(&event) {
                     let legal: Vec<String> = next.iter().map(ToString::to_string).collect();
                     self.push(
                         WalkFinding::new(
