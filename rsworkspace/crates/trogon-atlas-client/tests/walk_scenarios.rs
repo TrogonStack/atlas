@@ -1101,3 +1101,22 @@ fn matching_scenarios_that_decide_differently_are_flagged() {
         "{report:#?}"
     );
 }
+
+#[test]
+fn every_scenario_a_step_matches_counts_as_walked() {
+    let report = walk_with(
+        &thread_model(&[
+            ("first", &[], &["reply.posted"]),
+            ("reply", &["reply.posted"], &["reply.posted"]),
+            ("locked", &["reply.posted"], &[]),
+        ]),
+        "  steps:\n  - command: post-reply\n    answer: {thread_id: t-1, body: a}\n  - command: post-reply\n    answer: {thread_id: t-1, body: b}\n",
+    );
+    let unwalked = unwalked(&report);
+    assert!(
+        !unwalked
+            .iter()
+            .any(|m| m.contains("\"reply\"") || m.contains("\"locked\"")),
+        "{report:#?}"
+    );
+}

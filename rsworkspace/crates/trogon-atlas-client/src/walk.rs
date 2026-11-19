@@ -1777,6 +1777,14 @@ impl CaseRun<'_> {
             let names: Vec<String> = history.iter().map(|r| r.event.slug.clone()).collect();
             format!("stream history [{}]", names.join(", "))
         };
+        // A step that matches a scenario walks it, whichever outcome the walk
+        // then follows.
+        for (owner, id, _) in &rejects {
+            self.mark(K::CommandSlice, owner, id);
+        }
+        for (owner, id, _) in &emits {
+            self.mark(K::CommandSlice, owner, id);
+        }
         let mut outcomes: Vec<String> = Vec::new();
         for (_, _, code) in &rejects {
             push_unique(&mut outcomes, format!("refuse ({code})"));
