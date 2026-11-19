@@ -40,7 +40,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{anyhow, Result};
 use pb::EntityKind as K;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -334,18 +334,37 @@ impl Model {
     pub fn from_entities(entities: &[pb::Entity], types: &TranscodePool) -> (Self, Vec<String>) {
         let mut model = Model::default();
         let mut skipped = Vec::new();
+        let mut rendered = Vec::new();
         for entity in entities {
             match entity_body(entity, types) {
                 Ok((kind, key, body)) => {
-                    model.docs.entry(kind).or_default().insert(key, body);
+                    model
+                        .docs
+                        .entry(kind)
+                        .or_default()
+                        .insert(key.clone(), body);
+                    rendered.push((kind, key, entity));
                 }
                 Err(err) => skipped.push(format!("{}: {err:#}", export::entity_label(entity))),
             }
         }
-        let mut pins = BTreeMap::new();
-        for kind in model.docs.keys() {
-            for (_, body) in model.live(*kind) {
-                collect_refs(body, &mut pins);
+        // Pins come from the latest version of each entity only, and never
+        // from `supersedes` (a version does not pin its predecessor), from
+        // untyped slice refs, or from refs that name no version.
+        let mut pins = Pins::new();
+        for (kind, key, entity) in rendered {
+            if model.latest_version(kind, &key.namespace, &key.slug) != Some(key.version) {
+                continue;
+            }
+            for r in trogon_atlas_core::refs::outbound_refs(entity) {
+                let pinned = r.from_field != "supersedes" && r.to_id.version != 0;
+                let Some(to_kind) = r.to_kind.filter(|_| pinned) else {
+                    continue;
+                };
+                let to = proto_key(&r.to_id);
+                pins.entry((to_kind, to.namespace, to.slug))
+                    .or_default()
+                    .insert(to.version);
             }
         }
         model.pins = pins;
@@ -496,58 +515,6 @@ fn fetch_scope<'a>(extra: &'a [String], cases: &'a [Case]) -> BTreeSet<&'a str> 
 
 type Pins = BTreeMap<(K, String, String), BTreeSet<u64>>;
 
-/// Every `{namespace, slug, version}` ref in an entity body, below its top
-/// level (the top-level `id` is the entity itself), by the kind its field
-/// names (`command`, `readModel`, `sourceEvents`, ...). Refs whose field
-/// names no kind are left out.
-fn collect_refs(body: &Value, out: &mut Pins) {
-    fn walk(v: &Value, field: Option<&str>, out: &mut Pins) {
-        match v {
-            Value::Object(map) => {
-                if let (Some(key), Some(kind)) = (
-                    id_key(v).filter(|_| map.contains_key("version")),
-                    field.and_then(kind_named),
-                ) {
-                    out.entry((kind, key.namespace, key.slug))
-                        .or_default()
-                        .insert(key.version);
-                }
-                for (k, child) in map {
-                    // An `id` wrapper keeps the field that names the ref's kind.
-                    let field = if k == "id" { field } else { Some(k.as_str()) };
-                    walk(child, field, out);
-                }
-            }
-            Value::Array(items) => items.iter().for_each(|c| walk(c, field, out)),
-            _ => {}
-        }
-    }
-    if let Value::Object(map) = body {
-        map.iter()
-            .filter(|(k, _)| k.as_str() != "id")
-            .for_each(|(k, v)| walk(v, Some(k), out));
-    }
-}
-
-/// The entity kind a ref field names: `readModel` is a ReadModel, and a
-/// list such as `sourceEvents` names its last word, singular.
-fn kind_named(field: &str) -> Option<K> {
-    let mut snake = String::new();
-    for c in field.chars() {
-        if c.is_ascii_uppercase() && !snake.is_empty() {
-            snake.push('_');
-        }
-        snake.push(c.to_ascii_uppercase());
-    }
-    let exact = |name: &str| {
-        K::from_str_name(&format!("ENTITY_KIND_{name}")).filter(|k| *k != K::Unspecified)
-    };
-    exact(&snake).or_else(|| {
-        let last = snake.rsplit('_').next()?;
-        exact(last.strip_suffix('S').unwrap_or(last))
-    })
-}
-
 /// An entity's kind, exact id and proto-JSON body (references unshortened).
 fn entity_body(entity: &pb::Entity, types: &TranscodePool) -> Result<(K, Key, Value)> {
     let kind = trogon_atlas_core::refs::entity_kind(entity)
@@ -559,11 +526,19 @@ fn entity_body(entity: &pb::Entity, types: &TranscodePool) -> Result<(K, Key, Va
         .into_iter()
         .find_map(|(field, body)| (field != "system").then_some(body))
         .ok_or_else(|| anyhow!("entity JSON has no body"))?;
-    let key = body
-        .get("id")
-        .and_then(id_key)
-        .ok_or_else(|| anyhow!("entity body has no id"))?;
+    let key = trogon_atlas_core::refs::entity_id(entity)
+        .map(proto_key)
+        .ok_or_else(|| anyhow!("entity has no id"))?;
     Ok((kind, key, body))
+}
+
+/// A proto `Id` as a key; an unset version reads as 1, as in `id_key`.
+fn proto_key(id: &pb::Id) -> Key {
+    Key {
+        namespace: id.namespace.clone(),
+        slug: id.slug.clone(),
+        version: id.version.max(1),
+    }
 }
 
 /// Split a case ref (`slug`, `ns/slug`, `ns/slug@v`) into its parts
@@ -914,8 +889,7 @@ fn check_ref(reference: &str) -> std::result::Result<(), String> {
 pub fn read_case_paths(paths: &[PathBuf]) -> Result<Vec<Case>> {
     let mut cases = Vec::new();
     for file in manifest::collect_yaml_files(paths)? {
-        let text = std::fs::read_to_string(&file)
-            .with_context(|| format!("reading {}", file.display()))?;
+        let text = manifest::read_text(&file)?;
         cases.extend(parse_cases(&text, &file.display().to_string())?);
     }
     // A path with no case would otherwise pass as a clean walk in CI.
@@ -1048,8 +1022,9 @@ impl CaseRun<'_> {
         }
         for event in &case.spec.given.events {
             let key = self.model.event_key(&event.event, self.ns());
-            let stream = self.event_stream(&key, &event.payload);
-            self.record(&key, &event.payload, stream);
+            let lane = self.lane_of(K::Event, &key);
+            let stream = self.stream_of(lane.as_ref(), &event.payload);
+            self.record(&key, &event.payload, lane, stream);
         }
         for (i, step) in case.spec.steps.iter().enumerate() {
             self.step = Some(i + 1);
@@ -1158,14 +1133,13 @@ impl CaseRun<'_> {
 
     // --- projection ---
 
-    /// Stream instance an event with this payload lands on.
-    fn event_stream(&mut self, event: &Key, payload: &Map<String, Value>) -> Option<String> {
-        let lane = self.lane_of(K::Event, event);
-        self.stream_of(lane.as_ref(), payload)
-    }
-
-    fn record(&mut self, event: &Key, payload: &Map<String, Value>, stream: Option<String>) {
-        let lane = self.lane_of(K::Event, event);
+    fn record(
+        &mut self,
+        event: &Key,
+        payload: &Map<String, Value>,
+        lane: Option<Key>,
+        stream: Option<String>,
+    ) {
         self.log.push(Recorded {
             event: event.clone(),
             lane,
@@ -1370,9 +1344,9 @@ impl CaseRun<'_> {
         let Some(emitted) = self.decide(
             step,
             &command,
-            &slice_key,
             &slices,
             &values,
+            lane.as_ref(),
             stream.as_deref(),
         ) else {
             return;
@@ -1417,7 +1391,7 @@ impl CaseRun<'_> {
                 &command,
                 &slice_key,
             );
-            self.record(&event, &payload, event_stream);
+            self.record(&event, &payload, event_lane, event_stream);
         }
     }
 
@@ -1470,9 +1444,7 @@ impl CaseRun<'_> {
         }
         let mut uis: Vec<Key> = Vec::new();
         for ui in slices.iter().filter_map(|(_, s)| edge_at(s, "ui", "ui")) {
-            if !uis.contains(&ui) {
-                uis.push(ui);
-            }
+            push_unique(&mut uis, ui);
         }
         for ui in &uis {
             for (key, ui_slice) in model.live(K::UiSlice) {
@@ -1518,9 +1490,7 @@ impl CaseRun<'_> {
         for (issuer_kind, issuer, rms) in &issuers {
             self.touched.slices.insert(issuer.clone());
             for rm in rms {
-                if !observed.contains(rm) {
-                    observed.push(rm.clone());
-                }
+                push_unique(&mut observed, rm.clone());
                 let rows = self.matching_rows(rm, &answer);
                 let mut fields: BTreeSet<&String> = BTreeSet::new();
                 for row in &rows {
@@ -1546,10 +1516,7 @@ impl CaseRun<'_> {
                             value: (*one).clone(),
                         }),
                         _ => {
-                            let rms = ambiguous.entry(field.clone()).or_default();
-                            if !rms.contains(rm) {
-                                rms.push(rm.clone());
-                            }
+                            push_unique(ambiguous.entry(field.clone()).or_default(), rm.clone());
                         }
                     }
                 }
@@ -1560,25 +1527,14 @@ impl CaseRun<'_> {
         }
 
         let mut unsupplied = BTreeSet::new();
-        let spec = model.get(K::Command, command);
-        let Some(fields) = spec.and_then(schema_fields) else {
+        let Some(fields) = self.inspected_fields(K::Command, command) else {
             // Nothing to check field by field: pass every observed and
-            // answered value through, and say the schema was not inspected.
+            // answered value through.
             let mut values: Map<String, Value> = offers
                 .into_iter()
                 .filter_map(|(field, o)| Some((field, o.into_iter().next()?.value)))
                 .collect();
             values.extend(answer);
-            if spec.is_some() {
-                self.push(
-                    WalkFinding::new(
-                        SCHEMA_OPAQUE,
-                        format!("{command}'s schema is a type-library message; its fields are not checked"),
-                    )
-                    .subject(K::Command, command)
-                    .field("schema"),
-                );
-            }
             return (values, unsupplied);
         };
         let mut values = Map::new();
@@ -1587,14 +1543,12 @@ impl CaseRun<'_> {
             let required = !field.optional && field.derived.is_none();
             let mut sources = offers.remove(name).unwrap_or_default();
             let from_answer = answer.get(name);
+            let ambiguous_rms = ambiguous.get(name).map_or(&[][..], Vec::as_slice);
             if let Some(a) = from_answer {
                 sources.push(Offer {
                     source: "the step's answer".into(),
                     value: a.clone(),
                 });
-            }
-            let ambiguous_rms = ambiguous.get(name).map_or(&[][..], Vec::as_slice);
-            if let Some(a) = from_answer {
                 for rm in ambiguous_rms {
                     let held = self
                         .matching_rows(rm, &answer)
@@ -1602,38 +1556,34 @@ impl CaseRun<'_> {
                         .any(|row| row.get(name).is_some_and(|v| values_equal(v, a)));
                     if !held {
                         self.push(
-                        WalkFinding::new(
-                            COMMAND_FIELD_CONFLICT,
-                            format!(
-                                "{command} field {name:?} gets {a} from the step's answer, but no matching row of {rm} holds it"
-                            ),
-                        )
-                        .schema_field(K::Command, command, name),
-                    );
+                            WalkFinding::new(
+                                COMMAND_FIELD_CONFLICT,
+                                format!(
+                                    "{command} field {name:?} gets {a} from the step's answer, but no matching row of {rm} holds it"
+                                ),
+                            )
+                            .schema_field(K::Command, command, name),
+                        );
                     }
                 }
-            }
-            let ambiguity: &[Key] = if from_answer.is_none() {
-                ambiguous_rms
             } else {
-                &[]
-            };
-            for rm in ambiguity {
                 // Reported even when another source supplies the field: the
                 // disagreeing rows are still a gap in the model.
                 let unresolved = sources.is_empty() && required;
-                let finding = WalkFinding::new(
-                    COMMAND_FIELD_AMBIGUOUS,
-                    format!(
-                        "{command} field {name:?}: several rows of {rm} match and disagree; put {rm}'s key in the step's answer to pick one"
-                    ),
-                )
-                .schema_field(K::Command, command, name);
-                self.push(if unresolved {
-                    finding.severity(Severity::Error)
-                } else {
-                    finding
-                });
+                for rm in ambiguous_rms {
+                    let finding = WalkFinding::new(
+                        COMMAND_FIELD_AMBIGUOUS,
+                        format!(
+                            "{command} field {name:?}: several rows of {rm} match and disagree; put {rm}'s key in the step's answer to pick one"
+                        ),
+                    )
+                    .schema_field(K::Command, command, name);
+                    self.push(if unresolved {
+                        finding.severity(Severity::Error)
+                    } else {
+                        finding
+                    });
+                }
             }
             if let Some(first) = sources.first() {
                 let conflict = sources
@@ -1657,7 +1607,7 @@ impl CaseRun<'_> {
                 values.insert(name.clone(), chosen);
                 continue;
             }
-            if !ambiguity.is_empty() {
+            if !ambiguous_rms.is_empty() {
                 if required {
                     unsupplied.insert(name.clone());
                 }
@@ -1739,28 +1689,21 @@ impl CaseRun<'_> {
         &mut self,
         step: &Step,
         command: &Key,
-        slice_key: &Key,
         slices: &[(Key, &Value)],
         values: &Map<String, Value>,
+        lane: Option<&Key>,
         stream: Option<&str>,
     ) -> Option<Vec<Key>> {
+        let slice_key = &slices[0].0;
         let history = self.history(stream);
         // The stream's state is its last lifecycle event; events outside
         // the lifecycle (comments, notes) do not change which scenarios
         // apply. Without a lifecycle, the last event is the state.
-        let lane = self.lane_of(K::Command, command);
-        let transitions = lane
-            .as_ref()
-            .map(|lane| self.transitions(lane))
-            .unwrap_or_default();
+        let transitions = lane.map(|lane| self.transitions(lane)).unwrap_or_default();
         let state = if transitions.is_empty() {
             history.last().copied()
         } else {
-            history
-                .iter()
-                .rev()
-                .find(|r| in_lifecycle(&transitions, &r.event))
-                .copied()
+            last_lifecycle(&history, &transitions)
         };
         // Events on the command's own stream always belong to its timeline.
         // Events on other lanes join it by agreeing on shared fields; other
@@ -1770,7 +1713,8 @@ impl CaseRun<'_> {
             .iter()
             .filter(|r| {
                 r.on(stream)
-                    || (!(lane.is_some() && r.lane == lane) && correlates(&r.payload, values))
+                    || (!(lane.is_some() && r.lane.as_ref() == lane)
+                        && correlates(&r.payload, values))
             })
             .collect();
         let at = state.and_then(|s| related.iter().position(|r| std::ptr::eq(*r, s)));
@@ -1817,9 +1761,7 @@ impl CaseRun<'_> {
         let mut declared: Vec<Key> = Vec::new();
         for (_, slice) in slices {
             for event in edge_keys(slice, "emittedEvents", "event") {
-                if !declared.contains(&event) {
-                    declared.push(event);
-                }
+                push_unique(&mut declared, event);
             }
         }
         let slice_label = if slices.len() == 1 {
@@ -1998,6 +1940,25 @@ impl CaseRun<'_> {
             .insert((kind, slice.clone(), scenario.to_string()));
     }
 
+    /// Fields of an entity's inline schema. `None` when the entity is
+    /// missing, or when its schema is a type-library message, which is
+    /// reported as not inspected.
+    fn inspected_fields(&mut self, kind: K, key: &Key) -> Option<Vec<Field>> {
+        let spec = self.model.get(kind, key)?;
+        let fields = schema_fields(spec);
+        if fields.is_none() {
+            self.push(
+                WalkFinding::new(
+                    SCHEMA_OPAQUE,
+                    format!("{key}'s schema is a type-library message; its fields are not checked"),
+                )
+                .subject(kind, key)
+                .field("schema"),
+            );
+        }
+        fields
+    }
+
     /// Check 3: give every field of an emitted event a value.
     fn event_payload(
         &mut self,
@@ -2009,24 +1970,12 @@ impl CaseRun<'_> {
         stream: Option<&str>,
     ) -> Map<String, Value> {
         let model = self.model;
-        let spec = model.get(K::Event, event);
-        let Some(fields) = spec.and_then(schema_fields) else {
-            if spec.is_some() {
-                self.push(
-                    WalkFinding::new(
-                        SCHEMA_OPAQUE,
-                        format!("{event}'s schema is a type-library message; its fields are not checked"),
-                    )
-                    .subject(K::Event, event)
-                    .field("schema"),
-                );
-            }
+        let Some(fields) = self.inspected_fields(K::Event, event) else {
             return values.clone();
         };
-        let lane = self.lane_of(K::Event, event);
-        let state: Vec<Field> = lane
-            .as_ref()
-            .and_then(|l| model.get(K::Swimlane, l))
+        let state: Vec<Field> = self
+            .lane_of(K::Event, event)
+            .and_then(|l| model.get(K::Swimlane, &l))
             .map(|s| field_specs(arr(s, "state")))
             .unwrap_or_default();
         let earlier = self.history(stream);
@@ -2074,12 +2023,35 @@ impl CaseRun<'_> {
         payload
     }
 
-    fn last_lifecycle(&self, transitions: &[(Key, Vec<Key>)], stream: &str) -> Option<Key> {
-        self.history(Some(stream))
-            .into_iter()
-            .rev()
-            .map(|r| r.event.clone())
-            .find(|k| in_lifecycle(transitions, k))
+    /// The stream's last lifecycle event, if any.
+    fn previous_lifecycle(&self, transitions: &[(Key, Vec<Key>)], stream: &str) -> Option<Key> {
+        last_lifecycle(&self.history(Some(stream)), transitions).map(|r| r.event.clone())
+    }
+
+    /// ACCEPTED_AFTER_TERMINAL for `command`, naming the event it emitted
+    /// onto the ended stream when there is one.
+    fn push_accepted_after_terminal(
+        &mut self,
+        command: &Key,
+        event: Option<&Key>,
+        prev: &Key,
+        stream: &str,
+        slice_key: &Key,
+    ) {
+        let what = match event {
+            Some(event) => format!("emitted {event}"),
+            None => "was accepted".to_string(),
+        };
+        self.push(
+            WalkFinding::new(
+                ACCEPTED_AFTER_TERMINAL,
+                format!(
+                    "{command} {what} after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
+                ),
+            )
+            .subject(K::CommandSlice, slice_key)
+            .field("scenarios"),
+        );
     }
 
     /// A command accepted on a stream that already ended is a gap even when
@@ -2102,22 +2074,12 @@ impl CaseRun<'_> {
             return;
         }
         let transitions = self.transitions(lane);
-        let Some(prev) = self
-            .last_lifecycle(&transitions, stream)
+        if let Some(prev) = self
+            .previous_lifecycle(&transitions, stream)
             .filter(|p| is_terminal(&transitions, p))
-        else {
-            return;
-        };
-        self.push(
-            WalkFinding::new(
-                ACCEPTED_AFTER_TERMINAL,
-                format!(
-                    "{command} was accepted after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
-                ),
-            )
-            .subject(K::CommandSlice, slice_key)
-            .field("scenarios"),
-        );
+        {
+            self.push_accepted_after_terminal(command, None, &prev, stream, slice_key);
+        }
     }
 
     /// Checks 1 and 5: the event must be a legal successor of the stream's
@@ -2137,23 +2099,12 @@ impl CaseRun<'_> {
         if transitions.is_empty() {
             return;
         }
-        let previous = self.last_lifecycle(&transitions, stream);
+        let previous = self.previous_lifecycle(&transitions, stream);
         // After a terminal event nothing may land on the stream, lifecycle
         // event or not.
-        if let Some(prev) = &previous {
-            if is_terminal(&transitions, prev) {
-                self.push(
-                    WalkFinding::new(
-                        ACCEPTED_AFTER_TERMINAL,
-                        format!(
-                            "{command} emitted {event} after terminal event {prev} on {stream}; no reject scenario on {slice_key} refuses it"
-                        ),
-                    )
-                    .subject(K::CommandSlice, slice_key)
-                    .field("scenarios"),
-                );
-                return;
-            }
+        if let Some(prev) = previous.as_ref().filter(|p| is_terminal(&transitions, p)) {
+            self.push_accepted_after_terminal(command, Some(event), prev, stream, slice_key);
+            return;
         }
         if !in_lifecycle(&transitions, event) {
             return;
@@ -2197,6 +2148,25 @@ impl CaseRun<'_> {
             }
         }
     }
+}
+
+/// Append `key` unless `list` already holds it, keeping first-seen order.
+fn push_unique(list: &mut Vec<Key>, key: Key) {
+    if !list.contains(&key) {
+        list.push(key);
+    }
+}
+
+/// The last record in `history` that takes part in the lifecycle.
+fn last_lifecycle<'r>(
+    history: &[&'r Recorded],
+    transitions: &[(Key, Vec<Key>)],
+) -> Option<&'r Recorded> {
+    history
+        .iter()
+        .rev()
+        .find(|r| in_lifecycle(transitions, &r.event))
+        .copied()
 }
 
 fn keys_of<'a>(records: &'a [&'a Recorded]) -> impl Iterator<Item = &'a Key> {
@@ -2505,14 +2475,6 @@ mod tests {
             map(json!({"review_id": "r-1"})),
         ];
         assert!(rows_mismatch(&impossible, &actual).is_some());
-    }
-
-    #[test]
-    fn ref_fields_name_their_entity_kind() {
-        assert_eq!(kind_named("command"), Some(K::Command));
-        assert_eq!(kind_named("readModel"), Some(K::ReadModel));
-        assert_eq!(kind_named("sourceEvents"), Some(K::Event));
-        assert_eq!(kind_named("title"), None);
     }
 
     #[test]
