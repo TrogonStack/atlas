@@ -5,6 +5,8 @@ targets = []
 ignore = [
   { id = "RUSTSEC-2026-0381", reason = "0.26.11 only reexports patched 1.x roots; bans below reject every affected version except this data-free shim" },
   { id = "RUSTSEC-2026-0440", reason = "testsupport's testcontainers 0.27 depends on astral-tokio-tar, which is unmaintained with no patched release; nothing outside tests reaches it" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no successor release; object_store 0.14, rmcp and schemars require it, so dropping our direct use would not remove it" },
+  { id = "RUSTSEC-2026-0542", reason = "humantime is flagged only because it wraps chrono; object_store 0.14 requires it and has no release without it" },
 ]
 
 [licenses]
