@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, env, time::Duration};
 
 use async_nats::jetstream::{
     context::GetStreamErrorKind,
@@ -14,10 +14,12 @@ use aws_sdk_s3::{
     },
     presigning::PresigningConfig,
     primitives::ByteStream,
+    types::{RequestPayer, ServerSideEncryption},
     Client as S3Client,
 };
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
+use md5::{Digest as _, Md5};
 use reqwest::Url;
 use tokio::io::AsyncReadExt as _;
 use tonic::Status;
@@ -197,9 +199,18 @@ pub struct S3StorageConfig {
 
 const S3_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Default)]
+struct S3RequestSettings {
+    server_side_encryption: Option<ServerSideEncryption>,
+    sse_customer_key: Option<String>,
+    sse_customer_key_md5: Option<String>,
+    request_payer: bool,
+}
+
 pub struct S3BlobStorage {
     client: S3Client,
     bucket: String,
+    settings: S3RequestSettings,
 }
 
 #[derive(Debug)]
@@ -216,22 +227,39 @@ impl S3BlobStorage {
         let inherited_endpoint = ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL", "AWS_ENDPOINT"]
             .into_iter()
             .find_map(|name| std::env::var(name).ok());
+        let settings = S3RequestSettings::from_env()?;
         let shared = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
             .load()
             .await;
         let credentials = shared.credentials_provider().ok_or_else(unavailable)?;
-        Self::with_builder(
+        Self::with_builder_and_settings(
             config,
             S3ConfigBuilder::new().credentials_provider(credentials),
             inherited_endpoint,
+            settings,
         )
     }
 
+    #[cfg(test)]
     fn with_builder(
         config: S3StorageConfig,
         builder: S3ConfigBuilder,
         inherited_endpoint: Option<String>,
+    ) -> Result<Self, Status> {
+        Self::with_builder_and_settings(
+            config,
+            builder,
+            inherited_endpoint,
+            S3RequestSettings::default(),
+        )
+    }
+
+    fn with_builder_and_settings(
+        config: S3StorageConfig,
+        builder: S3ConfigBuilder,
+        inherited_endpoint: Option<String>,
+        settings: S3RequestSettings,
     ) -> Result<Self, Status> {
         if config.bucket.trim().is_empty() || config.region.trim().is_empty() {
             return Err(Status::invalid_argument(
@@ -256,6 +284,61 @@ impl S3BlobStorage {
         Ok(Self {
             client: S3Client::from_conf(builder.build()),
             bucket: config.bucket,
+            settings,
+        })
+    }
+}
+
+impl S3RequestSettings {
+    fn sse_customer_headers(&self) -> Option<(&str, &str)> {
+        self.sse_customer_key
+            .as_deref()
+            .zip(self.sse_customer_key_md5.as_deref())
+    }
+
+    fn from_env() -> Result<Self, Status> {
+        let encryption = env::var("AWS_SERVER_SIDE_ENCRYPTION").ok();
+        let customer_key = env::var("AWS_SSE_CUSTOMER_KEY_BASE64").ok();
+        let (server_side_encryption, sse_customer_key, sse_customer_key_md5) = match encryption
+            .as_deref()
+        {
+            Some(value) if value.eq_ignore_ascii_case("sse-c") => {
+                let key = customer_key.ok_or_else(|| {
+                    Status::invalid_argument("AWS_SSE_CUSTOMER_KEY_BASE64 is required for SSE-C")
+                })?;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(key.as_bytes())
+                    .map_err(|_| {
+                        Status::invalid_argument("AWS_SSE_CUSTOMER_KEY_BASE64 must be valid base64")
+                    })?;
+                let digest = Md5::digest(decoded);
+                (
+                    None,
+                    Some(key),
+                    Some(base64::engine::general_purpose::STANDARD.encode(digest)),
+                )
+            }
+            Some(value) => {
+                (
+                    Some(ServerSideEncryption::try_parse(value).map_err(|_| {
+                        Status::invalid_argument("invalid AWS_SERVER_SIDE_ENCRYPTION")
+                    })?),
+                    None,
+                    None,
+                )
+            }
+            None => (None, None, None),
+        };
+        let request_payer = env::var("AWS_REQUEST_PAYER").is_ok_and(|value| {
+            value.eq_ignore_ascii_case("requester")
+                || value == "1"
+                || value.eq_ignore_ascii_case("true")
+        });
+        Ok(Self {
+            server_side_encryption,
+            sse_customer_key,
+            sse_customer_key_md5,
+            request_payer,
         })
     }
 }
@@ -268,37 +351,51 @@ impl BlobStorage for S3BlobStorage {
 
     async fn put(&self, key: &str, data: Bytes) -> Result<(), Status> {
         validate_key(key)?;
-        self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
-            .body(ByteStream::from(data))
-            .send()
-            .await
-            .map_err(|_| unavailable())?;
+            .body(ByteStream::from(data));
+        if let Some(encryption) = &self.settings.server_side_encryption {
+            request = request.server_side_encryption(encryption.clone());
+        }
+        if let Some((key, md5)) = self.settings.sse_customer_headers() {
+            request = request
+                .sse_customer_algorithm("AES256")
+                .sse_customer_key(key)
+                .sse_customer_key_md5(md5);
+        }
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        request.send().await.map_err(|_| unavailable())?;
         Ok(())
     }
 
     async fn get(&self, key: &str, max_bytes: usize) -> Result<Bytes, Status> {
         validate_key(key)?;
         tokio::time::timeout(S3_READ_TIMEOUT, async {
-            let result = self
-                .client
-                .get_object()
-                .bucket(&self.bucket)
-                .key(key)
-                .send()
-                .await
-                .map_err(|error| {
-                    if error
-                        .raw_response()
-                        .is_some_and(|r| r.status().as_u16() == 404)
-                    {
-                        not_found()
-                    } else {
-                        unavailable()
-                    }
-                })?;
+            let mut request = self.client.get_object().bucket(&self.bucket).key(key);
+            if let Some((key, md5)) = self.settings.sse_customer_headers() {
+                request = request
+                    .sse_customer_algorithm("AES256")
+                    .sse_customer_key(key)
+                    .sse_customer_key_md5(md5);
+            }
+            if self.settings.request_payer {
+                request = request.request_payer(RequestPayer::Requester);
+            }
+            let result = request.send().await.map_err(|error| {
+                if error
+                    .raw_response()
+                    .is_some_and(|r| r.status().as_u16() == 404)
+                {
+                    not_found()
+                } else {
+                    unavailable()
+                }
+            })?;
             let length = result
                 .content_length()
                 .and_then(|length| usize::try_from(length).ok())
@@ -322,14 +419,11 @@ impl BlobStorage for S3BlobStorage {
 
     async fn delete(&self, key: &str) -> Result<(), Status> {
         validate_key(key)?;
-        match self
-            .client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-        {
+        let mut request = self.client.delete_object().bucket(&self.bucket).key(key);
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        match request.send().await {
             Ok(_) => Ok(()),
             Err(error)
                 if error
@@ -355,17 +449,27 @@ impl BlobStorage for S3BlobStorage {
         let length = i64::try_from(size).map_err(|_| too_large())?;
         let checksum = base64::engine::general_purpose::STANDARD.encode(decode_sha256(sha256)?);
         let expiry = PresigningConfig::expires_in(ttl).map_err(|_| unavailable())?;
-        let request = self
+        let mut request = self
             .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .content_length(length)
             .content_type(media_type)
-            .checksum_sha256(checksum)
-            .presigned(expiry)
-            .await
-            .map_err(|_| unavailable())?;
+            .checksum_sha256(checksum);
+        if let Some(encryption) = &self.settings.server_side_encryption {
+            request = request.server_side_encryption(encryption.clone());
+        }
+        if let Some((key, md5)) = self.settings.sse_customer_headers() {
+            request = request
+                .sse_customer_algorithm("AES256")
+                .sse_customer_key(key)
+                .sse_customer_key_md5(md5);
+        }
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        let request = request.presigned(expiry).await.map_err(|_| unavailable())?;
         Ok(Some(SignedUpload {
             url: request.uri().to_string(),
             headers: request
@@ -395,12 +499,23 @@ impl BlobStorage for S3BlobStorage {
             "attachment"
         };
         let expiry = PresigningConfig::expires_in(ttl).map_err(|_| unavailable())?;
-        self.client
+        let mut request = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
             .response_content_type(media_type)
-            .response_content_disposition(disposition)
+            .response_content_disposition(disposition);
+        if let Some((key, md5)) = self.settings.sse_customer_headers() {
+            request = request
+                .sse_customer_algorithm("AES256")
+                .sse_customer_key(key)
+                .sse_customer_key_md5(md5);
+        }
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        request
             .presigned(expiry)
             .await
             .map(|request| Some(request.uri().to_string()))
@@ -478,9 +593,9 @@ fn too_large() -> Status {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
     };
 
@@ -671,6 +786,74 @@ mod tests {
             request = request.header(name, value);
         }
         assert!(request.send().await.unwrap().status().is_success());
+    }
+
+    #[tokio::test]
+    async fn s3_reads_and_writes_preserve_request_payer_and_sse_customer_headers() {
+        let server = MockServer::start().await;
+        let key =
+            base64::engine::general_purpose::STANDARD.encode(b"fixture customer encryption key");
+        let key_md5 = base64::engine::general_purpose::STANDARD.encode(Md5::digest(
+            base64::engine::general_purpose::STANDARD
+                .decode(&key)
+                .unwrap(),
+        ));
+        let storage = S3BlobStorage::with_builder_and_settings(
+            fixture_config(Some(server.uri())),
+            fixture_builder(),
+            None,
+            S3RequestSettings {
+                sse_customer_key: Some(key.clone()),
+                sse_customer_key_md5: Some(key_md5.clone()),
+                request_payer: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header(
+                "x-amz-server-side-encryption-customer-algorithm",
+                "AES256",
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key",
+                key.as_str(),
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key-MD5",
+                key_md5.as_str(),
+            ))
+            .and(header("x-amz-request-payer", "requester"))
+            .respond_with(object_response(b"existing artifact"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header(
+                "x-amz-server-side-encryption-customer-algorithm",
+                "AES256",
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key",
+                key.as_str(),
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key-MD5",
+                key_md5.as_str(),
+            ))
+            .and(header("x-amz-request-payer", "requester"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            storage.get("artifacts/capture", 1024).await.unwrap(),
+            Bytes::from_static(b"existing artifact")
+        );
+        storage
+            .put("artifacts/capture", Bytes::from_static(b"replacement"))
+            .await
+            .unwrap();
     }
 
     #[test]

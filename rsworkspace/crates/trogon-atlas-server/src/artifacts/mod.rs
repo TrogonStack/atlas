@@ -4,7 +4,7 @@ pub mod storage;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use async_nats::jetstream::kv::{Operation, Store};
+use async_nats::jetstream::kv::{Operation, Store, UpdateErrorKind};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -22,7 +22,7 @@ use self::storage::BlobStorage;
 
 pub const MAX_ARTIFACT_BYTES: u64 = 32 * 1024 * 1024;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Upload {
     namespace: String,
     id: String,
@@ -61,16 +61,14 @@ struct CompletionPhaseGuard {
     catalog: Store,
     upload: Option<Upload>,
     previous: Phase,
-    revision: u64,
 }
 
 impl CompletionPhaseGuard {
-    fn new(catalog: Store, upload: Upload, previous: Phase, revision: u64) -> Self {
+    fn new(catalog: Store, upload: Upload, previous: Phase) -> Self {
         Self {
             catalog,
             upload: Some(upload),
             previous,
-            revision,
         }
     }
 
@@ -81,20 +79,16 @@ impl CompletionPhaseGuard {
 
 impl Drop for CompletionPhaseGuard {
     fn drop(&mut self) {
-        let Some(mut upload) = self.upload.take() else {
+        let Some(upload) = self.upload.take() else {
             return;
         };
-        upload.phase = self.previous;
         let catalog = self.catalog.clone();
-        let revision = self.revision;
+        let previous = self.previous;
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
         drop(handle.spawn(async move {
-            let Ok(value) = encode(&upload) else {
-                return;
-            };
-            let _ = catalog.update(&upload.id, value, revision).await;
+            restore_interrupted_completion(catalog, upload, previous).await;
         }));
     }
 }
@@ -317,9 +311,9 @@ impl ArtifactService {
         upload.receipt_id = Some(receipt_id.as_str().into());
         let candidate = Self::candidate(&upload)?;
         upload.phase = Phase::Verifying;
-        let revision = self.update(&upload, revision).await?;
         let mut phase_guard =
-            CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous, revision);
+            CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous);
+        let revision = self.update(&upload, revision).await?;
         let result = async {
             let byte_limit = usize::try_from(self.max_bytes).map_err(|_| {
                 Status::failed_precondition("artifact byte limit exceeds platform capacity")
@@ -354,7 +348,6 @@ impl ArtifactService {
         if let Err(error) = result {
             upload.phase = previous;
             let _ = self.update(&upload, revision).await;
-            phase_guard.disarm();
             return Err(error);
         }
         upload.phase = Phase::Ready;
@@ -478,6 +471,46 @@ impl ArtifactService {
             headers: HashMap::new(),
             expires_unix_seconds: expires,
         })
+    }
+}
+
+async fn restore_interrupted_completion(catalog: Store, expected: Upload, previous: Phase) {
+    let mut delay = Duration::from_millis(25);
+    loop {
+        if expected.expires <= OffsetDateTime::now_utc().unix_timestamp() {
+            return;
+        }
+        let entry = match catalog.entry(&expected.id).await {
+            Ok(Some(entry)) if entry.operation == Operation::Put => entry,
+            Ok(_) => return,
+            Err(_) => {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let current: Upload = match serde_json::from_slice(&entry.value) {
+            Ok(upload) => upload,
+            Err(_) => return,
+        };
+        if current != expected {
+            return;
+        }
+        let mut restored = current;
+        restored.phase = previous;
+        let Ok(value) = encode(&restored) else {
+            return;
+        };
+        let Err(error) = catalog.update(&restored.id, value, entry.revision).await else {
+            return;
+        };
+        match error.kind() {
+            UpdateErrorKind::TimedOut | UpdateErrorKind::Other => {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+            }
+            UpdateErrorKind::InvalidKey | UpdateErrorKind::WrongLastRevision => return,
+        }
     }
 }
 
