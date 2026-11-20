@@ -141,6 +141,12 @@ Strategic findings also appear once on the store-level report of
 Domain, Subdomain or BoundedContext entities, run `validate_project` with the
 namespace or project scope, since there may be no EventModel to validate.
 
+Tools built on `trogon-atlas-client` rather than a single RPC
+(`apply_manifests`, `diff_manifests`, `export_namespace`, `export_openslo`,
+`walk_scenarios`) return plain JSON instead. `walk_scenarios` returns the
+walk report: `cases`, `findings` in the validation finding shape, and
+`coverage` (see `../../../docs/reference/walk-scenarios.md`).
+
 ## Error contract
 
 Internal helpers (`descriptor_for`, `message_from_json`,

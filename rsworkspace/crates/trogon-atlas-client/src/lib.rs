@@ -41,5 +41,6 @@ mod source_request;
 pub mod tenant_types;
 pub mod validate;
 pub mod view;
+pub mod walk;
 
 pub mod term_domains;

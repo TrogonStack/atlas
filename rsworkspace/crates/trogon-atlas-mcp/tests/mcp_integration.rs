@@ -2927,3 +2927,149 @@ async fn put_entity_json_dry_run_reports_the_consequence_delta() {
     assert_eq!(introduced["origin"], "event_model:mcp-delta/checkout@1");
     service.cancel().await.unwrap();
 }
+
+// walk_scenarios walks a model client-side, either supplied as manifests
+// or fetched from the store through the export path.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_stdio_transport_walk_scenarios() {
+    let (client, mcp_service, _) = start_mcp_client().await;
+
+    async fn walk(client: &McpClient, args: serde_json::Value) -> serde_json::Value {
+        let result = client
+            .call_tool(
+                rmcp::model::CallToolRequestParams::new("walk_scenarios")
+                    .with_arguments(args.as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !result.is_error.unwrap_or(false),
+            "walk_scenarios must succeed: {result:?}"
+        );
+        serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
+    }
+    fn codes(body: &serde_json::Value) -> Vec<String> {
+        body["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["severity"] != "SEVERITY_INFO")
+            .map(|f| f["code"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    // Offline: the repro model from the client fixtures, never applied.
+    let body = walk(
+        &client,
+        serde_json::json!({
+            "manifests_yaml": include_str!("../../trogon-atlas-client/tests/fixtures/walk/model.yaml"),
+            "cases_yaml": include_str!("../../trogon-atlas-client/tests/fixtures/walk/cases.yaml"),
+        }),
+    )
+    .await;
+    assert_eq!(
+        codes(&body),
+        vec![
+            "WALK_COMMAND_FIELD_UNSUPPLIED",
+            "WALK_PROJECTION_FIELD_MISSING",
+            "WALK_READ_MODEL_MISMATCH",
+            "WALK_REJECT_UNMODELED",
+            "WALK_SCENARIO_MISSING",
+            "WALK_ACCEPTED_AFTER_TERMINAL",
+            "WALK_SCENARIO_MISSING",
+            "WALK_ACCEPTED_AFTER_TERMINAL",
+        ],
+        "{body:#}"
+    );
+    assert_eq!(
+        body["findings"][0]["case"],
+        "walk-reviews/approve-review-42"
+    );
+
+    // Stored: apply a small model, then walk the namespace from the store.
+    let manifests_yaml = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: mcp-walk, name: thing.happened }
+spec:
+  title: Thing happened
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - { name: thing_id, type: { string: {} } }
+    - { name: size, type: { int: {} } }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata: { namespace: mcp-walk, name: do-thing }
+spec:
+  title: Do thing
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - { name: thing_id, type: { string: {} } }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata: { namespace: mcp-walk, name: do-thing-slice }
+spec:
+  title: Do thing
+  command: { command: { id: { namespace: mcp-walk, slug: do-thing, version: '1' } } }
+  emittedEvents:
+  - event: { id: { namespace: mcp-walk, slug: thing.happened, version: '1' } }
+";
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("apply_manifests").with_arguments(
+                serde_json::json!({ "manifests_yaml": manifests_yaml })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+
+    let cases_yaml = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Specification
+metadata: { namespace: mcp-walk, name: do-it }
+spec:
+  steps:
+  - command: do-thing
+    answer: { thing_id: t-1 }
+    expect: { emit: [thing.happened] }
+";
+    let body = walk(&client, serde_json::json!({ "cases_yaml": cases_yaml })).await;
+    // `size` is on the event but nowhere upstream of it.
+    assert_eq!(
+        codes(&body),
+        vec!["WALK_SCENARIO_MISSING", "WALK_EVENT_FIELD_UNSOURCED"],
+        "{body:#}"
+    );
+    assert_eq!(body["skipped"], serde_json::json!([]));
+    assert_eq!(body["cases"][0]["passed"], false);
+
+    // A request with no case is refused, not reported as a clean walk.
+    let empty = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("walk_scenarios").with_arguments(
+                serde_json::json!({ "cases_yaml": "null" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await;
+    let message = match empty {
+        Err(rmcp::ServiceError::McpError(error)) => error.message.to_string(),
+        Ok(result) if result.is_error.unwrap_or(false) => {
+            result.content[0].as_text().unwrap().text.clone()
+        }
+        other => panic!("an empty walk must be refused: {other:?}"),
+    };
+    assert!(message.contains("no Specification"), "{message}");
+
+    mcp_service.cancel().await.unwrap();
+}

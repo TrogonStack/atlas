@@ -235,6 +235,12 @@ and verify the definitions designated as unchanged. Re-fetch written
 entities to confirm the intended content was stored. Existing unrelated
 findings do not become resolved merely because the target was repaired.
 
+When the model has example cases, walk them against the repaired scope with
+`walk_scenarios` (or `trogon-atlas walk-scenarios`) and compare the findings
+before and after, as for validation. A repair that resolves a structural
+finding can still break a timeline; see
+[walk scenarios](walk-scenarios.md).
+
 If model membership changed, explain which findings left the validation
 scope. A source schema warning disappearing from a downstream curation is
 not an upstream schema fix. Validation success alone does not demonstrate

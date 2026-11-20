@@ -45,6 +45,10 @@ only need `acme`. To build `acme-wishlist` step by step, follow
 For `acme-order-workflow`, follow
 [model a multi-step workflow](../../docs/how-to/model-a-multi-step-workflow.md).
 
+Example cases that walk these models with concrete data live in
+[`../specifications`](../specifications/). See
+[walk scenarios](../../docs/how-to/walk-scenarios.md).
+
 Every file here is checked against the generated manifest schema by the
 `trogon-atlas-client` tests, and the server's account deletion fixture test
 applies `acme` and `acme-customer-data-deletion` end to end. The server's

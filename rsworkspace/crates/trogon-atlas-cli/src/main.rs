@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use trogon_atlas_client::{
     apply, attested, branch, client, compat, export, failure::Failure, fmt, manifest,
     manifest_schema, openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
-    precondition::BranchEntryState, validate, view,
+    precondition::BranchEntryState, validate, view, walk,
 };
 use trogon_atlas_proto as pb;
 
@@ -587,6 +587,28 @@ enum Cmd {
         /// them (comments cannot survive the proto round trip).
         #[arg(long)]
         force: bool,
+    },
+    /// Walk example cases (`Specification` documents: initial values,
+    /// ordered command steps, expected read models) through the model and
+    /// report, as validation-shaped findings, where the model fails to
+    /// carry the data: unsupplied command fields, unsourced event fields,
+    /// illegal lifecycle successors, unmodeled rejects, read models that
+    /// end in the wrong state, and storyboards or scenarios no case
+    /// walked. Walks manifest files offline with -f, otherwise the live
+    /// store. Exits 1 when any error finding is reported.
+    WalkScenarios {
+        /// Case files or directories (directories are walked recursively
+        /// for .yaml/.yml).
+        #[arg(long = "cases", required = true, num_args = 1..)]
+        cases: Vec<PathBuf>,
+        /// Manifest files or directories to walk offline, instead of
+        /// fetching the model from the server.
+        #[arg(short = 'f', long = "filename", num_args = 1.., conflicts_with = "namespaces")]
+        filenames: Vec<PathBuf>,
+        /// Namespaces to fetch from the server in addition to the ones the
+        /// cases name, for example an upstream namespace.
+        #[arg(long = "namespace")]
+        namespaces: Vec<String>,
     },
 }
 
@@ -1550,6 +1572,50 @@ async fn run(
                     }
                 }
             }
+        }
+        Cmd::WalkScenarios {
+            cases,
+            filenames,
+            namespaces,
+        } => {
+            let cases = walk::read_case_paths(&cases)?;
+            let (model, skipped) = if filenames.is_empty() {
+                let mut client =
+                    connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch)
+                        .await?;
+                let (model, skipped) = walk::Model::fetch(&mut client, &namespaces, &cases).await?;
+                for line in &skipped {
+                    eprintln!("skipped (not walked): {line}");
+                }
+                (model, skipped)
+            } else {
+                (walk::Model::load_paths(&filenames)?, Vec::new())
+            };
+            let report = walk::walk(&model, &cases);
+            if text {
+                for finding in &report.findings {
+                    println!("{}", finding.render());
+                }
+                let passed = report.cases.iter().filter(|c| c.passed).count();
+                println!(
+                    "{passed}/{} case(s) passed; storyboards walked {}/{}, scenarios walked {}/{}",
+                    report.cases.len(),
+                    report.coverage.storyboards_walked,
+                    report.coverage.storyboards_total,
+                    report.coverage.scenarios_walked,
+                    report.coverage.scenarios_total,
+                );
+            }
+            let code = if report.has_errors() {
+                ExitCode::from(EXIT_FINDINGS)
+            } else {
+                ExitCode::SUCCESS
+            };
+            // Entities that could not be rendered were not walked, so a pass
+            // covers only the rest.
+            let mut data = serde_json::to_value(&report)?;
+            data["skipped"] = serde_json::json!(skipped);
+            Ok((code, Some(data)))
         }
         Cmd::Apply {
             filenames,

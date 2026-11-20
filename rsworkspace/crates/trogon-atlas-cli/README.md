@@ -34,6 +34,7 @@ trogon-atlas validate shop/checkout                # full model validation incl.
 trogon-atlas validate-project --namespace shop     # every model in a namespace plus store-level strategic findings
 trogon-atlas validate-project --domain shop/shop   # the models a Domain claims
 trogon-atlas validate-project --project shop/main@2 # the models a Project claims
+trogon-atlas walk-scenarios -f manifests/ --cases specifications/ # walk example cases offline, exit 1 on error findings
 ```
 
 `get`, `describe`, `tree` and `namespaces` are read-only. They take the same kind names
@@ -259,6 +260,16 @@ trogon-atlas fmt manifests/ --write          # rewrite every changed file in pla
 trogon-atlas fmt manifests/ --check          # CI gate: list files that would change, exit 1 if any would
 trogon-atlas fmt manifests/foo.yaml --force  # canonicalize anyway, dropping comments
 ```
+
+## Walking example cases
+
+`trogon-atlas walk-scenarios` plays `Specification` cases (initial values,
+ordered command steps, expected read-model rows) through the model and
+prints validation-shaped findings, one per line, with the case and step
+that produced each. With `-f` it walks manifest files offline; without it,
+it fetches the cases' namespaces (or `--namespace`) from the server. See
+`../../../docs/how-to/walk-scenarios.md` and
+`../../../docs/reference/walk-scenarios.md`.
 
 ## Editor completion and validation
 
