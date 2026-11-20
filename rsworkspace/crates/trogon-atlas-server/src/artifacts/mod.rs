@@ -61,6 +61,7 @@ struct CompletionPhaseGuard {
     catalog: Store,
     upload: Option<Upload>,
     previous: Phase,
+    committed_revision: Option<u64>,
 }
 
 impl CompletionPhaseGuard {
@@ -69,7 +70,12 @@ impl CompletionPhaseGuard {
             catalog,
             upload: Some(upload),
             previous,
+            committed_revision: None,
         }
+    }
+
+    fn set_committed_revision(&mut self, revision: u64) {
+        self.committed_revision = Some(revision);
     }
 
     fn disarm(&mut self) {
@@ -84,11 +90,12 @@ impl Drop for CompletionPhaseGuard {
         };
         let catalog = self.catalog.clone();
         let previous = self.previous;
+        let committed_revision = self.committed_revision;
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
         drop(handle.spawn(async move {
-            restore_interrupted_completion(catalog, upload, previous).await;
+            restore_interrupted_completion(catalog, upload, previous, committed_revision).await;
         }));
     }
 }
@@ -313,7 +320,25 @@ impl ArtifactService {
         upload.phase = Phase::Verifying;
         let mut phase_guard =
             CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous);
-        let revision = self.update(&upload, revision).await?;
+        let revision = match self
+            .catalog
+            .update(&upload.id, encode(&upload)?, revision)
+            .await
+        {
+            Ok(revision) => revision,
+            Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                phase_guard.disarm();
+                return Err(Status::aborted(
+                    "artifact changed; refresh upload status before retrying",
+                ));
+            }
+            Err(_) => {
+                return Err(Status::aborted(
+                    "artifact changed; refresh upload status before retrying",
+                ));
+            }
+        };
+        phase_guard.set_committed_revision(revision);
         let result = async {
             let byte_limit = usize::try_from(self.max_bytes).map_err(|_| {
                 Status::failed_precondition("artifact byte limit exceeds platform capacity")
@@ -347,7 +372,17 @@ impl ArtifactService {
         .await;
         if let Err(error) = result {
             upload.phase = previous;
-            let _ = self.update(&upload, revision).await;
+            match self
+                .catalog
+                .update(&upload.id, encode(&upload)?, revision)
+                .await
+            {
+                Ok(_) => phase_guard.disarm(),
+                Err(update_error) if update_error.kind() == UpdateErrorKind::WrongLastRevision => {
+                    phase_guard.disarm();
+                }
+                Err(_) => {}
+            }
             return Err(error);
         }
         upload.phase = Phase::Ready;
@@ -474,7 +509,12 @@ impl ArtifactService {
     }
 }
 
-async fn restore_interrupted_completion(catalog: Store, expected: Upload, previous: Phase) {
+async fn restore_interrupted_completion(
+    catalog: Store,
+    expected: Upload,
+    previous: Phase,
+    committed_revision: Option<u64>,
+) {
     let mut delay = Duration::from_millis(25);
     loop {
         if expected.expires <= OffsetDateTime::now_utc().unix_timestamp() {
@@ -494,6 +534,9 @@ async fn restore_interrupted_completion(catalog: Store, expected: Upload, previo
             Err(_) => return,
         };
         if current != expected {
+            return;
+        }
+        if committed_revision.is_some_and(|revision| entry.revision != revision) {
             return;
         }
         let mut restored = current;

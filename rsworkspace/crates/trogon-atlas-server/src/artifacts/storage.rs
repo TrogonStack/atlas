@@ -202,6 +202,7 @@ const S3_READ_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone, Default)]
 struct S3RequestSettings {
     server_side_encryption: Option<ServerSideEncryption>,
+    sse_kms_key_id: Option<String>,
     sse_customer_key: Option<String>,
     sse_customer_key_md5: Option<String>,
     request_payer: bool,
@@ -298,6 +299,7 @@ impl S3RequestSettings {
 
     fn from_env() -> Result<Self, Status> {
         let encryption = env::var("AWS_SERVER_SIDE_ENCRYPTION").ok();
+        let sse_kms_key_id = env::var("AWS_SSE_KMS_KEY_ID").ok();
         let customer_key = env::var("AWS_SSE_CUSTOMER_KEY_BASE64").ok();
         let (server_side_encryption, sse_customer_key, sse_customer_key_md5) = match encryption
             .as_deref()
@@ -336,6 +338,7 @@ impl S3RequestSettings {
         });
         Ok(Self {
             server_side_encryption,
+            sse_kms_key_id,
             sse_customer_key,
             sse_customer_key_md5,
             request_payer,
@@ -359,6 +362,11 @@ impl BlobStorage for S3BlobStorage {
             .body(ByteStream::from(data));
         if let Some(encryption) = &self.settings.server_side_encryption {
             request = request.server_side_encryption(encryption.clone());
+            if encryption.as_str() == "aws:kms" {
+                if let Some(key_id) = self.settings.sse_kms_key_id.as_deref() {
+                    request = request.ssekms_key_id(key_id);
+                }
+            }
         }
         if let Some((key, md5)) = self.settings.sse_customer_headers() {
             request = request
@@ -459,6 +467,11 @@ impl BlobStorage for S3BlobStorage {
             .checksum_sha256(checksum);
         if let Some(encryption) = &self.settings.server_side_encryption {
             request = request.server_side_encryption(encryption.clone());
+            if encryption.as_str() == "aws:kms" {
+                if let Some(key_id) = self.settings.sse_kms_key_id.as_deref() {
+                    request = request.ssekms_key_id(key_id);
+                }
+            }
         }
         if let Some((key, md5)) = self.settings.sse_customer_headers() {
             request = request
@@ -490,6 +503,9 @@ impl BlobStorage for S3BlobStorage {
         media_type
             .parse::<http::HeaderValue>()
             .map_err(|_| Status::invalid_argument("invalid artifact media type"))?;
+        if self.settings.sse_customer_headers().is_some() {
+            return Ok(None);
+        }
         let disposition = if matches!(
             media_type,
             "image/png" | "image/jpeg" | "image/webp" | "image/gif"
@@ -506,12 +522,6 @@ impl BlobStorage for S3BlobStorage {
             .key(key)
             .response_content_type(media_type)
             .response_content_disposition(disposition);
-        if let Some((key, md5)) = self.settings.sse_customer_headers() {
-            request = request
-                .sse_customer_algorithm("AES256")
-                .sse_customer_key(key)
-                .sse_customer_key_md5(md5);
-        }
         if self.settings.request_payer {
             request = request.request_payer(RequestPayer::Requester);
         }
@@ -854,6 +864,59 @@ mod tests {
             .put("artifacts/capture", Bytes::from_static(b"replacement"))
             .await
             .unwrap();
+        assert!(storage
+            .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn s3_kms_key_is_bound_to_direct_and_presigned_uploads() {
+        let server = MockServer::start().await;
+        let storage = S3BlobStorage::with_builder_and_settings(
+            fixture_config(Some(server.uri())),
+            fixture_builder(),
+            None,
+            S3RequestSettings {
+                server_side_encryption: Some(ServerSideEncryption::AwsKms),
+                sse_kms_key_id: Some("alias/artifact-fixture".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        Mock::given(method("PUT"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header("x-amz-server-side-encryption", "aws:kms"))
+            .and(header(
+                "x-amz-server-side-encryption-aws-kms-key-id",
+                "alias/artifact-fixture",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        storage
+            .put("artifacts/capture", Bytes::from_static(b"kms artifact"))
+            .await
+            .unwrap();
+        let signed = storage
+            .presign_put(
+                "artifacts/capture",
+                Duration::from_secs(60),
+                12,
+                &trogon_atlas_client::artifacts::sha256_hex(b"kms artifact"),
+                "application/octet-stream",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            signed
+                .headers
+                .get("x-amz-server-side-encryption-aws-kms-key-id")
+                .map(String::as_str),
+            Some("alias/artifact-fixture")
+        );
     }
 
     #[test]
