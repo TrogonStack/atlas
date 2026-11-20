@@ -37,6 +37,8 @@ struct Upload {
     final_key: Option<String>,
     #[serde(default)]
     receipt_id: Option<String>,
+    #[serde(default)]
+    verification_id: Option<String>,
     backend: String,
 }
 
@@ -185,6 +187,7 @@ impl ArtifactService {
             staging_key,
             final_key: None,
             receipt_id: None,
+            verification_id: None,
             backend: self.blobs.backend_name().into(),
         };
         self.catalog
@@ -284,6 +287,7 @@ impl ArtifactService {
         if matches!(receipt_state, ArtifactPublicationState::Accepted(_)) {
             if upload.phase != Phase::Ready {
                 upload.phase = Phase::Ready;
+                upload.verification_id = None;
                 self.update(&upload, revision).await?;
             }
             self.cleanup_staging(&upload).await;
@@ -318,6 +322,7 @@ impl ArtifactService {
         upload.receipt_id = Some(receipt_id.as_str().into());
         let candidate = Self::candidate(&upload)?;
         upload.phase = Phase::Verifying;
+        upload.verification_id = Some(uuid::Uuid::now_v7().to_string());
         let mut phase_guard =
             CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous);
         let revision = match self
@@ -372,6 +377,7 @@ impl ArtifactService {
         .await;
         if let Err(error) = result {
             upload.phase = previous;
+            upload.verification_id = None;
             match self
                 .catalog
                 .update(&upload.id, encode(&upload)?, revision)
@@ -386,6 +392,7 @@ impl ArtifactService {
             return Err(error);
         }
         upload.phase = Phase::Ready;
+        upload.verification_id = None;
         self.update(&upload, revision).await?;
         phase_guard.disarm();
         self.cleanup_staging(&upload).await;
@@ -541,6 +548,7 @@ async fn restore_interrupted_completion(
         }
         let mut restored = current;
         restored.phase = previous;
+        restored.verification_id = None;
         let Ok(value) = encode(&restored) else {
             return;
         };

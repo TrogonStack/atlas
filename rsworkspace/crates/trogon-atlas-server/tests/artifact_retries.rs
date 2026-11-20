@@ -162,6 +162,10 @@ async fn cancelled_completion_restores_uploaded_phase() {
     )
     .await
     .unwrap();
+    let verifying: serde_json::Value =
+        serde_json::from_slice(&catalog.get(&id).await.unwrap().unwrap()).unwrap();
+    assert_eq!(verifying["phase"], "Verifying");
+    assert!(verifying["verification_id"].as_str().is_some());
     completing.abort();
     assert!(completing.await.unwrap_err().is_cancelled());
 
