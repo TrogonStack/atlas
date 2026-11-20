@@ -11,6 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use tokio::sync::Notify;
 use tonic::{Code, Status};
 use trogon_atlas_proto as pb;
 use trogon_atlas_server::artifacts::{
@@ -25,6 +26,9 @@ struct RecoverableStorage {
     final_puts: AtomicUsize,
     fail_readback: AtomicBool,
     fail_put_reply: AtomicBool,
+    block_staging_read: AtomicBool,
+    staging_read_entered: Notify,
+    release_staging_read: Notify,
 }
 
 #[async_trait]
@@ -45,6 +49,10 @@ impl BlobStorage for RecoverableStorage {
     }
 
     async fn get(&self, key: &str, max_bytes: usize) -> Result<Bytes, Status> {
+        if key.starts_with("staging/") && self.block_staging_read.swap(false, Ordering::SeqCst) {
+            self.staging_read_entered.notify_one();
+            self.release_staging_read.notified().await;
+        }
         if key.starts_with("artifacts/") && self.fail_readback.swap(false, Ordering::SeqCst) {
             return Err(Status::unavailable("injected transient final readback"));
         }
@@ -134,6 +142,46 @@ async fn uploaded(service: &ArtifactService) -> String {
         .await
         .unwrap();
     upload.upload_id
+}
+
+#[tokio::test]
+async fn cancelled_completion_restores_uploaded_phase() {
+    let (service, storage, catalog, _store) = fixture().await;
+    let service = Arc::new(service);
+    let id = uploaded(&service).await;
+    storage.block_staging_read.store(true, Ordering::SeqCst);
+
+    let completing = {
+        let service = service.clone();
+        let id = id.clone();
+        tokio::spawn(async move { service.complete("sample", &id, "writer").await })
+    };
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        storage.staging_read_entered.notified(),
+    )
+    .await
+    .unwrap();
+    let verifying: serde_json::Value =
+        serde_json::from_slice(&catalog.get(&id).await.unwrap().unwrap()).unwrap();
+    assert_eq!(verifying["phase"], "Verifying");
+    assert!(verifying["verification_id"].as_str().is_some());
+    completing.abort();
+    assert!(completing.await.unwrap_err().is_cancelled());
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row: serde_json::Value =
+                serde_json::from_slice(&catalog.get(&id).await.unwrap().unwrap()).unwrap();
+            if row["phase"] == "Uploaded" {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    service.complete("sample", &id, "writer").await.unwrap();
 }
 
 #[tokio::test]

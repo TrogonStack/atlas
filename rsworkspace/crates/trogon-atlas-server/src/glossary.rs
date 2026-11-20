@@ -3,11 +3,16 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
-use chrono::Utc;
 use prost::Message;
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tonic::{Request, Response};
-use trogon_atlas_core::{authored_date::AuthoredDate, glossary as core, transcode::TranscodePool};
+use trogon_atlas_core::{
+    authored_date::AuthoredDate,
+    glossary as core,
+    timestamp::{format_utc, TimestampPrecision},
+    transcode::TranscodePool,
+};
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
@@ -147,7 +152,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn today() -> String {
-    Utc::now().format("%Y-%m-%d").to_string()
+    OffsetDateTime::now_utc().date().to_string()
 }
 
 fn bounded_output<M: Message>(name: &str, message: M) -> Result<M, Status> {
@@ -449,6 +454,7 @@ impl EventModelServiceImpl {
             owner_uid: uid(&stored.entity).into(),
             etag: stored.etag.clone(),
             title: value.title.clone(),
+            summary: value.summary.clone(),
             audience: value
                 .glossary
                 .as_ref()
@@ -887,7 +893,7 @@ impl EventModelServiceImpl {
         glossary.review = Some(pb::GlossaryReview {
             disposition: disposition as i32,
             actor: principal.name.to_string(),
-            reviewed_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            reviewed_at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds),
             content_digest: Some(digest),
             owner_uid,
             reason: input.reason,

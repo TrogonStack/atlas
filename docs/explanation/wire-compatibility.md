@@ -215,13 +215,15 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-The current contract revision is 24, with both mutation compatibility floors
-at 24. Native catalog context writers preserve Decision dates, makers and
-amendments, Term domain ownership, and Document content and classifications.
-CalendarDate uses the shared type package. It requires no breaking-change
-acknowledgment against the main baseline.
-Upgrade clients and server together before authoring these fields to prevent
-lossy writes.
+Contract revision 24 raised both mutation compatibility floors to 24. Native
+catalog context writers preserve Decision dates, makers and amendments, Term
+domain ownership, and Document content and classifications. CalendarDate uses
+the shared type package.
+
+Contract revision 27 adds `Term.summary` and raises both mutation compatibility
+floors to 27. The summary is part of the stored Term and its glossary review.
+Upgrade the server and write clients together so they preserve it on round trips.
+Existing Terms with no summary retain their review identity.
 
 Revision 19 adds descriptive `DataProduct.resource_associations`, independent
 `Specification.message_channels`, and `SchemaBinding.environments` /

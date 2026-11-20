@@ -54,8 +54,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use prost::Message as _;
+use time::OffsetDateTime;
 use tokio::sync::{broadcast, Notify};
-use trogon_atlas_core::{NamespaceId, NamespaceName, OwnerId, WriterRole};
+use trogon_atlas_core::{
+    timestamp::{format_utc, TimestampPrecision},
+    NamespaceId, NamespaceName, OwnerId, WriterRole,
+};
 use trogon_atlas_proto::{
     canonical::ALL_KINDS, Entity, EntityKey, EntityKind, EntityRef, Id, IdKey,
 };
@@ -2662,11 +2666,14 @@ async fn branch_write_delta(
 }
 
 fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds)
 }
 
 fn now_micros() -> i64 {
-    chrono::Utc::now().timestamp_micros().max(0)
+    let micros = OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .div_euclid(1_000);
+    i64::try_from(micros.max(0)).unwrap_or(i64::MAX)
 }
 
 fn change_event_proto(

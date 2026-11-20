@@ -2249,6 +2249,8 @@ pub struct GlossaryIndexEntry {
     pub reason: ::prost::alloc::string::String,
     #[prost(message, optional, tag="9")]
     pub next_review_on: ::core::option::Option<super::super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(string, optional, tag="10")]
+    pub summary: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListGlossaryEntriesRequest {
@@ -4530,6 +4532,7 @@ pub enum SourceOwnedField {
     Steps = 110,
     EntrySteps = 111,
     LayoutDocument = 112,
+    Summary = 113,
 }
 impl SourceOwnedField {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -4651,6 +4654,7 @@ impl SourceOwnedField {
             Self::Steps => "SOURCE_OWNED_FIELD_STEPS",
             Self::EntrySteps => "SOURCE_OWNED_FIELD_ENTRY_STEPS",
             Self::LayoutDocument => "SOURCE_OWNED_FIELD_LAYOUT_DOCUMENT",
+            Self::Summary => "SOURCE_OWNED_FIELD_SUMMARY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -4769,6 +4773,7 @@ impl SourceOwnedField {
             "SOURCE_OWNED_FIELD_STEPS" => Some(Self::Steps),
             "SOURCE_OWNED_FIELD_ENTRY_STEPS" => Some(Self::EntrySteps),
             "SOURCE_OWNED_FIELD_LAYOUT_DOCUMENT" => Some(Self::LayoutDocument),
+            "SOURCE_OWNED_FIELD_SUMMARY" => Some(Self::Summary),
             _ => None,
         }
     }

@@ -1,7 +1,7 @@
 # Generated glossary contracts
 
-Status: implemented native profile, with agent procedures for extraction and
-maintenance. Contract revision and mutation compatibility floors are 26.
+Atlas implements the native profile and agent procedures for extraction and
+maintenance. Contract revision and mutation compatibility floors are 27.
 [Delivery coverage](generated-glossary-gaps.md) maps the original gaps to the
 implementation; [acceptance](generated-glossary-acceptance.md) identifies the
 executable checks. Semantic definition quality remains subject to expert review.
@@ -9,8 +9,10 @@ executable checks. Semantic definition quality remains subject to expert review.
 ## Entries and source evidence
 
 A native [Term](../../proto/trogonatlas/eventmodel/v1alpha1/strategic.proto)
-keeps its namespace/slug/version identity, definition in doc, modeled embodied_by
-references and optional owning Domain. Its optional
+keeps its namespace/slug/version identity, full definition in `doc`, modeled
+`embodied_by` references and optional owning Domain. An optional `summary`
+provides a short definition for browsing. When supplied, it must be nonblank
+and at most 512 UTF-8 bytes. Its optional
 [GlossaryEntry](../../proto/trogonatlas/eventmodel/v1alpha1/glossary.proto)
 adds generation revision, audience, evidence, next review date, terminology
 policy, an optional permitted term-use period and a server-owned review. Terms
@@ -44,11 +46,11 @@ boundary.
 ## Candidate meaning and review authority
 
 The candidate digest uses shared canonical content with glossary domain
-separation. It includes exact Term identity, definition, modeled references,
-metadata, owning Domain, source evidence, generation revision, audience, policy
-and permitted use period. Review and next-review date are excluded. Equivalent
-supported metadata encodings preserve the digest. Unrenderable metadata has no
-canonical review identity.
+separation. It includes exact Term identity, definition, any authored summary,
+modeled references, metadata, owning Domain, source evidence, generation
+revision, audience, policy and permitted use period. Review and next-review date
+are excluded. Equivalent supported metadata encodings preserve the digest.
+Unrenderable metadata has no canonical review identity.
 
 Tenant-defined metadata uses the live type libraries of the Term namespace's
 merged branch view, including libraries proposed in the same branch landing.
@@ -122,11 +124,11 @@ accepted review. The default catalog still selects only the highest such version
 in each family; the flag alone does not establish that an older version is the
 family's default selection.
 
-Compact indexes carry exact reference, UID, etag, title, audience, publication
-selection, state, explanation and next-review date. Fetch full definitions,
-policies, review records and evidence by exact reference. Pagination binds
-caller visibility, branch, selection and the read revision; a changed query or
-read set invalidates its token.
+Compact indexes carry exact reference, UID, etag, title, any authored summary,
+audience, publication selection, state, explanation and next-review date. Fetch
+full definitions, policies, review records and evidence by exact reference.
+Pagination binds caller visibility, branch, selection and the read revision; a
+changed query or read set invalidates its token.
 
 Glossary reads capture a durable native Store marker before loading their scope,
 catalog and evidence. They use leader-backed data and recheck that marker, branch

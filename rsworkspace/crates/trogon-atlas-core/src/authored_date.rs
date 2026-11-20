@@ -23,7 +23,11 @@ impl FromStr for AuthoredDate {
         {
             return Err(InvalidAuthoredDate);
         }
-        chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| InvalidAuthoredDate)?;
+        time::Date::parse(
+            value,
+            time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .map_err(|_| InvalidAuthoredDate)?;
         Ok(Self(value.to_owned()))
     }
 }

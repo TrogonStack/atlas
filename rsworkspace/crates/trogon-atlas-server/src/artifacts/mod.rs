@@ -4,10 +4,10 @@ pub mod storage;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use async_nats::jetstream::kv::{Operation, Store};
+use async_nats::jetstream::kv::{Operation, Store, UpdateErrorKind};
 use bytes::Bytes;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use tonic::Status;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
@@ -22,7 +22,7 @@ use self::storage::BlobStorage;
 
 pub const MAX_ARTIFACT_BYTES: u64 = 32 * 1024 * 1024;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Upload {
     namespace: String,
     id: String,
@@ -37,6 +37,8 @@ struct Upload {
     final_key: Option<String>,
     #[serde(default)]
     receipt_id: Option<String>,
+    #[serde(default)]
+    verification_id: Option<String>,
     backend: String,
 }
 
@@ -55,6 +57,49 @@ pub struct ArtifactService {
     max_bytes: u64,
     upload_ttl: Duration,
     authority: Arc<dyn ArtifactPublicationAuthority>,
+}
+
+struct CompletionPhaseGuard {
+    catalog: Store,
+    upload: Option<Upload>,
+    previous: Phase,
+    committed_revision: Option<u64>,
+}
+
+impl CompletionPhaseGuard {
+    fn new(catalog: Store, upload: Upload, previous: Phase) -> Self {
+        Self {
+            catalog,
+            upload: Some(upload),
+            previous,
+            committed_revision: None,
+        }
+    }
+
+    fn set_committed_revision(&mut self, revision: u64) {
+        self.committed_revision = Some(revision);
+    }
+
+    fn disarm(&mut self) {
+        self.upload = None;
+    }
+}
+
+impl Drop for CompletionPhaseGuard {
+    fn drop(&mut self) {
+        let Some(upload) = self.upload.take() else {
+            return;
+        };
+        let catalog = self.catalog.clone();
+        let previous = self.previous;
+        let committed_revision = self.committed_revision;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        drop(handle.spawn(async move {
+            restore_interrupted_completion(catalog, upload, previous, committed_revision).await;
+        }));
+    }
 }
 
 impl ArtifactService {
@@ -127,8 +172,8 @@ impl ArtifactService {
         let (upload_url, headers) = signed
             .map(|signed| (signed.url, signed.headers))
             .unwrap_or_default();
-        let expires =
-            Utc::now().timestamp() + i64::try_from(self.upload_ttl.as_secs()).unwrap_or(3600);
+        let expires = OffsetDateTime::now_utc().unix_timestamp()
+            + i64::try_from(self.upload_ttl.as_secs()).unwrap_or(3600);
         let upload = Upload {
             namespace: request.namespace,
             id: id.clone(),
@@ -142,6 +187,7 @@ impl ArtifactService {
             staging_key,
             final_key: None,
             receipt_id: None,
+            verification_id: None,
             backend: self.blobs.backend_name().into(),
         };
         self.catalog
@@ -186,7 +232,9 @@ impl ArtifactService {
         if upload.principal != principal {
             return Err(Status::not_found("upload not found"));
         }
-        if upload.phase != Phase::Ready && upload.expires <= Utc::now().timestamp() {
+        if upload.phase != Phase::Ready
+            && upload.expires <= OffsetDateTime::now_utc().unix_timestamp()
+        {
             return Err(Status::failed_precondition(
                 "upload expired; begin a new upload",
             ));
@@ -239,6 +287,7 @@ impl ArtifactService {
         if matches!(receipt_state, ArtifactPublicationState::Accepted(_)) {
             if upload.phase != Phase::Ready {
                 upload.phase = Phase::Ready;
+                upload.verification_id = None;
                 self.update(&upload, revision).await?;
             }
             self.cleanup_staging(&upload).await;
@@ -273,7 +322,28 @@ impl ArtifactService {
         upload.receipt_id = Some(receipt_id.as_str().into());
         let candidate = Self::candidate(&upload)?;
         upload.phase = Phase::Verifying;
-        let revision = self.update(&upload, revision).await?;
+        upload.verification_id = Some(uuid::Uuid::now_v7().to_string());
+        let mut phase_guard =
+            CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous);
+        let revision = match self
+            .catalog
+            .update(&upload.id, encode(&upload)?, revision)
+            .await
+        {
+            Ok(revision) => revision,
+            Err(error) if error.kind() == UpdateErrorKind::WrongLastRevision => {
+                phase_guard.disarm();
+                return Err(Status::aborted(
+                    "artifact changed; refresh upload status before retrying",
+                ));
+            }
+            Err(_) => {
+                return Err(Status::aborted(
+                    "artifact changed; refresh upload status before retrying",
+                ));
+            }
+        };
+        phase_guard.set_committed_revision(revision);
         let result = async {
             let byte_limit = usize::try_from(self.max_bytes).map_err(|_| {
                 Status::failed_precondition("artifact byte limit exceeds platform capacity")
@@ -307,11 +377,24 @@ impl ArtifactService {
         .await;
         if let Err(error) = result {
             upload.phase = previous;
-            let _ = self.update(&upload, revision).await;
+            upload.verification_id = None;
+            match self
+                .catalog
+                .update(&upload.id, encode(&upload)?, revision)
+                .await
+            {
+                Ok(_) => phase_guard.disarm(),
+                Err(update_error) if update_error.kind() == UpdateErrorKind::WrongLastRevision => {
+                    phase_guard.disarm();
+                }
+                Err(_) => {}
+            }
             return Err(error);
         }
         upload.phase = Phase::Ready;
+        upload.verification_id = None;
         self.update(&upload, revision).await?;
+        phase_guard.disarm();
         self.cleanup_staging(&upload).await;
         Ok(Self::artifact(&upload))
     }
@@ -421,7 +504,7 @@ impl ArtifactService {
                     "this backend does not issue presigned downloads; use GetArtifactContent RPC",
                 )
             })?;
-        let expires = Utc::now().timestamp()
+        let expires = OffsetDateTime::now_utc().unix_timestamp()
             + i64::try_from(self.upload_ttl.as_secs()).map_err(|_| {
                 Status::failed_precondition("artifact expiry exceeds platform capacity")
             })?;
@@ -430,6 +513,55 @@ impl ArtifactService {
             headers: HashMap::new(),
             expires_unix_seconds: expires,
         })
+    }
+}
+
+async fn restore_interrupted_completion(
+    catalog: Store,
+    expected: Upload,
+    previous: Phase,
+    committed_revision: Option<u64>,
+) {
+    let mut delay = Duration::from_millis(25);
+    loop {
+        if expected.expires <= OffsetDateTime::now_utc().unix_timestamp() {
+            return;
+        }
+        let entry = match catalog.entry(&expected.id).await {
+            Ok(Some(entry)) if entry.operation == Operation::Put => entry,
+            Ok(_) => return,
+            Err(_) => {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let current: Upload = match serde_json::from_slice(&entry.value) {
+            Ok(upload) => upload,
+            Err(_) => return,
+        };
+        if current != expected {
+            return;
+        }
+        if committed_revision.is_some_and(|revision| entry.revision != revision) {
+            return;
+        }
+        let mut restored = current;
+        restored.phase = previous;
+        restored.verification_id = None;
+        let Ok(value) = encode(&restored) else {
+            return;
+        };
+        let Err(error) = catalog.update(&restored.id, value, entry.revision).await else {
+            return;
+        };
+        match error.kind() {
+            UpdateErrorKind::TimedOut | UpdateErrorKind::Other => {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2).min(Duration::from_secs(1));
+            }
+            UpdateErrorKind::InvalidKey | UpdateErrorKind::WrongLastRevision => return,
+        }
     }
 }
 

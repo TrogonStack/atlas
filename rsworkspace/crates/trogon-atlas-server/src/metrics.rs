@@ -130,7 +130,7 @@ impl ServerMetrics {
         self.change_stream_size
             .record(i64::try_from(stats.bytes).unwrap_or(i64::MAX));
         let age = match stats.oldest_message_unix_seconds {
-            Some(secs) => (chrono::Utc::now().timestamp() - secs).max(0),
+            Some(secs) => (time::OffsetDateTime::now_utc().unix_timestamp() - secs).max(0),
             None => 0,
         };
         self.change_stream_oldest_message_age.record(age);

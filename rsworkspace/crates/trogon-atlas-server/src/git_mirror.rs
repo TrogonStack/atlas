@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use prost::Message;
+use time::OffsetDateTime;
 use tokio::{sync::Mutex, task};
+use trogon_atlas_core::timestamp::{format_utc, TimestampPrecision};
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::refs::{entity_id, entity_kind};
 
@@ -540,7 +542,7 @@ pub async fn import_entities(
         let record = ChangesetRecord {
             id: changeset_id.clone(),
             author: IMPORT_AUTHOR.to_owned(),
-            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds),
             message: format!(
                 "{IMPORT_RPC}: {} entities imported from a git mirror",
                 ops.len()

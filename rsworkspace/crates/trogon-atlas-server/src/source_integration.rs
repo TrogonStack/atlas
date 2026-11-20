@@ -6,6 +6,7 @@ use std::{
 
 use prost::Message;
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tonic::{Request, Response, Status};
 use trogon_atlas_core::{source_bundle as bundle, source_integration as core};
 use trogon_atlas_proto as pb;
@@ -77,7 +78,8 @@ pub(super) struct SourceExecution {
     pub(super) outcome: Arc<Mutex<Option<SourcePublicationOutcome>>>,
 }
 fn now() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    let now = OffsetDateTime::now_utc();
+    now.unix_timestamp() * 1_000 + i64::from(now.millisecond())
 }
 fn revision() -> String {
     uuid::Uuid::now_v7().to_string()

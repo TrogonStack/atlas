@@ -44,11 +44,13 @@ use std::{
     },
 };
 
+use time::OffsetDateTime;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::{Request, Response, Status};
 use trogon_atlas_core::{
     attested_bundle::{self, UnresolvedCause},
     operation_id::{operation_claim_key, validate_operation_id},
+    timestamp::{format_utc, parse_rfc3339, TimestampPrecision},
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
 use trogon_atlas_proto as pb;
@@ -427,7 +429,7 @@ impl PendingChangeset {
         ChangesetRecord {
             id: self.id,
             author: self.author,
-            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds),
             message,
             rpc: self.rpc.into(),
             branch: self.branch,
@@ -3236,7 +3238,7 @@ impl EventModelServiceImpl {
             identity,
             reason,
             protected_by: changeset.author.clone(),
-            protected_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            protected_at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Milliseconds),
             changeset_id: changeset.id.clone(),
         };
         let revision = match self.store.put_protection(&record).await {
@@ -7049,7 +7051,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             None
         } else {
             Some(
-                as_of::AsOfTime::parse(&req.as_of_time, chrono::Utc::now())
+                as_of::AsOfTime::parse(&req.as_of_time, OffsetDateTime::now_utc())
                     .map_err(|e| Status::invalid_argument(e.to_string()))?,
             )
         };
@@ -13717,8 +13719,8 @@ fn entity_revision_to_proto(record: EntityRevisionRecord) -> pb::EntityRevision 
 }
 
 fn change_record_to_event(record: ChangeRecord) -> pb::ChangeEvent {
-    let timestamp_micros = if let Ok(d) = chrono::DateTime::parse_from_rfc3339(&record.at) {
-        d.timestamp_micros()
+    let timestamp_micros = if let Some(timestamp) = parse_rfc3339(&record.at) {
+        timestamp.unix_micros()
     } else {
         tracing::warn!(raw = %record.at, "change record timestamp could not be parsed as RFC 3339; using epoch 0");
         0

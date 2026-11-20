@@ -36,6 +36,7 @@ message GlossaryIndexEntry {
   bool published = 7;
   string reason = 8;
   trogonatlas.type.v1alpha1.CalendarDate next_review_on = 9;
+  optional string summary = 10;
 }
 
 message ListGlossaryEntriesRequest {

@@ -4,8 +4,37 @@ set -uo pipefail
 
 cd "$MISE_PROJECT_ROOT"
 
+chrono_is_inactive() {
+  [[ -f rsworkspace/Cargo.lock ]] || return 1
+  find . -type f -name Cargo.lock -print0 |
+    while IFS= read -r -d '' lockfile; do
+      local packages
+      packages=$(cargo tree --manifest-path "${lockfile%Cargo.lock}Cargo.toml" \
+        --locked --workspace --all-features --target all --edges normal,build,dev \
+        --prefix none --format '{p}' --color never) || return 1
+      if grep -q '^chrono v' <<<"$packages"; then
+        return 1
+      fi
+    done
+}
+
+scanner_config=rsworkspace/osv-scanner.toml
+if chrono_is_inactive; then
+  # Cargo can retain disabled weak dependencies in a lockfile (cargo#10801).
+  # Keep scanning every lockfile and omit only this advisory after proving it inactive.
+  scanner_config=$(mktemp) || exit 1
+  trap 'rm -f "$scanner_config"' EXIT
+  cat rsworkspace/osv-scanner.toml >"$scanner_config" || exit 1
+  cat >>"$scanner_config" <<'TOML' || exit 1
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "Cargo lists chrono as a disabled weak dependency. Every Cargo lockfile's all-target, all-feature dependency tree was checked for active chrono."
+TOML
+fi
+
 set +e
-osv-scanner scan source --recursive --config rsworkspace/osv-scanner.toml --format sarif --output-file results.sarif .
+osv-scanner scan source --recursive --config "$scanner_config" --format sarif --output-file results.sarif .
 status=$?
 set -e
 

@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime},
-};
+use std::{collections::HashMap, env, time::Duration};
 
 use async_nats::jetstream::{
     context::GetStreamErrorKind,
@@ -10,22 +7,20 @@ use async_nats::jetstream::{
     Context, ErrorCode,
 };
 use async_trait::async_trait;
-use aws_sigv4::{
-    http_request::{
-        sign, PercentEncodingMode, SignableBody, SignableRequest, SignatureLocation,
-        SigningSettings, UriPathNormalizationMode,
+use aws_sdk_s3::{
+    config::{
+        endpoint::{Endpoint, EndpointFuture, Params, ResolveEndpoint},
+        Builder as S3ConfigBuilder, Region, RequestChecksumCalculation,
     },
-    sign::v4,
+    presigning::PresigningConfig,
+    primitives::ByteStream,
+    types::{RequestPayer, ServerSideEncryption},
+    Client as S3Client,
 };
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
-use futures::TryStreamExt as _;
-use object_store::{
-    aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey},
-    path::Path,
-    signer::{Method, SignedUrlOptions, Signer, Url},
-    ObjectStoreExt as _,
-};
+use md5::{Digest as _, Md5};
+use reqwest::Url;
 use tokio::io::AsyncReadExt as _;
 use tonic::Status;
 
@@ -202,45 +197,151 @@ pub struct S3StorageConfig {
     pub allow_http: bool,
 }
 
+const S3_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Default)]
+struct S3RequestSettings {
+    server_side_encryption: Option<ServerSideEncryption>,
+    sse_kms_key_id: Option<String>,
+    sse_customer_key: Option<String>,
+    sse_customer_key_md5: Option<String>,
+    request_payer: bool,
+}
+
 pub struct S3BlobStorage {
-    store: AmazonS3,
-    region: String,
+    client: S3Client,
+    bucket: String,
+    settings: S3RequestSettings,
+}
+
+#[derive(Debug)]
+struct S3BucketEndpoint(Endpoint);
+
+impl ResolveEndpoint for S3BucketEndpoint {
+    fn resolve_endpoint(&self, _params: &Params) -> EndpointFuture<'_> {
+        EndpointFuture::ready(Ok(self.0.clone()))
+    }
 }
 
 impl S3BlobStorage {
-    pub fn new(config: S3StorageConfig) -> Result<Self, Status> {
-        Self::with_builder(config, AmazonS3Builder::from_env())
+    pub async fn new(config: S3StorageConfig) -> Result<Self, Status> {
+        let inherited_endpoint = ["AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL", "AWS_ENDPOINT"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok());
+        let settings = S3RequestSettings::from_env()?;
+        let shared = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(Region::new(config.region.clone()))
+            .load()
+            .await;
+        let credentials = shared.credentials_provider().ok_or_else(unavailable)?;
+        Self::with_builder_and_settings(
+            config,
+            S3ConfigBuilder::new().credentials_provider(credentials),
+            inherited_endpoint,
+            settings,
+        )
     }
 
-    fn with_builder(config: S3StorageConfig, builder: AmazonS3Builder) -> Result<Self, Status> {
+    #[cfg(test)]
+    fn with_builder(
+        config: S3StorageConfig,
+        builder: S3ConfigBuilder,
+        inherited_endpoint: Option<String>,
+    ) -> Result<Self, Status> {
+        Self::with_builder_and_settings(
+            config,
+            builder,
+            inherited_endpoint,
+            S3RequestSettings::default(),
+        )
+    }
+
+    fn with_builder_and_settings(
+        config: S3StorageConfig,
+        builder: S3ConfigBuilder,
+        inherited_endpoint: Option<String>,
+        settings: S3RequestSettings,
+    ) -> Result<Self, Status> {
         if config.bucket.trim().is_empty() || config.region.trim().is_empty() {
             return Err(Status::invalid_argument(
                 "artifact S3 bucket and region are required",
             ));
         }
         let mut builder = builder
-            .with_bucket_name(config.bucket)
-            .with_region(&config.region)
-            .with_allow_http(config.allow_http)
-            .with_skip_signature(false)
-            .with_virtual_hosted_style_request(!config.force_path_style)
-            .with_disable_bulk_delete(true);
-        let endpoint = config
-            .endpoint
-            .or_else(|| builder.get_config_value(&AmazonS3ConfigKey::S3Endpoint))
-            .or_else(|| builder.get_config_value(&AmazonS3ConfigKey::Endpoint));
-        if let Some(endpoint) = endpoint {
+            .behavior_version_latest()
+            .region(Region::new(config.region))
+            .force_path_style(config.force_path_style)
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
+        if let Some(endpoint) = config.endpoint.or(inherited_endpoint) {
             validate_endpoint(&endpoint, config.allow_http)?;
-            builder = builder
-                .with_config(AmazonS3ConfigKey::S3Endpoint, &endpoint)
-                .with_endpoint(endpoint);
+            builder = if config.force_path_style {
+                builder.endpoint_url(endpoint)
+            } else {
+                // A custom virtual-hosted endpoint already identifies the bucket.
+                builder
+                    .endpoint_resolver(S3BucketEndpoint(Endpoint::builder().url(endpoint).build()))
+            };
         }
-        let store = builder
-            .build()
-            .map_err(|_| Status::failed_precondition("artifact S3 configuration is invalid"))?;
         Ok(Self {
-            store,
-            region: config.region,
+            client: S3Client::from_conf(builder.build()),
+            bucket: config.bucket,
+            settings,
+        })
+    }
+}
+
+impl S3RequestSettings {
+    fn sse_customer_headers(&self) -> Option<(&str, &str)> {
+        self.sse_customer_key
+            .as_deref()
+            .zip(self.sse_customer_key_md5.as_deref())
+    }
+
+    fn from_env() -> Result<Self, Status> {
+        let encryption = env::var("AWS_SERVER_SIDE_ENCRYPTION").ok();
+        let sse_kms_key_id = env::var("AWS_SSE_KMS_KEY_ID").ok();
+        let customer_key = env::var("AWS_SSE_CUSTOMER_KEY_BASE64").ok();
+        let (server_side_encryption, sse_customer_key, sse_customer_key_md5) = match encryption
+            .as_deref()
+        {
+            Some(value) if value.eq_ignore_ascii_case("sse-c") => {
+                let key = customer_key.ok_or_else(|| {
+                    Status::invalid_argument("AWS_SSE_CUSTOMER_KEY_BASE64 is required for SSE-C")
+                })?;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(key.as_bytes())
+                    .map_err(|_| {
+                        Status::invalid_argument("AWS_SSE_CUSTOMER_KEY_BASE64 must be valid base64")
+                    })?;
+                let digest = Md5::digest(decoded);
+                (
+                    None,
+                    Some(key),
+                    Some(base64::engine::general_purpose::STANDARD.encode(digest)),
+                )
+            }
+            Some(value) => {
+                (
+                    Some(ServerSideEncryption::try_parse(value).map_err(|_| {
+                        Status::invalid_argument("invalid AWS_SERVER_SIDE_ENCRYPTION")
+                    })?),
+                    None,
+                    None,
+                )
+            }
+            None => (None, None, None),
+        };
+        let request_payer = env::var("AWS_REQUEST_PAYER").is_ok_and(|value| {
+            value.eq_ignore_ascii_case("requester")
+                || value == "1"
+                || value.eq_ignore_ascii_case("true")
+        });
+        Ok(Self {
+            server_side_encryption,
+            sse_kms_key_id,
+            sse_customer_key,
+            sse_customer_key_md5,
+            request_payer,
         })
     }
 }
@@ -252,44 +353,94 @@ impl BlobStorage for S3BlobStorage {
     }
 
     async fn put(&self, key: &str, data: Bytes) -> Result<(), Status> {
-        let path = storage_path(key)?;
-        self.store
-            .put(&path, data.into())
-            .await
-            .map_err(|error| storage_error(&error))?;
+        validate_key(key)?;
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(data));
+        if let Some(encryption) = &self.settings.server_side_encryption {
+            request = request.server_side_encryption(encryption.clone());
+            if encryption.as_str() == "aws:kms" {
+                if let Some(key_id) = self.settings.sse_kms_key_id.as_deref() {
+                    request = request.ssekms_key_id(key_id);
+                }
+            }
+        }
+        if let Some((key, md5)) = self.settings.sse_customer_headers() {
+            request = request
+                .sse_customer_algorithm("AES256")
+                .sse_customer_key(key)
+                .sse_customer_key_md5(md5);
+        }
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        request.send().await.map_err(|_| unavailable())?;
         Ok(())
     }
 
     async fn get(&self, key: &str, max_bytes: usize) -> Result<Bytes, Status> {
-        let path = storage_path(key)?;
-        let result = self
-            .store
-            .get(&path)
-            .await
-            .map_err(|error| storage_error(&error))?;
-        if result.meta.size > u64::try_from(max_bytes).map_err(|_| too_large())? {
-            return Err(too_large());
-        }
-        let mut stream = result.into_stream();
-        let mut bytes = BytesMut::new();
-        while let Some(chunk) = stream
-            .try_next()
-            .await
-            .map_err(|error| storage_error(&error))?
-        {
-            if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+        validate_key(key)?;
+        tokio::time::timeout(S3_READ_TIMEOUT, async {
+            let mut request = self.client.get_object().bucket(&self.bucket).key(key);
+            if let Some((key, md5)) = self.settings.sse_customer_headers() {
+                request = request
+                    .sse_customer_algorithm("AES256")
+                    .sse_customer_key(key)
+                    .sse_customer_key_md5(md5);
+            }
+            if self.settings.request_payer {
+                request = request.request_payer(RequestPayer::Requester);
+            }
+            let result = request.send().await.map_err(|error| {
+                if error
+                    .raw_response()
+                    .is_some_and(|r| r.status().as_u16() == 404)
+                {
+                    not_found()
+                } else {
+                    unavailable()
+                }
+            })?;
+            let length = result
+                .content_length()
+                .and_then(|length| usize::try_from(length).ok())
+                .ok_or_else(unavailable)?;
+            if length > max_bytes {
                 return Err(too_large());
             }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes.freeze())
+            let mut stream = result.body;
+            let mut bytes = BytesMut::new();
+            while let Some(chunk) = stream.try_next().await.map_err(|_| unavailable())? {
+                if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+                    return Err(too_large());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes.freeze())
+        })
+        .await
+        .map_err(|_| unavailable())?
     }
 
     async fn delete(&self, key: &str) -> Result<(), Status> {
-        let path = storage_path(key)?;
-        match self.store.delete(&path).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-            Err(error) => Err(storage_error(&error)),
+        validate_key(key)?;
+        let mut request = self.client.delete_object().bucket(&self.bucket).key(key);
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        match request.send().await {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error
+                    .raw_response()
+                    .is_some_and(|r| r.status().as_u16() == 404) =>
+            {
+                Ok(())
+            }
+            Err(_) => Err(unavailable()),
         }
     }
 
@@ -301,91 +452,43 @@ impl BlobStorage for S3BlobStorage {
         sha256: &str,
         media_type: &str,
     ) -> Result<Option<SignedUpload>, Status> {
-        let path = storage_path(key)?;
+        validate_key(key)?;
         validate_ttl(ttl)?;
+        let length = i64::try_from(size).map_err(|_| too_large())?;
         let checksum = base64::engine::general_purpose::STANDARD.encode(decode_sha256(sha256)?);
-        let headers = HashMap::from([
-            ("content-length".to_owned(), size.to_string()),
-            ("content-type".to_owned(), media_type.to_owned()),
-            ("x-amz-checksum-sha256".to_owned(), checksum),
-        ]);
-        // object_store excludes Content-Length from its signer. The upload grant
-        // must bind it, so use AWS's signer over the provider-resolved object URL.
-        let mut url = self
-            .store
-            .signed_url(Method::PUT, &path, ttl)
-            .await
-            .map_err(|error| storage_error(&error))?;
-        let query: Vec<(String, String)> = url
-            .query_pairs()
-            .filter(|(name, _)| {
-                !matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "x-amz-algorithm"
-                        | "x-amz-credential"
-                        | "x-amz-date"
-                        | "x-amz-expires"
-                        | "x-amz-signedheaders"
-                        | "x-amz-signature"
-                        | "x-amz-security-token"
-                )
-            })
-            .map(|(name, value)| (name.into_owned(), value.into_owned()))
-            .collect();
-        url.set_query(None);
-        if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query);
+        let expiry = PresigningConfig::expires_in(ttl).map_err(|_| unavailable())?;
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_length(length)
+            .content_type(media_type)
+            .checksum_sha256(checksum);
+        if let Some(encryption) = &self.settings.server_side_encryption {
+            request = request.server_side_encryption(encryption.clone());
+            if encryption.as_str() == "aws:kms" {
+                if let Some(key_id) = self.settings.sse_kms_key_id.as_deref() {
+                    request = request.ssekms_key_id(key_id);
+                }
+            }
         }
-        let credential = self
-            .store
-            .credentials()
-            .get_credential()
-            .await
-            .map_err(|error| storage_error(&error))?;
-        let identity = aws_credential_types::Credentials::new(
-            credential.key_id.clone(),
-            credential.secret_key.clone(),
-            credential.token.clone(),
-            None,
-            "atlas-artifacts",
-        )
-        .into();
-        let mut settings = SigningSettings::default();
-        settings.signature_location = SignatureLocation::QueryParams;
-        settings.expires_in = Some(ttl);
-        settings.excluded_headers = Some(Vec::new());
-        settings.percent_encoding_mode = PercentEncodingMode::Single;
-        settings.uri_path_normalization_mode = UriPathNormalizationMode::Disabled;
-        let params = v4::SigningParams::builder()
-            .identity(&identity)
-            .region(&self.region)
-            .name("s3")
-            .time(SystemTime::now())
-            .settings(settings)
-            .build()
-            .map_err(|_| unavailable())?
-            .into();
-        let signable = SignableRequest::new(
-            "PUT",
-            url.as_str(),
-            headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_str())),
-            SignableBody::UnsignedPayload,
-        )
-        .map_err(|_| unavailable())?;
-        let (instructions, _) = sign(signable, &params)
-            .map_err(|_| unavailable())?
-            .into_parts();
-        let mut request = http::Request::builder()
-            .method("PUT")
-            .uri(url.as_str())
-            .body(())
-            .map_err(|_| unavailable())?;
-        instructions.apply_to_request_http1x(&mut request);
+        if let Some((key, md5)) = self.settings.sse_customer_headers() {
+            request = request
+                .sse_customer_algorithm("AES256")
+                .sse_customer_key(key)
+                .sse_customer_key_md5(md5);
+        }
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        let request = request.presigned(expiry).await.map_err(|_| unavailable())?;
         Ok(Some(SignedUpload {
             url: request.uri().to_string(),
-            headers,
+            headers: request
+                .headers()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
         }))
     }
 
@@ -395,11 +498,14 @@ impl BlobStorage for S3BlobStorage {
         ttl: Duration,
         media_type: &str,
     ) -> Result<Option<String>, Status> {
-        let path = storage_path(key)?;
+        validate_key(key)?;
         validate_ttl(ttl)?;
         media_type
             .parse::<http::HeaderValue>()
             .map_err(|_| Status::invalid_argument("invalid artifact media type"))?;
+        if self.settings.sse_customer_headers().is_some() {
+            return Ok(None);
+        }
         let disposition = if matches!(
             media_type,
             "image/png" | "image/jpeg" | "image/webp" | "image/gif"
@@ -408,15 +514,22 @@ impl BlobStorage for S3BlobStorage {
         } else {
             "attachment"
         };
-        let options = SignedUrlOptions::default().with_query([
-            ("response-content-type", media_type),
-            ("response-content-disposition", disposition),
-        ]);
-        self.store
-            .signed_url_opts(Method::GET, &path, ttl, &options)
+        let expiry = PresigningConfig::expires_in(ttl).map_err(|_| unavailable())?;
+        let mut request = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .response_content_type(media_type)
+            .response_content_disposition(disposition);
+        if self.settings.request_payer {
+            request = request.request_payer(RequestPayer::Requester);
+        }
+        request
+            .presigned(expiry)
             .await
-            .map(|url| Some(url.to_string()))
-            .map_err(|error| storage_error(&error))
+            .map(|request| Some(request.uri().to_string()))
+            .map_err(|_| unavailable())
     }
 }
 
@@ -434,11 +547,6 @@ fn validate_key(key: &str) -> Result<(), Status> {
         return Err(Status::invalid_argument("invalid artifact storage key"));
     }
     Ok(())
-}
-
-fn storage_path(key: &str) -> Result<Path, Status> {
-    validate_key(key)?;
-    Path::parse(key).map_err(|_| Status::invalid_argument("invalid artifact storage key"))
 }
 
 fn validate_endpoint(endpoint: &str, allow_http: bool) -> Result<(), Status> {
@@ -479,13 +587,6 @@ fn decode_sha256(value: &str) -> Result<[u8; 32], Status> {
     Ok(digest)
 }
 
-fn storage_error(error: &object_store::Error) -> Status {
-    match error {
-        object_store::Error::NotFound { .. } => not_found(),
-        _ => unavailable(),
-    }
-}
-
 fn not_found() -> Status {
     Status::not_found("artifact content not found")
 }
@@ -502,32 +603,43 @@ fn too_large() -> Status {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
     };
 
     use super::*;
 
+    fn fixture_builder() -> S3ConfigBuilder {
+        use aws_sdk_s3::config::{retry::RetryConfig, Credentials};
+        S3ConfigBuilder::new()
+            .credentials_provider(Credentials::new(
+                "artifact-fixture-access",
+                "artifact-fixture-signing-key",
+                None,
+                None,
+                "fixture",
+            ))
+            .retry_config(RetryConfig::disabled())
+    }
+
+    fn fixture_config(endpoint: Option<String>) -> S3StorageConfig {
+        S3StorageConfig {
+            bucket: "artifact-test".into(),
+            region: "us-east-1".into(),
+            endpoint,
+            force_path_style: true,
+            allow_http: true,
+        }
+    }
+
     #[tokio::test]
     async fn explicit_s3_endpoint_overrides_inherited_provider_endpoint() {
-        let builder = AmazonS3Builder::new()
-            .with_config(
-                object_store::aws::AmazonS3ConfigKey::S3Endpoint,
-                "https://inherited.invalid",
-            )
-            .with_access_key_id("artifact-fixture-access")
-            .with_secret_access_key("artifact-fixture-signing-key");
         let storage = S3BlobStorage::with_builder(
-            S3StorageConfig {
-                bucket: "artifact-test".into(),
-                region: "us-east-1".into(),
-                endpoint: Some("https://selected.invalid".into()),
-                force_path_style: true,
-                allow_http: false,
-            },
-            builder,
+            fixture_config(Some("https://selected.invalid".into())),
+            fixture_builder(),
+            Some("https://inherited.invalid".into()),
         )
         .unwrap();
         let signed = storage
@@ -541,24 +653,278 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn public_s3_constructor_preserves_environment_endpoint_precedence() {
+        const EXPECTED: &str = "ATLAS_TEST_S3_ENDPOINT_HOST";
+        if let Ok(expected) = std::env::var(EXPECTED) {
+            let endpoint =
+                (expected == "explicit.invalid").then(|| "https://explicit.invalid".into());
+            let storage = S3BlobStorage::new(fixture_config(endpoint)).await.unwrap();
+            let signed = storage
+                .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                Url::parse(&signed).unwrap().host_str(),
+                Some(expected.as_str())
+            );
+            return;
+        }
+
+        for (expected, generic, legacy, service) in [
+            (
+                "generic.invalid",
+                Some("https://generic.invalid"),
+                None,
+                None,
+            ),
+            ("legacy.invalid", None, Some("https://legacy.invalid"), None),
+            (
+                "generic.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                None,
+            ),
+            (
+                "service.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                Some("https://service.invalid"),
+            ),
+            (
+                "explicit.invalid",
+                Some("https://generic.invalid"),
+                Some("https://legacy.invalid"),
+                Some("https://service.invalid"),
+            ),
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "artifacts::storage::tests::public_s3_constructor_preserves_environment_endpoint_precedence"])
+                .env_clear()
+                .env(EXPECTED, expected)
+                .env("AWS_ACCESS_KEY_ID", "artifact-fixture-access")
+                .env("AWS_SECRET_ACCESS_KEY", "artifact-fixture-signing-key")
+                .env("AWS_EC2_METADATA_DISABLED", "true");
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                command.env("LLVM_PROFILE_FILE", profile);
+            }
+            for (name, value) in [
+                ("AWS_ENDPOINT_URL", generic),
+                ("AWS_ENDPOINT", legacy),
+                ("AWS_ENDPOINT_URL_S3", service),
+            ] {
+                if let Some(value) = value {
+                    command.env(name, value);
+                }
+            }
+            let output = command.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "expected one successful endpoint probe for {expected}: {stdout}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_virtual_hosted_endpoints_keep_their_bucket_destination() {
+        for (endpoint, expected_host, expected_path) in [
+            (
+                Some("https://artifact-test.objects.invalid/tenant"),
+                "artifact-test.objects.invalid",
+                "/tenant/artifacts/capture",
+            ),
+            (
+                Some("https://objects.invalid/tenant"),
+                "objects.invalid",
+                "/tenant/artifacts/capture",
+            ),
+            (
+                None,
+                "artifact-test.s3.us-east-1.amazonaws.com",
+                "/artifacts/capture",
+            ),
+        ] {
+            let mut config = fixture_config(endpoint.map(str::to_owned));
+            config.force_path_style = false;
+            let storage = S3BlobStorage::with_builder(config, fixture_builder(), None).unwrap();
+            let signed = storage
+                .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+                .await
+                .unwrap()
+                .unwrap();
+            let url = Url::parse(&signed).unwrap();
+            assert_eq!(url.host_str(), Some(expected_host));
+            assert_eq!(url.path(), expected_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_virtual_hosted_custom_endpoint_handles_direct_and_presigned_writes() {
+        let server = MockServer::start().await;
+        let mut config = fixture_config(Some(format!("{}/tenant", server.uri())));
+        config.force_path_style = false;
+        let storage = S3BlobStorage::with_builder(config, fixture_builder(), None).unwrap();
+        Mock::given(method("PUT"))
+            .and(path("/tenant/artifacts/capture"))
+            .respond_with(ResponseTemplate::new(200).insert_header("etag", "\"stored\""))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let data = Bytes::from_static(b"artifact bytes");
+        let digest = trogon_atlas_client::artifacts::sha256_hex(&data);
+        storage
+            .put("artifacts/capture", data.clone())
+            .await
+            .unwrap();
+        let signed = storage
+            .presign_put(
+                "artifacts/capture",
+                Duration::from_secs(60),
+                u64::try_from(data.len()).unwrap(),
+                &digest,
+                "image/png",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let mut request = reqwest::Client::new().put(signed.url).body(data);
+        for (name, value) in signed.headers {
+            request = request.header(name, value);
+        }
+        assert!(request.send().await.unwrap().status().is_success());
+    }
+
+    #[tokio::test]
+    async fn s3_reads_and_writes_preserve_request_payer_and_sse_customer_headers() {
+        let server = MockServer::start().await;
+        let key =
+            base64::engine::general_purpose::STANDARD.encode(b"fixture customer encryption key");
+        let key_md5 = base64::engine::general_purpose::STANDARD.encode(Md5::digest(
+            base64::engine::general_purpose::STANDARD
+                .decode(&key)
+                .unwrap(),
+        ));
+        let storage = S3BlobStorage::with_builder_and_settings(
+            fixture_config(Some(server.uri())),
+            fixture_builder(),
+            None,
+            S3RequestSettings {
+                sse_customer_key: Some(key.clone()),
+                sse_customer_key_md5: Some(key_md5.clone()),
+                request_payer: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header(
+                "x-amz-server-side-encryption-customer-algorithm",
+                "AES256",
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key",
+                key.as_str(),
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key-MD5",
+                key_md5.as_str(),
+            ))
+            .and(header("x-amz-request-payer", "requester"))
+            .respond_with(object_response(b"existing artifact"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header(
+                "x-amz-server-side-encryption-customer-algorithm",
+                "AES256",
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key",
+                key.as_str(),
+            ))
+            .and(header(
+                "x-amz-server-side-encryption-customer-key-MD5",
+                key_md5.as_str(),
+            ))
+            .and(header("x-amz-request-payer", "requester"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            storage.get("artifacts/capture", 1024).await.unwrap(),
+            Bytes::from_static(b"existing artifact")
+        );
+        storage
+            .put("artifacts/capture", Bytes::from_static(b"replacement"))
+            .await
+            .unwrap();
+        assert!(storage
+            .presign_get("artifacts/capture", Duration::from_secs(60), "image/png")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn s3_kms_key_is_bound_to_direct_and_presigned_uploads() {
+        let server = MockServer::start().await;
+        let storage = S3BlobStorage::with_builder_and_settings(
+            fixture_config(Some(server.uri())),
+            fixture_builder(),
+            None,
+            S3RequestSettings {
+                server_side_encryption: Some(ServerSideEncryption::AwsKms),
+                sse_kms_key_id: Some("alias/artifact-fixture".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        Mock::given(method("PUT"))
+            .and(path("/artifact-test/artifacts/capture"))
+            .and(header("x-amz-server-side-encryption", "aws:kms"))
+            .and(header(
+                "x-amz-server-side-encryption-aws-kms-key-id",
+                "alias/artifact-fixture",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        storage
+            .put("artifacts/capture", Bytes::from_static(b"kms artifact"))
+            .await
+            .unwrap();
+        let signed = storage
+            .presign_put(
+                "artifacts/capture",
+                Duration::from_secs(60),
+                12,
+                &trogon_atlas_client::artifacts::sha256_hex(b"kms artifact"),
+                "application/octet-stream",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            signed
+                .headers
+                .get("x-amz-server-side-encryption-aws-kms-key-id")
+                .map(String::as_str),
+            Some("alias/artifact-fixture")
+        );
+    }
+
     #[test]
     fn inherited_s3_endpoint_cannot_contain_url_credentials() {
-        let builder = AmazonS3Builder::new()
-            .with_config(
-                object_store::aws::AmazonS3ConfigKey::S3Endpoint,
-                "https://fixture-user:fixture-password@storage.invalid",
-            )
-            .with_access_key_id("artifact-fixture-access")
-            .with_secret_access_key("artifact-fixture-signing-key");
         let result = S3BlobStorage::with_builder(
-            S3StorageConfig {
-                bucket: "artifact-test".into(),
-                region: "us-east-1".into(),
-                endpoint: None,
-                force_path_style: true,
-                allow_http: false,
-            },
-            builder,
+            fixture_config(None),
+            fixture_builder(),
+            Some("https://fixture-user:fixture-password@storage.invalid".into()),
         );
         assert_eq!(
             result.err().map(|error| error.code()),
@@ -568,28 +934,13 @@ mod tests {
 
     async fn s3_fixture() -> (MockServer, S3BlobStorage) {
         let server = MockServer::start().await;
-        let store = AmazonS3Builder::new()
-            .with_bucket_name("artifact-test")
-            .with_region("us-east-1")
-            .with_endpoint(server.uri())
-            .with_allow_http(true)
-            .with_virtual_hosted_style_request(false)
-            .with_disable_bulk_delete(true)
-            .with_access_key_id("artifact-fixture-access")
-            .with_secret_access_key("artifact-fixture-signing-key")
-            .with_retry(object_store::RetryConfig {
-                max_retries: 0,
-                ..Default::default()
-            })
-            .build()
-            .unwrap();
-        (
-            server,
-            S3BlobStorage {
-                store,
-                region: "us-east-1".into(),
-            },
+        let storage = S3BlobStorage::with_builder(
+            fixture_config(Some(server.uri())),
+            fixture_builder(),
+            None,
         )
+        .unwrap();
+        (server, storage)
     }
 
     fn object_response(data: &[u8]) -> ResponseTemplate {
@@ -694,6 +1045,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_read_times_out_when_the_provider_stalls_before_response_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let storage =
+            S3BlobStorage::with_builder(fixture_config(Some(endpoint)), fixture_builder(), None)
+                .unwrap();
+
+        let read = storage.get("staging/capture", 4);
+        let request_arrives = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.read_exact(&mut [0]).await.unwrap();
+            socket
+        };
+        tokio::pin!(read);
+        let stalled_connection = tokio::select! {
+            socket = tokio::time::timeout(Duration::from_secs(5), request_arrives) => {
+                socket.expect("provider must receive the request")
+            }
+            result = &mut read => panic!("read finished before the provider stalled: {result:?}"),
+        };
+        tokio::time::pause();
+        let test_deadline = tokio::time::timeout(Duration::from_secs(31), read);
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = test_deadline
+            .await
+            .expect("S3 read must return before the test deadline")
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        drop(stalled_connection);
+    }
+
+    #[tokio::test]
     async fn s3_presigned_upload_binds_length_media_type_and_checksum() {
         let (server, storage) = s3_fixture().await;
         let data = Bytes::from_static(b"artifact bytes");
@@ -774,36 +1157,28 @@ mod tests {
         .await
         .expect("start local S3-compatible artifact fixture");
         let port = container.get_host_port_ipv4(9000).await.unwrap();
-        let store = AmazonS3Builder::new()
-            .with_bucket_name("artifact-test")
-            .with_region("us-east-1")
-            .with_endpoint(format!("http://127.0.0.1:{port}"))
-            .with_allow_http(true)
-            .with_virtual_hosted_style_request(false)
-            .with_disable_bulk_delete(true)
-            .with_access_key_id("artifact-fixture-access")
-            .with_secret_access_key("artifact-fixture-signing-key")
-            .with_retry(object_store::RetryConfig {
-                max_retries: 0,
-                ..Default::default()
-            })
-            .build()
-            .unwrap();
+        let storage = S3BlobStorage::with_builder(
+            fixture_config(Some(format!("http://127.0.0.1:{port}"))),
+            fixture_builder(),
+            None,
+        )
+        .unwrap();
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        let create_bucket = store
-            .signed_url(Method::PUT, &Path::from(""), Duration::from_secs(120))
-            .await
-            .unwrap();
         tokio::time::timeout(Duration::from_secs(45), async {
             loop {
-                if let Ok(response) = http.put(create_bucket.clone()).send().await {
-                    if response.status().is_success() {
-                        break;
-                    }
+                if storage
+                    .client
+                    .create_bucket()
+                    .bucket(&storage.bucket)
+                    .send()
+                    .await
+                    .is_ok()
+                {
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -811,10 +1186,7 @@ mod tests {
         .await
         .expect("S3-compatible fixture accepts signed bucket creation");
 
-        let storage = std::sync::Arc::new(S3BlobStorage {
-            store,
-            region: "us-east-1".into(),
-        });
+        let storage = std::sync::Arc::new(storage);
         let data = Bytes::from_static(b"captured image bytes");
         let digest = trogon_atlas_client::artifacts::sha256_hex(&data);
         let upload = storage

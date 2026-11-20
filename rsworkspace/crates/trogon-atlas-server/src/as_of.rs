@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use time::OffsetDateTime;
+use trogon_atlas_core::timestamp::parse_rfc3339;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     refs::{entity_id, entity_kind},
@@ -44,14 +46,12 @@ pub enum AsOfTimeError {
 impl AsOfTime {
     /// Parse an RFC 3339 instant, refusing one later than `now`: a view of a
     /// moment that has not finished happening would differ on every read.
-    pub fn parse(raw: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Self, AsOfTimeError> {
-        let at = chrono::DateTime::parse_from_rfc3339(raw)
-            .map_err(|_| AsOfTimeError::Malformed(raw.to_owned()))?
-            .with_timezone(&chrono::Utc);
-        if at > now {
+    pub fn parse(raw: &str, now: OffsetDateTime) -> Result<Self, AsOfTimeError> {
+        let at = parse_rfc3339(raw).ok_or_else(|| AsOfTimeError::Malformed(raw.to_owned()))?;
+        if at.is_after(now) {
             return Err(AsOfTimeError::InFuture(raw.to_owned()));
         }
-        let unix_millis = u64::try_from(at.timestamp_millis())
+        let unix_millis = u64::try_from(at.unix_millis())
             .map_err(|_| AsOfTimeError::BeforeEpoch(raw.to_owned()))?;
         Ok(Self { unix_millis })
     }
@@ -200,10 +200,8 @@ mod tests {
             .collect()
     }
 
-    fn instant(raw: &str) -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::parse_from_rfc3339(raw)
-            .unwrap()
-            .with_timezone(&chrono::Utc)
+    fn instant(raw: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).unwrap()
     }
 
     /// A UUIDv7 minted at `millis` since the epoch.
@@ -242,15 +240,29 @@ mod tests {
             AsOfTime::parse("2026-10-30T00:00:00.001Z", now),
             Err(AsOfTimeError::InFuture(_))
         ));
-        assert!(AsOfTime::parse("2026-10-30T00:00:00Z", now).is_ok());
         assert!(matches!(
-            AsOfTime::parse("yesterday", now),
-            Err(AsOfTimeError::Malformed(_))
+            AsOfTime::parse("2026-10-30T00:00:00.000000001Z", now),
+            Err(AsOfTimeError::InFuture(_))
         ));
+        assert!(AsOfTime::parse("2026-10-30T00:00:00Z", now).is_ok());
+        for malformed in ["yesterday", "2026-10-30X00:00:00Z"] {
+            assert!(matches!(
+                AsOfTime::parse(malformed, now),
+                Err(AsOfTimeError::Malformed(_))
+            ));
+        }
         assert!(matches!(
             AsOfTime::parse("1969-12-31T23:59:59Z", now),
             Err(AsOfTimeError::BeforeEpoch(_))
         ));
+    }
+
+    #[test]
+    fn as_of_time_orders_a_leap_second_before_the_following_wall_second() {
+        let now = instant("1972-07-01T00:00:00Z");
+        let at = AsOfTime::parse("1972-06-30T23:59:60.5Z", now).unwrap();
+        assert_eq!(at.admits(&minted_at(78_796_800_500)), Some(true));
+        assert_eq!(at.admits(&minted_at(78_796_800_501)), Some(false));
     }
 
     #[test]

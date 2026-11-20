@@ -7,7 +7,10 @@
 //! `stamp_system` before persisting; the rule is shape-of-the-entity,
 //! not storage-mechanism.
 
+use time::OffsetDateTime;
 use trogon_atlas_proto::{Entity, SystemMeta};
+
+use crate::timestamp::{format_utc, TimestampPrecision};
 
 /// Returns a clone of `entity` with the `system` block set:
 ///
@@ -24,7 +27,7 @@ pub fn stamp_system(prev: Option<&Entity>, entity: &Entity) -> Entity {
         Some(s) if !s.uid.trim().is_empty() => s.clone(),
         _ => SystemMeta {
             uid: uuid::Uuid::now_v7().to_string(),
-            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            created_at: format_utc(OffsetDateTime::now_utc(), TimestampPrecision::Seconds),
         },
     });
     e
@@ -35,6 +38,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::timestamp::parse_rfc3339;
 
     fn bare_entity() -> Entity {
         Entity {
@@ -48,8 +52,7 @@ mod tests {
         let result = stamp_system(None, &bare_entity());
         let sys = result.system.unwrap();
         assert!(!sys.uid.is_empty(), "uid must be non-empty on create");
-        chrono::DateTime::parse_from_rfc3339(&sys.created_at)
-            .expect("created_at must be valid RFC3339");
+        parse_rfc3339(&sys.created_at).expect("created_at must be valid RFC3339");
     }
 
     #[test]
@@ -81,7 +84,7 @@ mod tests {
         let result = stamp_system(Some(&prev), &bare_entity());
         let sys = result.system.unwrap();
         assert!(!sys.uid.is_empty(), "empty prev uid must trigger new mint");
-        chrono::DateTime::parse_from_rfc3339(&sys.created_at).expect("created_at must be RFC3339");
+        parse_rfc3339(&sys.created_at).expect("created_at must be RFC3339");
     }
 
     #[test]

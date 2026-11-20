@@ -9,8 +9,10 @@
 
 use std::sync::Arc;
 
+use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tonic::{metadata::MetadataValue, transport::Channel};
+use trogon_atlas_core::timestamp::{format_utc, TimestampPrecision};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
@@ -1141,9 +1143,8 @@ fn minted_millis(changeset: &str) -> i64 {
 }
 
 fn rfc3339_millis(millis: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(millis)
-        .unwrap()
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    let at = OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).unwrap();
+    format_utc(at, TimestampPrecision::Milliseconds)
 }
 
 /// An instant resolves to the changeset minted in that millisecond, reads the
@@ -1247,7 +1248,10 @@ async fn as_of_time_refuses_what_it_cannot_pin() {
     .unwrap();
     let target = newest_changeset(&mut c).await;
 
-    let future = rfc3339_millis(chrono::Utc::now().timestamp_millis() + 60_000);
+    let future = format_utc(
+        OffsetDateTime::now_utc() + time::Duration::minutes(1),
+        TimestampPrecision::Milliseconds,
+    );
     for (label, req) in [
         (
             "an instant later than the server clock",

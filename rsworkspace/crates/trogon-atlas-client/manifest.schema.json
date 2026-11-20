@@ -7648,6 +7648,9 @@
         "owningDomain": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DomainRef"
         },
+        "summary": {
+          "type": "string"
+        },
         "supersedes": {
           "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
         },
