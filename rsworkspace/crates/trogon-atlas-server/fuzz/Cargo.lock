@@ -4089,6 +4089,7 @@ dependencies = [
  "futures",
  "http",
  "http-body",
+ "md-5",
  "mime",
  "opentelemetry",
  "opentelemetry-otlp",
