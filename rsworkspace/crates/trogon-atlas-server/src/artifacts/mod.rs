@@ -57,6 +57,48 @@ pub struct ArtifactService {
     authority: Arc<dyn ArtifactPublicationAuthority>,
 }
 
+struct CompletionPhaseGuard {
+    catalog: Store,
+    upload: Option<Upload>,
+    previous: Phase,
+    revision: u64,
+}
+
+impl CompletionPhaseGuard {
+    fn new(catalog: Store, upload: Upload, previous: Phase, revision: u64) -> Self {
+        Self {
+            catalog,
+            upload: Some(upload),
+            previous,
+            revision,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.upload = None;
+    }
+}
+
+impl Drop for CompletionPhaseGuard {
+    fn drop(&mut self) {
+        let Some(mut upload) = self.upload.take() else {
+            return;
+        };
+        upload.phase = self.previous;
+        let catalog = self.catalog.clone();
+        let revision = self.revision;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        drop(handle.spawn(async move {
+            let Ok(value) = encode(&upload) else {
+                return;
+            };
+            let _ = catalog.update(&upload.id, value, revision).await;
+        }));
+    }
+}
+
 impl ArtifactService {
     pub fn new(
         blobs: Arc<dyn BlobStorage>,
@@ -276,6 +318,8 @@ impl ArtifactService {
         let candidate = Self::candidate(&upload)?;
         upload.phase = Phase::Verifying;
         let revision = self.update(&upload, revision).await?;
+        let mut phase_guard =
+            CompletionPhaseGuard::new(self.catalog.clone(), upload.clone(), previous, revision);
         let result = async {
             let byte_limit = usize::try_from(self.max_bytes).map_err(|_| {
                 Status::failed_precondition("artifact byte limit exceeds platform capacity")
@@ -310,10 +354,12 @@ impl ArtifactService {
         if let Err(error) = result {
             upload.phase = previous;
             let _ = self.update(&upload, revision).await;
+            phase_guard.disarm();
             return Err(error);
         }
         upload.phase = Phase::Ready;
         self.update(&upload, revision).await?;
+        phase_guard.disarm();
         self.cleanup_staging(&upload).await;
         Ok(Self::artifact(&upload))
     }
