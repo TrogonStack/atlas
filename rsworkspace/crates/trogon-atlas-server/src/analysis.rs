@@ -17,6 +17,13 @@ pub struct FlowEndpoint {
     pub entity_ref: pb::EntityRef,
     pub fields: Vec<pb::FieldSpec>,
     pub source_role: FlowSourceRole,
+    /// Fields an automation reads only to decide whether to fire. Its
+    /// scenarios give them different values when it issues a command and
+    /// when it does not, so they count as consumed without a downstream copy.
+    pub decision_fields: HashSet<String>,
+    /// Fields in the read model's `key`. Two read models that share a key
+    /// field carry the same value for it in any joined row.
+    pub key_fields: HashSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -84,8 +91,16 @@ pub fn check_completeness(
                             confidence: 0.8,
                         });
                     }
-                    1 => {
-                        let (up_ref, up_field) = &matches[0];
+                    n if n == 1 || is_shared_join_key(&matches, &link.upstream) => {
+                        let (_, up_field) = matches
+                            .iter()
+                            .find(|(_, up_field)| {
+                                !trogon_atlas_proto::canonical::field_types_compatible(
+                                    up_field.r#type.as_ref(),
+                                    f.r#type.as_ref(),
+                                )
+                            })
+                            .unwrap_or(&matches[0]);
                         if !trogon_atlas_proto::canonical::field_types_compatible(
                             up_field.r#type.as_ref(),
                             f.r#type.as_ref(),
@@ -110,13 +125,15 @@ pub fn check_completeness(
                             });
                         }
                         traced += 1;
-                        if let Some(id) = up_ref.id.as_ref() {
-                            consumed_up.insert((
-                                id.namespace.clone(),
-                                id.slug.clone(),
-                                id.version,
-                                up_field.name.clone(),
-                            ));
+                        for (up_ref, up_field) in &matches {
+                            if let Some(id) = up_ref.id.as_ref() {
+                                consumed_up.insert((
+                                    id.namespace.clone(),
+                                    id.slug.clone(),
+                                    id.version,
+                                    up_field.name.clone(),
+                                ));
+                            }
                         }
                     }
                     n => {
@@ -160,7 +177,7 @@ pub fn check_completeness(
                     id.version,
                     f.name.clone(),
                 );
-                if !consumed_up.contains(&key) {
+                if !consumed_up.contains(&key) && !up.decision_fields.contains(&f.name) {
                     gaps.push(pb::CompletenessGap {
                         kind: pb::completeness_gap::Kind::DanglingInput as i32,
                         entity: Some(up.entity_ref.clone()),
@@ -183,6 +200,22 @@ pub fn check_completeness(
         traced as f32 / total_down_fields as f32
     };
     (gaps, score)
+}
+
+/// True when several upstream fields share one name and each is a key field of
+/// its read model. Every joined row carries the same value for such a field, so
+/// the matches are one source, not competing ones.
+fn is_shared_join_key(
+    matches: &[(pb::EntityRef, &pb::FieldSpec)],
+    upstream: &[FlowEndpoint],
+) -> bool {
+    matches.len() > 1
+        && matches.iter().all(|(up_ref, up_field)| {
+            up_ref.kind == pb::EntityKind::ReadModel as i32
+                && upstream
+                    .iter()
+                    .any(|up| up.entity_ref == *up_ref && up.key_fields.contains(&up_field.name))
+        })
 }
 
 fn note_undeclared(
@@ -787,6 +820,10 @@ fn slice_to_flow(
                 .iter()
                 .filter_map(|re| re.read_model.as_ref()?.id.clone())
                 .filter_map(|id| endpoint_for(pb::EntityKind::ReadModel, &id, by_key))
+                .map(|mut endpoint| {
+                    endpoint.decision_fields = decision_fields(&as_.scenarios, &endpoint);
+                    endpoint
+                })
                 .collect();
             let downstream: Vec<FlowEndpoint> = as_
                 .emitted_command
@@ -831,6 +868,79 @@ fn slice_to_flow(
     }
 }
 
+/// Fields of `endpoint` whose value in the scenarios' `given` rows differs
+/// between a scenario that issues the command and one that does not. A
+/// scenario with no row for the read model differs from one that has a row.
+/// Only top-level fields of a `google.protobuf.Struct` payload are compared;
+/// a generated-message payload cannot be read without its descriptor.
+fn decision_fields(
+    scenarios: &[pb::AutomationScenario],
+    endpoint: &FlowEndpoint,
+) -> HashSet<String> {
+    use pb::automation_scenario::Outcome;
+
+    let Some(read_model_id) = endpoint.entity_ref.id.as_ref() else {
+        return HashSet::new();
+    };
+    // `None` means the scenario has no row for this read model.
+    let mut fired: Vec<Option<Vec<prost_types::Struct>>> = Vec::new();
+    let mut idle: Vec<Option<Vec<prost_types::Struct>>> = Vec::new();
+    for scenario in scenarios {
+        let bucket = match scenario.outcome {
+            Some(Outcome::Then(_)) => &mut fired,
+            Some(Outcome::NoCommand(_)) => &mut idle,
+            None => continue,
+        };
+        let mut rows = scenario
+            .given
+            .iter()
+            .filter(|row| {
+                row.read_model.as_ref().and_then(|r| r.id.as_ref()) == Some(read_model_id)
+            })
+            .peekable();
+        if rows.peek().is_none() {
+            bucket.push(None);
+        } else {
+            bucket.push(Some(
+                rows.filter_map(|row| struct_payload(row.payload.as_ref()?))
+                    .collect(),
+            ));
+        }
+    }
+    let mut decisive: HashSet<String> = HashSet::new();
+    for a in &fired {
+        for b in &idle {
+            match (a, b) {
+                (None, None) => {}
+                (Some(_), None) | (None, Some(_)) => {
+                    decisive.extend(endpoint.fields.iter().map(|f| f.name.clone()));
+                }
+                (Some(a), Some(b)) => {
+                    for f in &endpoint.fields {
+                        let differs = a.iter().any(|a| {
+                            a.fields.get(&f.name).is_some_and(|av| {
+                                b.iter()
+                                    .any(|b| b.fields.get(&f.name).is_some_and(|bv| av != bv))
+                            })
+                        });
+                        if differs {
+                            decisive.insert(f.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    decisive
+}
+
+fn struct_payload(payload: &prost_types::Any) -> Option<prost_types::Struct> {
+    if payload.type_url.rsplit('/').next() != Some("google.protobuf.Struct") {
+        return None;
+    }
+    prost::Message::decode(payload.value.as_slice()).ok()
+}
+
 fn read_model_key(
     entity_ref: &pb::EntityRef,
     by_key: &HashMap<pb::EntityKey, pb::Entity>,
@@ -854,6 +964,10 @@ fn endpoint_for(
 ) -> Option<FlowEndpoint> {
     let entity = by_key.get(&pb::EntityKey::new(kind, id))?;
     let fields = fields_of(entity);
+    let key_fields = match entity.kind.as_ref() {
+        Some(pb::entity::Kind::ReadModel(rm)) => rm.key.iter().cloned().collect(),
+        _ => HashSet::new(),
+    };
     Some(FlowEndpoint {
         entity_ref: pb::EntityRef {
             kind: kind as i32,
@@ -861,6 +975,8 @@ fn endpoint_for(
         },
         fields,
         source_role: FlowSourceRole::Direct,
+        decision_fields: HashSet::new(),
+        key_fields,
     })
 }
 
@@ -879,6 +995,8 @@ fn auxiliary_endpoint_for(
         },
         fields,
         source_role: FlowSourceRole::Auxiliary,
+        decision_fields: HashSet::new(),
+        key_fields: HashSet::new(),
     })
 }
 
@@ -2016,5 +2134,376 @@ mod tests {
             mappings.is_empty(),
             "expected no mappings for an empty entity store"
         );
+    }
+
+    fn struct_example(read_model: &str, values: &[(&str, &str)]) -> pb::ReadModelExample {
+        let mut payload = prost_types::Struct::default();
+        for (name, value) in values {
+            payload.fields.insert(
+                (*name).to_string(),
+                prost_types::Value {
+                    kind: Some(prost_types::value::Kind::StringValue((*value).to_string())),
+                },
+            );
+        }
+        pb::ReadModelExample {
+            read_model: Some(pb::ReadModelRef {
+                id: Some(id(read_model)),
+            }),
+            payload: Some(prost_types::Any {
+                type_url: "type.googleapis.com/google.protobuf.Struct".into(),
+                value: payload.encode_to_vec(),
+            }),
+        }
+    }
+
+    fn fires(given: Vec<pb::ReadModelExample>) -> pb::AutomationScenario {
+        pb::AutomationScenario {
+            given,
+            outcome: Some(pb::automation_scenario::Outcome::Then(
+                pb::CommandExample::default(),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn stays_idle(given: Vec<pb::ReadModelExample>) -> pb::AutomationScenario {
+        pb::AutomationScenario {
+            given,
+            outcome: Some(pb::automation_scenario::Outcome::NoCommand(
+                pb::NoCommand::default(),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn automation_slice(
+        slug: &str,
+        read_models: Vec<&str>,
+        command: &str,
+        scenarios: Vec<pb::AutomationScenario>,
+    ) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+                id: Some(id(slug)),
+                source_read_models: read_models
+                    .into_iter()
+                    .map(|slug| pb::ReadModelEdge {
+                        read_model: Some(pb::ReadModelRef { id: Some(id(slug)) }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                emitted_command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(id(command)),
+                    }),
+                    ..Default::default()
+                }),
+                scenarios,
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn external(mut entity: pb::Entity) -> pb::Entity {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.external_source = Some(pb::read_model::ExternalSource::default());
+        }
+        entity
+    }
+
+    /// A review lane: the automation publishes a review once it is approved.
+    fn publish_review(
+        reviews: pb::Entity,
+        scenarios: Vec<pb::AutomationScenario>,
+    ) -> Vec<StoredEntity> {
+        vec![
+            stored(swimlane("review", Vec::new())),
+            stored(command(
+                "publish-review",
+                "review",
+                vec![field("review_id", string_kind())],
+            )),
+            stored(reviews),
+            stored(automation_slice(
+                "publish-approved",
+                vec!["reviews"],
+                "publish-review",
+                scenarios,
+            )),
+        ]
+    }
+
+    fn reviews_read_model() -> pb::Entity {
+        keyed(
+            read_model(
+                "reviews",
+                vec![
+                    field("review_id", string_kind()),
+                    field("status", string_kind()),
+                ],
+                Vec::new(),
+            ),
+            &["review_id"],
+        )
+    }
+
+    fn pending_and_approved() -> Vec<pb::AutomationScenario> {
+        vec![
+            fires(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "approved")],
+            )]),
+            stays_idle(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "pending")],
+            )]),
+        ]
+    }
+
+    fn automation_scope() -> pb::AnalysisScope {
+        scope(pb::EntityKind::AutomationSlice, "publish-approved")
+    }
+
+    #[test]
+    fn automation_guard_field_that_varies_between_outcomes_is_not_dangling() {
+        let all = publish_review(reviews_read_model(), pending_and_approved());
+        let (gaps, score) = check_completeness(&automation_scope(), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn automation_guard_on_external_read_model_is_not_dangling() {
+        let all = publish_review(external(reviews_read_model()), pending_and_approved());
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn automation_guard_is_found_through_event_model_scope() {
+        let mut all = publish_review(reviews_read_model(), pending_and_approved());
+        all.push(stored(event_model(
+            "publishing",
+            vec![(pb::EntityKind::AutomationSlice, "publish-approved")],
+        )));
+        let (gaps, _) = check_completeness(&event_model_scope("publishing"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn automation_field_that_never_varies_stays_dangling() {
+        let scenarios = vec![
+            fires(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "approved")],
+            )]),
+            stays_idle(vec![struct_example(
+                "reviews",
+                &[("review_id", "r2"), ("status", "approved")],
+            )]),
+        ];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+        assert_eq!(gaps[0].field_path, "status");
+    }
+
+    #[test]
+    fn automation_field_counts_when_any_firing_value_differs_from_an_idle_one() {
+        let scenarios = vec![
+            fires(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "approved")],
+            )]),
+            fires(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "escalated")],
+            )]),
+            stays_idle(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "approved")],
+            )]),
+        ];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        // The idle scenario matches one of the firing values, but the other
+        // firing value differs from it, so the field still decides the outcome.
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn automation_guard_that_is_a_missing_row_when_idle_is_not_dangling() {
+        // `status` is only ever "approved". The automation stays idle when
+        // the review has no row, so the missing row is the different value.
+        let scenarios = vec![
+            fires(vec![struct_example(
+                "reviews",
+                &[("review_id", "r1"), ("status", "approved")],
+            )]),
+            stays_idle(Vec::new()),
+        ];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn automation_with_no_row_in_any_scenario_keeps_dangling_input() {
+        let scenarios = vec![fires(Vec::new()), stays_idle(Vec::new())];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+    }
+
+    #[test]
+    fn automation_without_a_no_command_scenario_keeps_dangling_input() {
+        let scenarios = vec![fires(vec![struct_example(
+            "reviews",
+            &[("review_id", "r1"), ("status", "approved")],
+        )])];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+    }
+
+    #[test]
+    fn automation_without_scenarios_keeps_dangling_input() {
+        let all = publish_review(reviews_read_model(), Vec::new());
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+    }
+
+    #[test]
+    fn automation_scenario_rows_of_another_read_model_do_not_count() {
+        let scenarios = vec![
+            fires(vec![struct_example(
+                "assignments",
+                &[("status", "approved")],
+            )]),
+            stays_idle(vec![struct_example(
+                "assignments",
+                &[("status", "pending")],
+            )]),
+        ];
+        let all = publish_review(reviews_read_model(), scenarios);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+    }
+
+    fn two_read_model_automation(
+        reviews_key: &[&str],
+        assignments_key: &[&str],
+    ) -> Vec<StoredEntity> {
+        vec![
+            stored(swimlane("review", Vec::new())),
+            stored(command(
+                "assign-reviewer",
+                "review",
+                vec![
+                    field("review_id", string_kind()),
+                    field("reviewer", string_kind()),
+                ],
+            )),
+            stored(keyed(
+                read_model(
+                    "reviews",
+                    vec![field("review_id", string_kind())],
+                    Vec::new(),
+                ),
+                reviews_key,
+            )),
+            stored(keyed(
+                read_model(
+                    "assignments",
+                    vec![
+                        field("review_id", string_kind()),
+                        field("reviewer", string_kind()),
+                    ],
+                    Vec::new(),
+                ),
+                assignments_key,
+            )),
+            stored(automation_slice(
+                "publish-approved",
+                vec!["reviews", "assignments"],
+                "assign-reviewer",
+                Vec::new(),
+            )),
+        ]
+    }
+
+    #[test]
+    fn automation_join_key_shared_by_two_read_models_is_one_source() {
+        let all = two_read_model_automation(&["review_id"], &["review_id"]);
+        let (gaps, score) = check_completeness(&automation_scope(), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn automation_name_that_is_a_key_in_only_one_read_model_stays_ambiguous() {
+        let all = two_read_model_automation(&["review_id"], &[]);
+        let (gaps, score) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::AmbiguousSource), 1);
+        assert_eq!(gaps[0].field_path, "review_id");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn automation_name_that_is_a_key_in_neither_read_model_stays_ambiguous() {
+        let all = two_read_model_automation(&[], &[]);
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::AmbiguousSource), 1);
+    }
+
+    #[test]
+    fn automation_join_key_with_incompatible_kinds_reports_one_shape_mismatch() {
+        let mut all = two_read_model_automation(&["review_id"], &["review_id"]);
+        all[2] = stored(keyed(
+            read_model("reviews", vec![field("review_id", int_kind())], Vec::new()),
+            &["review_id"],
+        ));
+        let (gaps, _) = check_completeness(&automation_scope(), &all);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::ShapeMismatch), 1);
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::AmbiguousSource), 0);
+    }
+
+    #[test]
+    fn command_slice_keeps_dangling_input_and_direct_over_lane_state() {
+        // Regression: neither rule applies to a command-slice link. The lane
+        // state shares `order_id` with the command, which stays unambiguous
+        // because the direct source wins, and the unused command field is
+        // still dangling.
+        let all = vec![
+            stored(swimlane("order", vec![field("order_id", string_kind())])),
+            stored(command(
+                "place-order",
+                "order",
+                vec![
+                    field("order_id", string_kind()),
+                    field("note", string_kind()),
+                ],
+            )),
+            stored(event(
+                "order-placed",
+                "order",
+                vec![field("order_id", string_kind())],
+            )),
+            stored(command_slice(
+                "place-order-slice",
+                "place-order",
+                vec!["order-placed"],
+            )),
+        ];
+        let (gaps, score) = check_completeness(
+            &scope(pb::EntityKind::CommandSlice, "place-order-slice"),
+            &all,
+        );
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::DanglingInput), 1);
+        assert_eq!(gaps[0].field_path, "note");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
     }
 }

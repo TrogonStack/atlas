@@ -1144,6 +1144,8 @@ mod tests {
                         ..Default::default()
                     }],
                     source_role: FlowSourceRole::Direct,
+                    decision_fields: std::collections::HashSet::new(),
+                    key_fields: std::collections::HashSet::new(),
                 }],
                 downstream: vec![FlowEndpoint {
                     entity_ref: pb::EntityRef {
@@ -1160,6 +1162,8 @@ mod tests {
                         ..Default::default()
                     }],
                     source_role: FlowSourceRole::Direct,
+                    decision_fields: std::collections::HashSet::new(),
+                    key_fields: std::collections::HashSet::new(),
                 }],
             }
         }

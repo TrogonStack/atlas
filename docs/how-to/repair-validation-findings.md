@@ -171,6 +171,16 @@ to pass the rule. Record the case in the
 [repair patterns](../explanation/validation-repair-patterns.md) so the next
 reviewer can tell a modeling gap from a rule gap.
 
+For `DANGLING_INPUT` or `AMBIGUOUS_SOURCE` from
+`check_information_completeness` on an automation slice, check the
+scenarios and the read model keys before you change the command. A guard
+field is consumed when its value differs between a scenario that issues the
+command and one that does not, or when only one of the two has a row for
+the read model. A shared name is one source when it is a
+`key` field in every read model that has it. The
+[automation inputs pattern](../explanation/validation-repair-patterns.md#automation-inputs-reported-as-dangling-or-ambiguous)
+records both rules.
+
 Limit the proposed edits to the affected definitions. Preserve their
 unrelated fields and use the current `etag` for every existing entity put.
 If a contract needs a new version, follow the
