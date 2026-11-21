@@ -831,6 +831,11 @@ pub struct ApplyManifestsParams {
     #[serde(default)]
     pub dry_run: bool,
     #[schemars(
+        description = "Also delete live entities these manifests no longer declare, within the namespaces they cover (every kind and version), in the same batch and on the current branch. The batch is refused if anything left behind still references a pruned entity."
+    )]
+    #[serde(default)]
+    pub prune: bool,
+    #[schemars(
         description = "Idempotency key for the batch this call sends: replaying the same operation_id with the same manifests returns the original outcome instead of applying twice. Look its status up with get_operation. Must not be set together with dry_run."
     )]
     #[serde(default)]
@@ -844,6 +849,11 @@ pub struct DiffManifestsParams {
         description = "One or more YAML manifest documents (separated by `---`) to diff against live state."
     )]
     pub manifests_yaml: String,
+    #[schemars(
+        description = "Also show the deletes apply_manifests with prune would make: live entities in the covered namespaces these manifests no longer declare."
+    )]
+    #[serde(default)]
+    pub prune: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1179,6 +1189,23 @@ mod deny_unknown_params_tests {
         }))
         .unwrap();
         assert!(!ok.dry_run);
+        assert!(!ok.prune, "prune must be opt-in");
+    }
+
+    #[test]
+    fn manifest_tools_accept_prune() {
+        let apply = serde_json::from_value::<ApplyManifestsParams>(serde_json::json!({
+            "manifests_yaml": "...",
+            "prune": true
+        }))
+        .unwrap();
+        assert!(apply.prune);
+        let diff = serde_json::from_value::<DiffManifestsParams>(serde_json::json!({
+            "manifests_yaml": "...",
+            "prune": true
+        }))
+        .unwrap();
+        assert!(diff.prune);
     }
 
     // validate_project tool description: "set exactly one" of project_* or

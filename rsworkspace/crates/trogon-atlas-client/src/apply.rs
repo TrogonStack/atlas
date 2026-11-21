@@ -10,6 +10,11 @@
 // writer overtook is refused as a `StalePlan` instead of overwriting them.
 // A server too old to report revisions can still be diffed, but a plan made
 // against it is refused at apply time rather than written unguarded.
+//
+// With pruning (`plan_with_prune`), entities the manifest set no longer
+// declares, inside the namespaces it covers, become guarded deletes in the
+// same batch. The server refuses the whole batch if anything left behind
+// would still reference a pruned entity.
 
 use std::fmt;
 
@@ -30,6 +35,9 @@ pub enum Action {
     Create,
     Configure,
     Unchanged,
+    /// Live entity the manifest set no longer declares, inside a namespace
+    /// it covers; deleted by `apply` (only produced by `plan_with_prune`).
+    Prune,
 }
 
 impl Action {
@@ -40,6 +48,8 @@ impl Action {
             (Action::Configure, false) => "configured",
             (Action::Configure, true) => "configured (server dry run)",
             (Action::Unchanged, _) => "unchanged",
+            (Action::Prune, false) => "pruned",
+            (Action::Prune, true) => "pruned (server dry run)",
         }
     }
 }
@@ -85,6 +95,8 @@ pub fn classify(desired: &pb::Entity, current: Option<&pb::Entity>) -> Action {
 
 #[derive(Debug)]
 pub struct PlannedChange {
+    /// The declared manifest. For `Action::Prune` there is none: this holds
+    /// the live entity instead, with `source` set to [`PRUNE_SOURCE`].
     pub manifest: LoadedManifest,
     pub action: Action,
     pub current: Option<pb::Entity>,
@@ -129,49 +141,14 @@ pub async fn plan(
     manifests: Vec<LoadedManifest>,
 ) -> Result<Vec<PlannedChange>> {
     let manifests = dedupe_manifests(manifests)?;
+    let keys: Vec<(pb::EntityKind, pb::Id)> =
+        manifests.iter().map(|m| (m.kind, m.id.clone())).collect();
+    let live = read_live(client, &keys).await?;
 
-    let keys = manifests
-        .iter()
-        .map(|m| pb::EntityRef {
-            kind: m.kind as i32,
-            id: Some(m.id.clone()),
-        })
-        .collect();
-    let resp = client
-        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-        .await
-        .context("BatchGetEntities failed")?
-        .into_inner();
-    if resp.found.len() != manifests.len() || resp.entities.len() != manifests.len() {
-        bail!(
-            "server returned {} entities / {} found flags for {} keys",
-            resp.entities.len(),
-            resp.found.len(),
-            manifests.len()
-        );
-    }
-    let etags = if resp.etags.is_empty() {
-        vec![String::new(); manifests.len()]
-    } else {
-        resp.etags
-    };
-    if etags.len() != manifests.len() {
-        bail!(
-            "server returned {} etags for {} keys",
-            etags.len(),
-            manifests.len()
-        );
-    }
-
-    manifests
+    Ok(manifests
         .into_iter()
-        .zip(resp.entities.into_iter().zip(resp.found).zip(etags))
-        .map(|(mut manifest, ((entity, found), etag))| {
-            let observed = match Revision::from_wire(&etag)? {
-                Revision::Absent if found => None,
-                revision => Some(revision),
-            };
-            let current = found.then_some(entity);
+        .zip(live)
+        .map(|(mut manifest, Live { current, observed })| {
             if let Some(current) = &current {
                 // A manifest authored without connection IDs adopts the stored
                 // ones. A rejected entity is left untouched for the server to
@@ -182,14 +159,147 @@ pub async fn plan(
                 );
             }
             let action = classify(&manifest.entity, current.as_ref());
-            Ok(PlannedChange {
+            PlannedChange {
                 manifest,
                 action,
                 current,
                 observed,
-            })
+            }
         })
-        .collect()
+        .collect())
+}
+
+/// Most keys one `BatchGetEntities` call may carry (the server's advertised
+/// `max_batch_get_keys`).
+const MAX_BATCH_GET_KEYS: usize = 500;
+
+/// What the server holds for one key.
+struct Live {
+    current: Option<pb::Entity>,
+    /// `None` when the server holds the entity but reported no revision (it
+    /// predates stale-plan protection), so a write to it cannot be guarded.
+    observed: Option<Revision>,
+}
+
+/// Read `keys` back, one `BatchGetEntities` call per chunk the server
+/// accepts, in key order.
+async fn read_live(client: &mut Client, keys: &[(pb::EntityKind, pb::Id)]) -> Result<Vec<Live>> {
+    let mut live = Vec::with_capacity(keys.len());
+    for chunk in keys.chunks(MAX_BATCH_GET_KEYS) {
+        let refs = chunk
+            .iter()
+            .map(|(kind, id)| pb::EntityRef {
+                kind: *kind as i32,
+                id: Some(id.clone()),
+            })
+            .collect();
+        let resp = client
+            .batch_get_entities(pb::BatchGetEntitiesRequest {
+                keys: refs,
+                dense: true,
+            })
+            .await
+            .context("BatchGetEntities failed")?
+            .into_inner();
+        if resp.found.len() != chunk.len() || resp.entities.len() != chunk.len() {
+            bail!(
+                "server returned {} entities / {} found flags for {} keys",
+                resp.entities.len(),
+                resp.found.len(),
+                chunk.len()
+            );
+        }
+        let etags = if resp.etags.is_empty() {
+            vec![String::new(); chunk.len()]
+        } else {
+            resp.etags
+        };
+        if etags.len() != chunk.len() {
+            bail!(
+                "server returned {} etags for {} keys",
+                etags.len(),
+                chunk.len()
+            );
+        }
+        for ((entity, found), etag) in resp.entities.into_iter().zip(resp.found).zip(etags) {
+            let observed = match Revision::from_wire(&etag)? {
+                Revision::Absent if found => None,
+                revision => Some(revision),
+            };
+            live.push(Live {
+                current: found.then_some(entity),
+                observed,
+            });
+        }
+    }
+    Ok(live)
+}
+
+/// `LoadedManifest.source` of a pruned entity: it comes from the live store,
+/// not from any manifest file.
+const PRUNE_SOURCE: &str = "<live, not declared by the manifest set>";
+
+/// [`plan`], and with `prune` also one `Action::Prune` change for every live
+/// entity (any kind, any version) in a namespace the manifest set covers that
+/// the set does not declare. Prunes follow the declared changes, sorted by
+/// label.
+///
+/// The scope is the set's namespaces and nothing else: a namespace no
+/// manifest names is never touched, and an empty manifest set prunes
+/// nothing. Each prune is guarded by the revision it was planned against.
+pub async fn plan_with_prune(
+    client: &mut Client,
+    manifests: Vec<LoadedManifest>,
+    prune: bool,
+) -> Result<Vec<PlannedChange>> {
+    let mut changes = plan(client, manifests).await?;
+    if !prune {
+        return Ok(changes);
+    }
+    let declared: std::collections::HashSet<pb::EntityKey> = changes
+        .iter()
+        .map(|c| pb::EntityKey::new(c.manifest.kind, &c.manifest.id))
+        .collect();
+    let namespaces: std::collections::BTreeSet<String> = changes
+        .iter()
+        .map(|c| c.manifest.id.namespace.clone())
+        .collect();
+
+    let mut undeclared: Vec<(pb::EntityKind, pb::Id)> = Vec::new();
+    for namespace in &namespaces {
+        for entity in crate::export::list_namespace_entities(client, namespace, false).await? {
+            let (Some(kind), Some(id)) = (
+                trogon_atlas_core::refs::entity_kind(&entity),
+                trogon_atlas_core::refs::entity_id(&entity),
+            ) else {
+                bail!("server listed an entity without a kind or id in namespace {namespace:?}");
+            };
+            if !declared.contains(&pb::EntityKey::new(kind, id)) {
+                undeclared.push((kind, id.clone()));
+            }
+        }
+    }
+    undeclared.sort_by_cached_key(|(kind, id)| pb::canonical::id_string(*kind, id));
+    undeclared.dedup();
+
+    // Read each one back for the revision that guards its delete.
+    let live = read_live(client, &undeclared).await?;
+    for ((kind, id), Live { current, observed }) in undeclared.into_iter().zip(live) {
+        // Deleted between the listing and the read: nothing left to prune.
+        let Some(entity) = current else { continue };
+        changes.push(PlannedChange {
+            manifest: LoadedManifest {
+                source: PRUNE_SOURCE.into(),
+                kind,
+                id,
+                entity: entity.clone(),
+            },
+            action: Action::Prune,
+            current: Some(entity),
+            observed,
+        });
+    }
+    Ok(changes)
 }
 
 /// Refuse a board import whose target lacks a foreign entity the board
@@ -200,30 +310,13 @@ pub async fn require_external(client: &mut Client, external: Vec<ManifestDocumen
     if external.is_empty() {
         return Ok(());
     }
-    let keys = external
-        .iter()
-        .map(|d| pb::EntityRef {
-            kind: d.kind as i32,
-            id: Some(d.id.clone()),
-        })
-        .collect();
-    let found = client
-        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
-        .await
-        .context("BatchGetEntities failed")?
-        .into_inner()
-        .found;
-    if found.len() != external.len() {
-        bail!(
-            "server returned {} found flags for {} keys",
-            found.len(),
-            external.len()
-        );
-    }
+    let keys: Vec<(pb::EntityKind, pb::Id)> =
+        external.iter().map(|d| (d.kind, d.id.clone())).collect();
+    let live = read_live(client, &keys).await?;
     let missing: Vec<String> = external
         .iter()
-        .zip(found)
-        .filter(|(_, found)| !found)
+        .zip(live)
+        .filter(|(_, live)| live.current.is_none())
         .map(|(d, _)| pb::canonical::id_string(d.kind, &d.id))
         .collect();
     if !missing.is_empty() {
@@ -551,6 +644,19 @@ pub async fn apply(
                         id_label(&c.manifest)
                     );
                 };
+                if c.action == Action::Prune {
+                    // FAIL_IF_REFERENCED: the server refuses the batch if
+                    // anything it leaves behind still references this one.
+                    return Ok(pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: c.manifest.kind as i32,
+                            id: Some(c.manifest.id.clone()),
+                            mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                            if_match: observed.to_wire(),
+                            operation_id: String::new(),
+                        })),
+                    });
+                }
                 Ok(pb::BatchMutateOp {
                     op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
                         entity: Some(c.manifest.entity.clone()),
@@ -645,7 +751,11 @@ pub fn render_diff(plan: &[PlannedChange], types: &TranscodePool) -> Result<(Str
             Some(current) => types.entity_to_json(&strip_system(current))? + "\n",
             None => String::new(),
         };
-        let after = types.entity_to_json(&c.manifest.entity)? + "\n";
+        let after = if c.action == Action::Prune {
+            String::new()
+        } else {
+            types.entity_to_json(&c.manifest.entity)? + "\n"
+        };
         let diff = similar::TextDiff::from_lines(&before, &after);
         let _ = write!(
             out,

@@ -142,9 +142,36 @@ Apply semantics:
 - Servers may require `--branch` for writes (`--protect-baseline`): pass it
   to apply on a branch instead of baseline.
 
-Deletion is intentionally out of scope for `apply` (no prune yet): use the
-server's `DeleteEntity`/`DeleteByQuery` RPCs. Prune needs an ownership
-marker (an apply-set annotation) before it can be safe.
+### Pruning
+
+Plain `apply` never deletes. `apply --prune` also deletes every live entity
+the manifest set no longer declares, so a rewritten model applies as one
+reviewable change:
+
+```bash
+trogon-atlas diff --prune -f model/      # shows the deletes as removed entities
+trogon-atlas apply --prune --dry-run -f model/
+trogon-atlas apply --prune --branch alex/rewrite -f model/
+```
+
+- `pruned`: a live entity, of any kind and any version, in a namespace the
+  manifest set covers, that no manifest declares. The scope is the set's
+  namespaces: a namespace no manifest names is never touched, so pass the
+  whole model for a namespace, not one file of it.
+- Prunes ride in the same `BatchMutate` as the puts, after them, each
+  guarded by the revision it was planned against (a concurrent change is a
+  stale plan, exit 3). `--dry-run` and `--branch` apply as usual.
+- The batch fails closed on references: if anything left after the batch
+  (outside the set, or a declared entity that still points at it) references
+  a pruned entity, nothing is written and apply fails with
+  `ENTITY_REFERENCED` on that entity. References between pruned entities do
+  not block.
+- The MCP `apply_manifests` and `diff_manifests` tools take `prune: true`
+  with the same meaning, on the branch the MCP server is configured with.
+
+There is no ownership marker: everything in a covered namespace counts as
+managed by the manifest set. Use plain `apply` when a namespace is shared
+with entities written some other way.
 
 See `examples/manifests/shop.yaml` for a complete small model.
 

@@ -730,6 +730,74 @@ spec: { title: Thing happened }
     mcp_service.cancel().await.unwrap();
 }
 
+// prune: true on diff_manifests / apply_manifests deletes what the manifests
+// no longer declare in the namespaces they cover.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_apply_manifests_prune_deletes_undeclared_entities() {
+    let grpc_endpoint = start_server().await;
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
+    let (client_half, server_half) = tokio::io::duplex(64 * 1024);
+    use rmcp::ServiceExt;
+    let (mcp_service_result, client_result) = tokio::join!(
+        mcp_server.serve(server_half),
+        rmcp::serve_client((), client_half)
+    );
+    let mcp_service = mcp_service_result.unwrap();
+    let client = client_result.unwrap();
+
+    let event = |slug: &str| {
+        format!(
+            "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: Event\nmetadata: {{ namespace: mcp-prune, name: {slug} }}\nspec: {{ title: {slug} }}\n"
+        )
+    };
+    let call = |tool: &'static str, yaml: String, prune: bool| {
+        let mut args = serde_json::Map::new();
+        args.insert("manifests_yaml".into(), serde_json::json!(yaml));
+        args.insert("prune".into(), serde_json::json!(prune));
+        let client = &client;
+        async move {
+            let result = client
+                .call_tool(rmcp::model::CallToolRequestParams::new(tool).with_arguments(args))
+                .await
+                .unwrap();
+            assert!(!result.is_error.unwrap_or(false), "{tool}: {result:?}");
+            serde_json::from_str::<serde_json::Value>(&result.content[0].as_text().unwrap().text)
+                .unwrap()
+        }
+    };
+
+    call(
+        "apply_manifests",
+        format!("{}---\n{}", event("kept"), event("dropped")),
+        false,
+    )
+    .await;
+
+    let diff = call("diff_manifests", event("kept"), true).await;
+    assert_eq!(diff["changed"], true, "{diff}");
+    assert!(
+        diff["diff"]
+            .as_str()
+            .unwrap()
+            .contains("diff event:mcp-prune/dropped@1"),
+        "{diff}"
+    );
+
+    let body = call("apply_manifests", event("kept"), true).await;
+    assert_eq!(
+        body["lines"],
+        serde_json::json!([
+            "event:mcp-prune/kept@1 unchanged",
+            "event:mcp-prune/dropped@1 pruned"
+        ])
+    );
+
+    let diff = call("diff_manifests", event("kept"), true).await;
+    assert_eq!(diff["changed"], false, "{diff}");
+
+    mcp_service.cancel().await.unwrap();
+}
+
 // ===========================================================================
 // Branch tools (Phase 1 Isolation + Phase 2 Review and merge). Same in-process
 // in-process transport as the apply_manifests test above: a real McpServer wired

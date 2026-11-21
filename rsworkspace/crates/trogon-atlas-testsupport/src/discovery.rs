@@ -1,5 +1,5 @@
 //! A gRPC server that answers `GetServerInfo` (and, when scripted,
-//! `BatchGetEntities` or `ValidateProject`) with fixed responses and records every call, so tests
+//! `BatchGetEntities`, `ListEntities` or `ValidateProject`) with fixed responses and records every call, so tests
 //! can pose as a server of another version and prove a client refused before
 //! sending a mutation, or that a read still works against it.
 
@@ -16,6 +16,8 @@ const GET_SERVER_INFO_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetServerInfo";
 const BATCH_GET_ENTITIES_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities";
+const LIST_ENTITIES_PATH: &str =
+    "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntities";
 const VALIDATE_PROJECT_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ValidateProject";
 
@@ -29,6 +31,7 @@ struct DiscoveryOnlyService {
 #[derive(Clone, Default)]
 struct Scripts {
     entities: Option<pb::BatchGetEntitiesResponse>,
+    list_entities: Option<pb::ListEntitiesResponse>,
     validate_project: Option<pb::ValidateProjectResponse>,
 }
 
@@ -55,49 +58,45 @@ where
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(path.clone());
-        let scripted = &self.scripted;
-        match (
-            path.as_str(),
-            &scripted.entities,
-            &scripted.validate_project,
-        ) {
-            (GET_SERVER_INFO_PATH, _, _) => {
-                let info = self.info.clone();
+        // Answer the call with a fixed response of the given request type.
+        macro_rules! unary {
+            ($req:ty, $response:expr) => {{
+                let response = $response.clone();
                 Box::pin(async move {
                     let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(Scripted::<pb::GetServerInfoRequest, _>::new(info), req)
-                        .await)
+                    Ok(grpc.unary(Scripted::<$req, _>::new(response), req).await)
                 })
+            }};
+        }
+        match (path.as_str(), &self.scripted) {
+            (GET_SERVER_INFO_PATH, _) => unary!(pb::GetServerInfoRequest, self.info),
+            (
+                BATCH_GET_ENTITIES_PATH,
+                Scripts {
+                    entities: Some(r), ..
+                },
+            ) => {
+                unary!(pb::BatchGetEntitiesRequest, r)
             }
-            (BATCH_GET_ENTITIES_PATH, Some(entities), _) => {
-                let entities = entities.clone();
-                Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(
-                            Scripted::<pb::BatchGetEntitiesRequest, _>::new(entities),
-                            req,
-                        )
-                        .await)
-                })
+            (
+                LIST_ENTITIES_PATH,
+                Scripts {
+                    list_entities: Some(r),
+                    ..
+                },
+            ) => {
+                unary!(pb::ListEntitiesRequest, r)
             }
-            (VALIDATE_PROJECT_PATH, _, Some(response)) => {
-                let response = response.clone();
-                Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                    Ok(grpc
-                        .unary(
-                            Scripted::<pb::ValidateProjectRequest, _>::new(response),
-                            req,
-                        )
-                        .await)
-                })
+            (
+                VALIDATE_PROJECT_PATH,
+                Scripts {
+                    validate_project: Some(r),
+                    ..
+                },
+            ) => {
+                unary!(pb::ValidateProjectRequest, r)
             }
-            _ => {
-                let path = path.clone();
-                Box::pin(async move { Ok(tonic::Status::unimplemented(path).into_http()) })
-            }
+            _ => Box::pin(async move { Ok(tonic::Status::unimplemented(path).into_http()) }),
         }
     }
 }
@@ -152,6 +151,26 @@ impl DiscoveryOnlyServer {
             info,
             Scripts {
                 entities: Some(entities),
+                ..Scripts::default()
+            },
+        )
+        .await
+    }
+
+    /// Like [`Self::start_serving_entities`], but also answer `ListEntities`
+    /// with `list`, so a client can be shown a listing (say, a truncated
+    /// one) a real server would only produce under conditions a test cannot
+    /// cheaply arrange.
+    pub async fn start_serving_listing(
+        info: pb::GetServerInfoResponse,
+        entities: pb::BatchGetEntitiesResponse,
+        list: pb::ListEntitiesResponse,
+    ) -> Result<Self, String> {
+        Self::start_scripted(
+            info,
+            Scripts {
+                entities: Some(entities),
+                list_entities: Some(list),
                 ..Scripts::default()
             },
         )
