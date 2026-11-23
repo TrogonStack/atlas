@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mise
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: hadolint
         run: mise run github:workflows:infra:hadolint
@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mise
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: helm lint
         run: mise run github:workflows:infra:helm-lint
@@ -91,7 +91,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mise
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: ct lint
         run: mise run github:workflows:infra:ct-lint
@@ -110,7 +110,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mise
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: Reclaim runner disk
         run: mise run github:workflows:ci:reclaim-disk
@@ -134,7 +134,7 @@ jobs:
 
       - name: upload trivy SARIF
         if: ${{ !cancelled() && hashFiles('trivy-results/*.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: trivy-results
 
@@ -149,7 +149,7 @@ jobs:
           persist-credentials: false
 
       - name: Install mise
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
 
       - name: trivy config
         run: mise run github:workflows:infra:trivy-config
