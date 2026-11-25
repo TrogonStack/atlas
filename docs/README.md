@@ -99,6 +99,7 @@ Resource contracts and acceptance:
 Understand how Atlas works and why:
 
 - [Atlas principles](explanation/principles/README.md)
+- [Architecture decision records (proposed)](explanation/architecture-decision-records.md)
 - [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
 - [Attested export](explanation/attested-export.md)
 - [Authorization design](explanation/authorization.md)
